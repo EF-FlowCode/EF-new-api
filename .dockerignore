@@ -1,0 +1,17 @@
+.github
+.git
+*.md
+.vscode
+.gitignore
+Makefile
+docs
+.eslintcache
+.gocache
+/web/node_modules
+/web/*/node_modules
+/web/*/dist
+/web/*/.cache
+/web/*/.bun
+/electron/node_modules
+/electron/dist
+/electron/release
