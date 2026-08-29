@@ -41,6 +41,7 @@ import {
   getFirstResponseTimeColor,
   getResponseTimeColor,
   buildBillingFormula,
+  getImageTokenDetails,
   type BillingFormula,
 } from '../../lib/format'
 import {
@@ -418,6 +419,7 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   const cacheWrite = other.cache_creation_tokens || 0
   const cacheWrite5m = other.cache_creation_tokens_5m || 0
   const cacheWrite1h = other.cache_creation_tokens_1h || 0
+  const imageTokens = getImageTokenDetails(other)
   const hasTokens = promptTokens > 0 || completionTokens > 0
 
   if (!hasTokens) return null
@@ -458,10 +460,10 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
     })
   }
 
-  if (other.image && other.image_output) {
+  if (other.image && imageTokens.input + imageTokens.output > 0) {
     rows.push({
       label: t('Image Tokens'),
-      value: other.image_output.toLocaleString(),
+      value: (imageTokens.input + imageTokens.output).toLocaleString(),
     })
   }
 

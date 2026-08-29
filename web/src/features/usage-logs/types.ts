@@ -132,6 +132,9 @@ export interface LogOtherData {
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number
+  image_input?: number
+  // Legacy logs used image_output for input image tokens. New logs include
+  // image_input (even when zero), making image_output unambiguously output-side.
   image_output?: number
   web_search?: boolean
   web_search_call_count?: number

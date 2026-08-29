@@ -320,6 +320,29 @@ export interface BillingFormula {
   cacheHitRate: number | null
 }
 
+export interface ImageTokenDetails {
+  input: number
+  output: number
+}
+
+/**
+ * Resolve image token details across current and legacy log payloads.
+ * Before image_input existed, the backend wrote input image tokens into the
+ * misleadingly named image_output field.
+ */
+export function getImageTokenDetails(other: LogOtherData): ImageTokenDetails {
+  if (other.image_input != null) {
+    return {
+      input: other.image_input || 0,
+      output: other.image_output || 0,
+    }
+  }
+  return {
+    input: other.image_output || 0,
+    output: 0,
+  }
+}
+
 /**
  * Per-variable token counts pulled from a log entry.
  *
@@ -331,27 +354,33 @@ export interface BillingFormula {
  */
 function extractTokensByVar(
   log: UsageLog,
-  other: LogOtherData
+  other: LogOtherData,
+  pricesByVar: Record<string, number>
 ): Record<string, number> {
   const isClaude = other.claude === true
   const cacheRead = other.cache_tokens || 0
   const cache5m =
     other.cache_creation_tokens_5m || other.cache_creation_tokens || 0
   const cache1h = other.cache_creation_tokens_1h || 0
-  // Only audio_input / audio_output appear in LogOtherData — image input
-  // tokens are not surfaced in the schema today, so we treat them as 0
-  // (the corresponding term is skipped because tokens === 0).
   const audioIn = other.audio_input || 0
   const audioOut = other.audio_output || 0
-  const imageOut = other.image_output || 0
+  const imageTokens = getImageTokenDetails(other)
+  const isSeparatelyPriced = (key: string) => (pricesByVar[key] ?? 0) > 0
 
   let p = log.prompt_tokens
   let c = log.completion_tokens
   if (!isClaude) {
     // GPT-style totals include cache + media; subtract whatever is
     // separately priced in the formula below.
-    p = Math.max(0, p - cacheRead - cache5m - cache1h - audioIn)
-    c = Math.max(0, c - audioOut - imageOut)
+    if (isSeparatelyPriced('cr')) p -= cacheRead
+    if (isSeparatelyPriced('cc')) p -= cache5m
+    if (isSeparatelyPriced('cc1h')) p -= cache1h
+    if (isSeparatelyPriced('img')) p -= imageTokens.input
+    if (isSeparatelyPriced('ai')) p -= audioIn
+    if (isSeparatelyPriced('img_o')) c -= imageTokens.output
+    if (isSeparatelyPriced('ao')) c -= audioOut
+    p = Math.max(0, p)
+    c = Math.max(0, c)
   }
 
   return {
@@ -360,8 +389,8 @@ function extractTokensByVar(
     cr: cacheRead,
     cc: cache5m,
     cc1h: cache1h,
-    img: 0,
-    img_o: imageOut,
+    img: imageTokens.input,
+    img_o: imageTokens.output,
     ai: audioIn,
     ao: audioOut,
   }
@@ -471,10 +500,11 @@ export function buildBillingFormula(
     return null
   }
 
-  const tokensByVar = extractTokensByVar(log, other)
   const pricesByVar = extractPricesByVar(other)
 
   if (Object.keys(pricesByVar).length === 0) return null
+
+  const tokensByVar = extractTokensByVar(log, other, pricesByVar)
 
   const labelByVar: Record<string, string> = {}
   for (const v of BILLING_PRICING_VARS) {
@@ -511,9 +541,24 @@ export function buildBillingFormula(
   const totalUSD = subtotalUSD * (groupRatio ?? 1)
 
   // Cache hit rate: cr / (p + cr + cc), excludes cc1h per user spec.
-  const pTokens = tokensByVar.p
-  const crTokens = tokensByVar.cr
-  const ccTokens = tokensByVar.cc
+  // Keep the historical cache-hit denominator independent of which rows are
+  // separately priced in the displayed formula.
+  const crTokens = other.cache_tokens || 0
+  const ccTokens =
+    other.cache_creation_tokens_5m || other.cache_creation_tokens || 0
+  const cc1hTokens = other.cache_creation_tokens_1h || 0
+  const audioInputTokens = other.audio_input || 0
+  const pTokens =
+    other.claude === true
+      ? log.prompt_tokens
+      : Math.max(
+          0,
+          log.prompt_tokens -
+            crTokens -
+            ccTokens -
+            cc1hTokens -
+            audioInputTokens
+        )
   const cacheDenom = pTokens + crTokens + ccTokens
   const cacheHitRate = cacheDenom > 0 && crTokens > 0 ? crTokens / cacheDenom : null
 
