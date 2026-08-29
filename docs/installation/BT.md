@@ -13,6 +13,7 @@
 | 宝塔面板  | ≥ 9.2.0 版本                         |
 | 推荐系统  | CentOS 7+、Ubuntu 18.04+、Debian 10+ |
 | 服务器配置 | 至少 1 核 2G 内存                       |
+| 数据库 | MySQL 8.0+ |
 
 ***
 
@@ -43,8 +44,9 @@
    - **容器名称**：可自定义，默认为 `new-api`
    - **端口映射**：默认为 `3000:3000`
    - **环境变量**：
-     - `SESSION_SECRET`：会话密钥（**必填**，多机部署时必须一致）
-     - `CRYPTO_SECRET`：加密密钥（使用 Redis 时必填）
+     - `SQL_DSN`：MySQL 8.0+ 连接字符串（**必填**）
+     - `SESSION_SECRET`：生产环境强烈建议显式设置，多机部署时必须一致
+     - `CRYPTO_SECRET`：未设置时继承 `SESSION_SECRET`；多机或共享 Redis 时必须稳定且一致
 5. 点击 **确认** 开始安装
 6. 等待安装完成后，访问 `http://您的服务器IP:3000` 即可使用
 
@@ -54,7 +56,6 @@
 2. 创建 `docker-compose.yml` 文件：
 
 ```yaml
-version: '3'
 services:
   new-api:
     image: calciumion/new-api:latest
@@ -65,8 +66,31 @@ services:
     volumes:
       - ./data:/data
     environment:
+      - SQL_DSN=root:change_me@tcp(mysql:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local
       - SESSION_SECRET=your_session_secret_here  # 请修改为随机字符串
       - TZ=Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.4
+    container_name: new-api-mysql
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=change_me
+      - MYSQL_DATABASE=new-api
+      - TZ=Asia/Shanghai
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  mysql_data:
 ```
 
 1. 在终端中进入目录并启动：
@@ -84,9 +108,9 @@ docker-compose up -d
 
 | 变量名                 | 说明                 | 是否必填   |
 | ------------------- | ------------------ | ------ |
-| `SESSION_SECRET`    | 会话密钥，多机部署必须一致      | **必填** |
-| `CRYPTO_SECRET`     | 加密密钥，使用 Redis 时必填  | 条件必填   |
-| `SQL_DSN`           | 数据库连接字符串（使用外部数据库时） | 可选     |
+| `SQL_DSN`           | MySQL 8.0+ 连接字符串 | **必填** |
+| `SESSION_SECRET`    | 会话密钥；未设置时会随机生成，多机或跨重启保持会话时必须固定 | 生产强烈建议 |
+| `CRYPTO_SECRET`     | 加密密钥；默认继承 `SESSION_SECRET`，多机或共享 Redis 时必须一致 | 条件必填 |
 | `SQL_SLOW_THRESHOLD_MS` | 慢查询日志阈值（毫秒，`0` 表示关闭） | 可选 |
 | `REDIS_CONN_STRING` | Redis 连接字符串        | 可选     |
 
@@ -112,16 +136,18 @@ head -c 16 /dev/urandom | xxd -p
 
 ### Q2：登录后提示会话失效？
 
-确保设置了 `SESSION_SECRET` 环境变量，且值不为空。
+生产环境应显式设置稳定的 `SESSION_SECRET`；多节点必须使用相同值。
 
 ### Q3：数据如何持久化？
 
-使用 Docker 卷映射数据目录：
+业务数据保存在 MySQL 中，应持久化 MySQL 数据目录并定期做数据库备份：
 
 ```yaml
 volumes:
-  - ./data:/data
+  mysql_data:
 ```
+
+应用的 `/data` 目录可继续用于应用侧文件，但不能替代 MySQL 数据卷。
 
 ### Q4：如何更新版本？
 
@@ -148,4 +174,4 @@ docker-compose down && docker-compose up -d
 
 ![宝塔面板 Docker 安装](https://github.com/user-attachments/assets/7a6fc03e-c457-45e4-b8f9-184508fc26b0)
 
-> ⚠️ 注意：密钥为环境变量 `SESSION_SECRET`，请务必设置！
+> ⚠️ 注意：`SQL_DSN` 必须指向 MySQL 8.0+；生产环境请固定 `SESSION_SECRET` 并备份 MySQL 数据。

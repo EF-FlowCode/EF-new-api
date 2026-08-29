@@ -229,6 +229,7 @@ adaptor.DoResponse → OaiImageStreamHandler
 | 不传 `stream` 字段 | `OpenaiHandlerWithUsage`（旧路径） | 行为完全没变 |
 | 传 `stream:true` | `OaiImageStreamHandler`（新路径） | 透传 SSE，自动 ping |
 | 传 `stream:false` | `OpenaiHandlerWithUsage` | 同 "不传" |
+| 客户端未启用流式，但上游返回 `text/event-stream` | 响应阶段将 `info.IsStream` 提升为 `true` 后进入 `OaiImageStreamHandler` | 没有 pre-flight 心跳，但拿到响应头后可透传上游 SSE |
 | 上游不返 SSE（Content-Type ≠ text/event-stream） | `info.IsStream` 来自 client，仍走流式 handler；scanner 读到非 SSE 数据全部 skip，最终 client 收 `[DONE]` 后空响应。**这种上游配该 channel 不要传 stream:true** | 不会崩，但拿不到图 |
 
 其他端点（chat / responses / claude / gemini / embedding / rerank / audio / mjproxy 等）一律没碰，零影响。

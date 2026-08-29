@@ -4,13 +4,15 @@
 # sudo systemctl enable new-api
 # sudo systemctl status new-api
 [Unit]
-Description=One API Service
+Description=new-api Service
 After=network.target
 
 [Service]
-User=ubuntu  # 注意修改用户名
-WorkingDirectory=/path/to/new-api  # 注意修改路径
-ExecStart=/path/to/new-api/new-api --port 3000 --log-dir /path/to/new-api/logs  # 注意修改路径和端口号
+# 按实际部署用户和目录修改以下三项，并通过 EnvironmentFile 提供 SQL_DSN。
+User=ubuntu
+WorkingDirectory=/path/to/new-api
+EnvironmentFile=/path/to/new-api/.env
+ExecStart=/path/to/new-api/new-api --port 3000 --log-dir /path/to/new-api/logs
 Restart=always
 RestartSec=5
 

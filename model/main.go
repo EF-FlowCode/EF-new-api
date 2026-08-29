@@ -11,58 +11,19 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 
-	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-var commonGroupCol string
-var commonGroupsCol string
-var commonKeyCol string
-var commonTrueVal string
-var commonFalseVal string
-
-var logKeyCol string
-var logGroupCol string
-
-func initCol() {
-	// init common column names
-	if common.UsingPostgreSQL {
-		commonGroupCol = `"group"`
-		commonGroupsCol = `"groups"`
-		commonKeyCol = `"key"`
-		commonTrueVal = "true"
-		commonFalseVal = "false"
-	} else {
-		commonGroupCol = "`group`"
-		commonGroupsCol = "`groups`"
-		commonKeyCol = "`key`"
-		commonTrueVal = "1"
-		commonFalseVal = "0"
-	}
-	if os.Getenv("LOG_SQL_DSN") != "" {
-		switch common.LogSqlType {
-		case common.DatabaseTypePostgreSQL:
-			logGroupCol = `"group"`
-			logKeyCol = `"key"`
-		default:
-			logGroupCol = commonGroupCol
-			logKeyCol = commonKeyCol
-		}
-	} else {
-		// LOG_SQL_DSN 为空时，日志数据库与主数据库相同
-		if common.UsingPostgreSQL {
-			logGroupCol = `"group"`
-			logKeyCol = `"key"`
-		} else {
-			logGroupCol = commonGroupCol
-			logKeyCol = commonKeyCol
-		}
-	}
-	// log sql type and database type
-	//common.SysLog("Using Log SQL Type: " + common.LogSqlType)
-}
+const (
+	commonGroupCol  = "`group`"
+	commonGroupsCol = "`groups`"
+	commonKeyCol    = "`key`"
+	commonTrueVal   = "1"
+	commonFalseVal  = "0"
+	logGroupCol     = commonGroupCol
+	logKeyCol       = commonKeyCol
+)
 
 var DB *gorm.DB
 
@@ -119,69 +80,31 @@ func CheckSetup() {
 	}
 }
 
-func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
-	defer func() {
-		initCol()
-	}()
-	dsn := os.Getenv(envName)
-	if dsn != "" {
-		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-			// Use PostgreSQL
-			common.SysLog("using PostgreSQL as database")
-			if !isLog {
-				common.UsingPostgreSQL = true
-			} else {
-				common.LogSqlType = common.DatabaseTypePostgreSQL
-			}
-			return gorm.Open(postgres.New(postgres.Config{
-				DSN:                  dsn,
-				PreferSimpleProtocol: true, // disables implicit prepared statement usage
-			}), newGormConfig(true))
-		}
-		if strings.HasPrefix(dsn, "local") {
-			common.SysLog("SQL_DSN not set, using SQLite as database")
-			if !isLog {
-				common.UsingSQLite = true
-			} else {
-				common.LogSqlType = common.DatabaseTypeSQLite
-			}
-			return gorm.Open(sqlite.Open(common.SQLitePath), newGormConfig(true))
-		}
-		// Use MySQL
-		common.SysLog("using MySQL as database")
-		// check parseTime
-		if !strings.Contains(dsn, "parseTime") {
-			if strings.Contains(dsn, "?") {
-				dsn += "&parseTime=true"
-			} else {
-				dsn += "?parseTime=true"
-			}
-		}
-		if !isLog {
-			common.UsingMySQL = true
-		} else {
-			common.LogSqlType = common.DatabaseTypeMySQL
-		}
-		return gorm.Open(mysql.Open(dsn), newGormConfig(true))
+func openMySQLDB(envName string) (*gorm.DB, error) {
+	dsn := strings.TrimSpace(os.Getenv(envName))
+	if dsn == "" {
+		return nil, fmt.Errorf("%s is required; MySQL 8.0+ is the only supported database", envName)
 	}
-	// Use SQLite
-	common.SysLog("SQL_DSN not set, using SQLite as database")
-	common.UsingSQLite = true
-	return gorm.Open(sqlite.Open(common.SQLitePath), newGormConfig(true))
+	if !strings.Contains(strings.ToLower(dsn), "parsetime") {
+		if strings.Contains(dsn, "?") {
+			dsn += "&parseTime=true"
+		} else {
+			dsn += "?parseTime=true"
+		}
+	}
+	common.SysLog("using MySQL as database")
+	return gorm.Open(mysql.Open(dsn), newGormConfig(true))
 }
 
 func InitDB() (err error) {
-	db, err := chooseDB("SQL_DSN", false)
+	db, err := openMySQLDB("SQL_DSN")
 	if err == nil {
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
 		DB = db
-		// MySQL charset/collation startup check: ensure Chinese-capable charset
-		if common.UsingMySQL {
-			if err := checkMySQLChineseSupport(DB); err != nil {
-				panic(err)
-			}
+		if err := checkMySQLChineseSupport(DB); err != nil {
+			panic(err)
 		}
 		sqlDB, err := DB.DB()
 		if err != nil {
@@ -193,9 +116,6 @@ func InitDB() (err error) {
 
 		if !common.IsMasterNode {
 			return nil
-		}
-		if common.UsingMySQL {
-			//_, _ = sqlDB.Exec("ALTER TABLE channels MODIFY model_mapping TEXT;") // TODO: delete this line when most users have upgraded
 		}
 		common.SysLog("database migration started")
 		err = migrateDB()
@@ -211,17 +131,14 @@ func InitLogDB() (err error) {
 		LOG_DB = DB
 		return
 	}
-	db, err := chooseDB("LOG_SQL_DSN", true)
+	db, err := openMySQLDB("LOG_SQL_DSN")
 	if err == nil {
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
 		LOG_DB = db
-		// If log DB is MySQL, also ensure Chinese-capable charset
-		if common.LogSqlType == common.DatabaseTypeMySQL {
-			if err := checkMySQLChineseSupport(LOG_DB); err != nil {
-				panic(err)
-			}
+		if err := checkMySQLChineseSupport(LOG_DB); err != nil {
+			panic(err)
 		}
 		sqlDB, err := LOG_DB.DB()
 		if err != nil {
@@ -250,7 +167,7 @@ func migrateDB() error {
 	}
 	// Drop the legacy (subject_type, subject_id) unique index on
 	// risk_subject_snapshot before AutoMigrate creates the v2 unique index
-	// that includes the group column. Idempotent across all three DBs.
+	// that includes the group column. Idempotent on MySQL 8.
 	if err := dropLegacyRiskSubjectUniqueIndex(); err != nil {
 		return err
 	}
@@ -386,26 +303,15 @@ func dropLegacyRiskSubjectUniqueIndex() error {
 	if !DB.Migrator().HasTable(tableName) {
 		return nil
 	}
-	switch {
-	case common.UsingPostgreSQL:
-		if err := DB.Exec(`DROP INDEX IF EXISTS ` + legacyIndexName).Error; err != nil {
-			return fmt.Errorf("drop legacy risk subject unique index (pg): %w", err)
-		}
-	case common.UsingMySQL:
-		var count int
-		if err := DB.Raw(`SELECT COUNT(*) FROM information_schema.statistics
+	var count int
+	if err := DB.Raw(`SELECT COUNT(*) FROM information_schema.statistics
 			WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
-			tableName, legacyIndexName).Scan(&count).Error; err != nil {
-			return fmt.Errorf("probe legacy risk subject unique index (mysql): %w", err)
-		}
-		if count > 0 {
-			if err := DB.Exec("DROP INDEX `" + legacyIndexName + "` ON `" + tableName + "`").Error; err != nil {
-				return fmt.Errorf("drop legacy risk subject unique index (mysql): %w", err)
-			}
-		}
-	case common.UsingSQLite:
-		if err := DB.Exec(`DROP INDEX IF EXISTS ` + legacyIndexName).Error; err != nil {
-			return fmt.Errorf("drop legacy risk subject unique index (sqlite): %w", err)
+		tableName, legacyIndexName).Scan(&count).Error; err != nil {
+		return fmt.Errorf("probe legacy risk subject unique index: %w", err)
+	}
+	if count > 0 {
+		if err := DB.Exec("DROP INDEX `" + legacyIndexName + "` ON `" + tableName + "`").Error; err != nil {
+			return fmt.Errorf("drop legacy risk subject unique index: %w", err)
 		}
 	}
 	return nil
@@ -414,11 +320,6 @@ func dropLegacyRiskSubjectUniqueIndex() error {
 // migrateTokenModelLimitsToText migrates model_limits column from varchar(1024) to text
 // This is safe to run multiple times - it checks the column type first
 func migrateTokenModelLimitsToText() error {
-	// SQLite uses type affinity, so TEXT and VARCHAR are effectively the same — no migration needed
-	if common.UsingSQLite {
-		return nil
-	}
-
 	tableName := "tokens"
 	columnName := "model_limits"
 
@@ -430,37 +331,19 @@ func migrateTokenModelLimitsToText() error {
 		return nil
 	}
 
-	var alterSQL string
-	if common.UsingPostgreSQL {
-		var dataType string
-		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
-			tableName, columnName).Scan(&dataType).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-		} else if dataType == "text" {
-			return nil
-		}
-		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE text`, tableName, columnName)
-	} else if common.UsingMySQL {
-		var columnType string
-		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+	var columnType string
+	if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-			tableName, columnName).Scan(&columnType).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-		} else if strings.ToLower(columnType) == "text" {
-			return nil
-		}
-		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s text", tableName, columnName)
-	} else {
+		tableName, columnName).Scan(&columnType).Error; err != nil {
+		common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+	} else if strings.EqualFold(columnType, "text") {
 		return nil
 	}
 
-	if alterSQL != "" {
-		if err := DB.Exec(alterSQL).Error; err != nil {
-			return fmt.Errorf("failed to migrate %s.%s to text: %w", tableName, columnName, err)
-		}
-		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to text", tableName, columnName))
+	if err := DB.Exec(fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` text", tableName, columnName)).Error; err != nil {
+		return fmt.Errorf("failed to migrate %s.%s to text: %w", tableName, columnName, err)
 	}
+	common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to text", tableName, columnName))
 	return nil
 }
 

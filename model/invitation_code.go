@@ -104,10 +104,7 @@ func GetUsableInvitationCodeWithTx(tx *gorm.DB, code string) (*InvitationCode, e
 		return nil, ErrInvitationCodeRequired
 	}
 	invitationCode := &InvitationCode{}
-	query := tx
-	if !common.UsingSQLite {
-		query = query.Set("gorm:query_option", "FOR UPDATE")
-	}
+	query := tx.Set("gorm:query_option", "FOR UPDATE")
 	if err := query.Where("code = ?", trimmedCode).First(invitationCode).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrInvitationCodeInvalid
@@ -398,6 +395,7 @@ func CanUserGenerateInvitationCode(user *User, quotaInfo *InvitationCodeQuotaInf
 //   - MaxUses:      每个码的使用次数上限；<0 视为按全局策略 DefaultCodeMaxUses。
 //   - ExpiredTime:  Unix 秒；负数视为按全局策略 DefaultCodeValidDays 兜底。0 = 永久。
 //   - Name:         邀请码名称；空字符串走默认 "用户邀请码"。
+//
 // 普通用户路径仍可传 nil 选项，行为字节级等同于改造前。
 type GenerateUserInvitationCodeOptions struct {
 	Count       int

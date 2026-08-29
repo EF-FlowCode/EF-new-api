@@ -9,9 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	sqlitedriver "github.com/glebarez/go-sqlite"
 	"github.com/go-sql-driver/mysql"
-	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -62,14 +60,6 @@ func sanitizeDBError(err error) error {
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) {
 		return fmt.Errorf("mysql error %d", mysqlErr.Number)
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return fmt.Errorf("postgres error SQLSTATE %s", pgErr.Code)
-	}
-	var sqliteErr *sqlitedriver.Error
-	if errors.As(err, &sqliteErr) {
-		return fmt.Errorf("sqlite error %d", sqliteErr.Code())
 	}
 	return err
 }

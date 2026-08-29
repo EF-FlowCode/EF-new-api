@@ -85,9 +85,6 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 	}
 
 	refCol := "`trade_no`"
-	if common.UsingPostgreSQL {
-		refCol = `"trade_no"`
-	}
 
 	return DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
@@ -115,9 +112,6 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	topUp := &TopUp{}
 
 	refCol := "`trade_no`"
-	if common.UsingPostgreSQL {
-		refCol = `"trade_no"`
-	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", referenceId).First(topUp).Error
@@ -301,9 +295,6 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	}
 
 	refCol := "`trade_no`"
-	if common.UsingPostgreSQL {
-		refCol = `"trade_no"`
-	}
 
 	var userId int
 	var quotaToAdd int
@@ -376,9 +367,6 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 	topUp := &TopUp{}
 
 	refCol := "`trade_no`"
-	if common.UsingPostgreSQL {
-		refCol = `"trade_no"`
-	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", referenceId).First(topUp).Error
@@ -451,9 +439,6 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 	topUp := &TopUp{}
 
 	refCol := "`trade_no`"
-	if common.UsingPostgreSQL {
-		refCol = `"trade_no"`
-	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(topUp).Error
@@ -514,9 +499,6 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 	topUp := &TopUp{}
 
 	refCol := "`trade_no`"
-	if common.UsingPostgreSQL {
-		refCol = `"trade_no"`
-	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(topUp).Error

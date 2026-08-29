@@ -27,14 +27,14 @@ services:
     volumes:
       - dev_data:/data
     environment:
-      - SQL_DSN=postgresql://root:123456@postgres:5432/new-api
+      - SQL_DSN=root:123456@tcp(mysql:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local
       - REDIS_CONN_STRING=redis://redis
       - TZ=Asia/Shanghai
       - BATCH_UPDATE_ENABLED=true
     depends_on:
       redis:
         condition: service_started
-      postgres:
+      mysql:
         condition: service_healthy
     networks:
       - dev-network
@@ -46,27 +46,27 @@ services:
     networks:
       - dev-network
 
-  postgres:
-    image: postgres:15-alpine
-    container_name: new-api-dev-pg
+  mysql:
+    image: mysql:8.4.8
+    container_name: new-api-dev-mysql
     restart: unless-stopped
     environment:
-      POSTGRES_USER: root
-      POSTGRES_PASSWORD: 123456
-      POSTGRES_DB: new-api
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: new-api
+      TZ: Asia/Shanghai
     volumes:
-      - dev_pg_data:/var/lib/postgresql/data
+      - dev_mysql_data:/var/lib/mysql
     networks:
       - dev-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U root -d new-api"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 20
 
 volumes:
   dev_data:
-  dev_pg_data:
+  dev_mysql_data:
 
 networks:
   dev-network:

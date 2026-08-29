@@ -223,12 +223,6 @@ function startServer() {
   return new Promise((resolve, reject) => {
     const isDev = process.env.NODE_ENV === 'development';
 
-    const userDataPath = app.getPath('userData');
-    const dataDir = path.join(userDataPath, 'data');
-    
-    // 设置环境变量供 preload.js 使用
-    process.env.ELECTRON_DATA_DIR = dataDir;
-    
     if (isDev) {
       // 开发模式：假设开发者手动启动了 Go 后端和前端开发服务器
       // 只需要等待前端开发服务器就绪
@@ -257,17 +251,10 @@ function startServer() {
     // 生产模式：启动二进制服务器
     const env = { ...process.env, PORT: PORT.toString() };
 
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
+    if (!env.SQL_DSN || !env.SQL_DSN.trim()) {
+      reject(new Error('SQL_DSN is required. Configure an external MySQL 8.0+ database before starting New API.'));
+      return;
     }
-
-    env.SQLITE_PATH = path.join(dataDir, 'new-api.db');
-    
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('📁 您的数据存储位置：');
-    console.log('   ' + dataDir);
-    console.log('   💡 备份提示：复制此目录即可备份所有数据');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     const binaryPath = getBinaryPath();
     const workingDir = process.resourcesPath;

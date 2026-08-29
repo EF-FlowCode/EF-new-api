@@ -159,8 +159,8 @@ func GetModelRankingData(start int64, end int64) ([]*QuotaData, error) {
 // buckets over [start, end), for the leaderboard's stacked usage chart.
 // bucketSeconds MUST be a fixed internal constant (3600 or 86400), never user
 // input — it is inlined into the SQL as a literal. Bucketing is pure integer
-// modulo arithmetic on the unix-second created_at column, which is portable
-// across SQLite / MySQL / PostgreSQL (no DB-specific date functions). The
+// modulo arithmetic on the unix-second created_at column and does not depend on
+// MySQL date functions. The
 // bucket start is returned in CreatedAt.
 func GetModelBucketUsage(start int64, end int64, bucketSeconds int) ([]*QuotaData, error) {
 	if bucketSeconds <= 0 {

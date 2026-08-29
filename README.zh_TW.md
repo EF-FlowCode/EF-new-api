@@ -128,17 +128,10 @@ docker-compose up -d
 # 拉取最新鏡像
 docker pull calciumion/new-api:latest
 
-# 使用 SQLite（預設）
+# 使用 MySQL 8.0+（必需）
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  calciumion/new-api:latest
-
-# 使用 MySQL
-docker run --name new-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
+  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
@@ -301,8 +294,7 @@ docker run --name new-api -d --restart always \
 
 | 組件 | 要求 |
 |------|------|
-| **本地資料庫** | SQLite（Docker 需掛載 `/data` 目錄）|
-| **遠端資料庫** | MySQL ≥ 5.7.8 或 PostgreSQL ≥ 9.6 |
+| **資料庫** | MySQL 8.0+（必須設定 `SQL_DSN`） |
 | **容器引擎** | Docker / Docker Compose |
 
 ### ⚙️ 環境變數配置
@@ -314,7 +306,7 @@ docker run --name new-api -d --restart always \
 |--------|--------------------------------------------------------------|--------|
 | `SESSION_SECRET` | 會話密鑰（多機部署必須）                                                 | - |
 | `CRYPTO_SECRET` | 加密密鑰（Redis 必須）                                               | - |
-| `SQL_DSN` | 資料庫連接字符串                                                     | - |
+| `SQL_DSN` | MySQL 8.0+ 連接字符串（必填）                                        | - |
 | `REDIS_CONN_STRING` | Redis 連接字符串                                                  | - |
 | `STREAMING_TIMEOUT` | 流式超時時間（秒）                                                    | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | 流式掃描器單行最大緩衝（MB），圖像生成等超大 `data:` 片段（如 4K 圖片 base64）需適當調大 | `64` |
@@ -355,20 +347,11 @@ docker-compose up -d
 <details>
 <summary><strong>方式 2：Docker 命令</strong></summary>
 
-**使用 SQLite：**
+**使用 MySQL 8.0+：**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  calciumion/new-api:latest
-```
-
-**使用 MySQL：**
-```bash
-docker run --name new-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
+  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest

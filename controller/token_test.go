@@ -2,7 +2,6 @@ package controller
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,7 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -77,9 +75,6 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
 	common.RedisEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
@@ -116,36 +111,21 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func openTokenControllerExternalDB(t *testing.T, dialect string, dsn string) (*gorm.DB, *bool) {
+func openTokenControllerMySQLTestDB(t *testing.T, dsn string) (*gorm.DB, *bool) {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
 	common.RedisEnabled = false
-	common.UsingSQLite = false
-	common.UsingMySQL = dialect == "mysql"
-	common.UsingPostgreSQL = dialect == "postgres"
-
-	var (
-		db  *gorm.DB
-		err error
-	)
-	switch dialect {
-	case "mysql":
-		db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	case "postgres":
-		db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	default:
-		t.Fatalf("unsupported dialect %q", dialect)
-	}
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("failed to open %s db: %v", dialect, err)
+		t.Fatalf("failed to open mysql db: %v", err)
 	}
 
 	model.DB = db
 	model.LOG_DB = db
 
 	if db.Migrator().HasTable("tokens") {
-		t.Skipf("refusing to run %s migration compatibility test against external database because tokens table already exists", dialect)
+		t.Skip("refusing to run MySQL migration test against external database because tokens table already exists")
 	}
 
 	managedTokensTable := new(bool)
@@ -268,26 +248,6 @@ func getTokenKeyColumnType(t *testing.T, db *gorm.DB, dialect string) string {
 			t.Fatalf("failed to inspect mysql token key column: %v", err)
 		}
 		return strings.ToLower(columnType)
-	case "postgres":
-		var dataType string
-		var maxLength sql.NullInt64
-		if err := db.Raw(`SELECT data_type, character_maximum_length
-			FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
-			"tokens", "key").Row().Scan(&dataType, &maxLength); err != nil {
-			t.Fatalf("failed to inspect postgres token key column: %v", err)
-		}
-		switch strings.ToLower(dataType) {
-		case "character varying":
-			return fmt.Sprintf("varchar(%d)", maxLength.Int64)
-		case "character":
-			return fmt.Sprintf("char(%d)", maxLength.Int64)
-		default:
-			if maxLength.Valid {
-				return fmt.Sprintf("%s(%d)", strings.ToLower(dataType), maxLength.Int64)
-			}
-			return strings.ToLower(dataType)
-		}
 	default:
 		t.Fatalf("unsupported dialect %q", dialect)
 		return ""
@@ -396,18 +356,8 @@ func TestTokenMigrationFromChar48ToVarchar128MySQL(t *testing.T) {
 		t.Skip("set TEST_MYSQL_DSN to run mysql migration compatibility test")
 	}
 
-	db, managedTokensTable := openTokenControllerExternalDB(t, "mysql", dsn)
+	db, managedTokensTable := openTokenControllerMySQLTestDB(t, dsn)
 	runTokenMigrationCompatibilityTest(t, db, "mysql", managedTokensTable)
-}
-
-func TestTokenMigrationFromChar48ToVarchar128Postgres(t *testing.T) {
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("set TEST_POSTGRES_DSN to run postgres migration compatibility test")
-	}
-
-	db, managedTokensTable := openTokenControllerExternalDB(t, "postgres", dsn)
-	runTokenMigrationCompatibilityTest(t, db, "postgres", managedTokensTable)
 }
 
 func TestGetAllTokensMasksKeyInResponse(t *testing.T) {

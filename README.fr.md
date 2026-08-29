@@ -128,17 +128,10 @@ docker-compose up -d
 # Tirer la dernière image
 docker pull calciumion/new-api:latest
 
-# Utilisation de SQLite (par défaut)
+# MySQL 8.0+ (requis)
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  calciumion/new-api:latest
-
-# Utilisation de MySQL
-docker run --name new-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
+  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
@@ -301,8 +294,7 @@ docker run --name new-api -d --restart always \
 
 | Composant | Exigence |
 |------|------|
-| **Base de données locale** | SQLite (Docker doit monter le répertoire `/data`)|
-| **Base de données distante | MySQL ≥ 5.7.8 ou PostgreSQL ≥ 9.6 |
+| **Base de données** | MySQL 8.0+ (`SQL_DSN` est requis) |
 | **Moteur de conteneur** | Docker / Docker Compose |
 
 ### ⚙️ Configuration des variables d'environnement
@@ -314,7 +306,7 @@ docker run --name new-api -d --restart always \
 |--------|------|--------|
 | `SESSION_SECRET` | Secret de session (requis pour le déploiement multi-machines) |
 | `CRYPTO_SECRET` | Secret de chiffrement (requis pour Redis) | - |
-| `SQL_DSN` | Chaine de connexion à la base de données | - |
+| `SQL_DSN` | Chaine de connexion MySQL 8.0+ (requise) | - |
 | `REDIS_CONN_STRING` | Chaine de connexion Redis | - |
 | `STREAMING_TIMEOUT` | Délai d'expiration du streaming (secondes) | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | Taille max du buffer par ligne (Mo) pour le scanner SSE ; à augmenter quand les sorties image/base64 sont très volumineuses (ex. images 4K) | `64` |
@@ -355,20 +347,11 @@ docker-compose up -d
 <details>
 <summary><strong>Méthode 2: Commandes Docker</strong></summary>
 
-**Utilisation de SQLite:**
+**Utilisation de MySQL 8.0+:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  calciumion/new-api:latest
-```
-
-**Utilisation de MySQL:**
-```bash
-docker run --name new-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
+  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest

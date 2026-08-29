@@ -1,26 +1,29 @@
-# constant 包 (`/constant`)
+# constant 包（`/constant`）
 
-该目录仅用于放置全局可复用的**常量定义**，不包含任何业务逻辑或依赖关系。
+该目录存放跨包共享的常量、静态映射，以及不依赖项目内其他包的轻量查询辅助。
 
 ## 当前文件
 
-| 文件                   | 说明                                                                  |
-|----------------------|---------------------------------------------------------------------|
-| `azure.go`           | 定义与 Azure 相关的全局常量，如 `AzureNoRemoveDotTime`（控制删除 `.` 的截止时间）。         |
-| `cache_key.go`       | 缓存键格式字符串及 Token 相关字段常量，统一缓存命名规则。                                    |
-| `channel_setting.go` | Channel 级别的设置键，如 `proxy`、`force_format` 等。                          |
-| `context_key.go`     | 定义 `ContextKey` 类型以及在整个项目中使用的上下文键常量（请求时间、Token/Channel/User 相关信息等）。 |
-| `env.go`             | 环境配置相关的全局变量，在启动阶段根据配置文件或环境变量注入。                                     |
-| `finish_reason.go`   | OpenAI/GPT 请求返回的 `finish_reason` 字符串常量集合。                           |
-| `midjourney.go`      | Midjourney 相关错误码及动作(Action)常量与模型到动作的映射表。                            |
-| `setup.go`           | 标识项目是否已完成初始化安装 (`Setup` 布尔值)。                                       |
-| `task.go`            | 各种任务(Task)平台、动作常量及模型与动作映射表，如 Suno、Midjourney 等。                     |
-| `user_setting.go`    | 用户设置相关键常量以及通知类型(Email/Webhook)等。                                    |
+| 文件 | 说明 |
+| --- | --- |
+| `api_type.go` | API 类型常量与名称映射。 |
+| `azure.go` | Azure 兼容行为相关常量。 |
+| `cache_key.go` | 缓存键格式和 Token 字段常量。 |
+| `channel.go` | 渠道类型、能力和流式支持等静态映射与查询辅助。 |
+| `context_key.go` | Gin 上下文键类型与常量。 |
+| `email_template.go` | 邮件模板类型、默认模板及构造辅助。 |
+| `endpoint_type.go` | Relay 端点类型常量。 |
+| `env.go` | 由启动环境初始化的全局运行参数。 |
+| `finish_reason.go` | OpenAI/GPT `finish_reason` 常量。 |
+| `midjourney.go` | Midjourney 错误码、动作和模型映射。 |
+| `multi_key_mode.go` | 多 Key 调度模式常量。 |
+| `setup.go` | 系统是否已完成初始化的状态。 |
+| `task.go` | 异步任务平台、动作和模型映射。 |
+| `waffo_pay_method.go` | Waffo 支付方式常量与映射。 |
 
 ## 使用约定
 
-1. `constant` 包**只能被其他包引用**（import），**禁止在此包中引用项目内的其他自定义包**。如确有需要，仅允许引用 **Go 标准库**。
-2. 不允许在此目录内编写任何与业务流程、数据库操作、第三方服务调用等相关的逻辑代码。
-3. 新增类型时，请保持命名语义清晰，并在本 README 的 **当前文件** 表格中补充说明，确保团队成员能够快速了解其用途。
-
-> ⚠️ 违反以上约定将导致包之间产生不必要的耦合，影响代码可维护性与可测试性。请在提交代码前自行检查。
+1. `constant` 包禁止引用项目内其他自定义包；需要依赖时仅使用 Go 标准库。
+2. 不在此目录实现业务流程、数据库操作或第三方服务调用。
+3. 轻量查询辅助应只基于本包静态数据，不产生外部副作用。
+4. 新增或删除文件时同步维护本清单。

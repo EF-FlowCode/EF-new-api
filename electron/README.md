@@ -1,73 +1,53 @@
 # New API Electron Desktop App
 
-This directory contains the Electron wrapper for New API, providing a native desktop application with system tray support for Windows, macOS, and Linux.
+This directory contains the Electron wrapper for New API, with native windows and system-tray support on Windows, macOS, and Linux.
 
 ## Prerequisites
 
-### 1. Go Binary (Required)
-The Electron app requires the compiled Go binary to function. You have two options:
+- Go 1.25.1+
+- Bun
+- Node.js and npm
+- An externally reachable MySQL 8.0+ database
+- A valid MySQL DSN in the `SQL_DSN` environment variable
 
-**Option A: Use existing binary (without Go installed)**
-```bash
-# If you have a pre-built binary (e.g., new-api-macos)
-cp ../new-api-macos ../new-api
-```
-
-**Option B: Build from source (requires Go)**
-TODO
-
-### 3. Electron Dependencies
-```bash
-cd electron
-npm install
-```
+The desktop app does not embed a local database. The packaged backend refuses to start without `SQL_DSN`.
 
 ## Development
 
-Run the app in development mode:
+Development mode does not start the Go backend. Run these commands in separate terminals from the repository root:
+
 ```bash
-npm start
+# Backend; SQL_DSN must already be set in this shell
+go run .
+
+# Frontend development server
+cd web
+bun run dev -- --port 5173
+
+# Electron wrapper
+cd electron
+npm install
+npm run dev-app
 ```
 
-This will:
-- Start the Go backend on port 3000
-- Open an Electron window with DevTools enabled
-- Create a system tray icon (menu bar on macOS)
-- Store database in `../data/new-api.db`
+Electron loads the frontend development server on port 5173, while frontend API requests target the backend on port 3000.
 
-## Building for Production
+## Build
 
-### Quick Build
+The bundled `build.sh` builds `web/dist`, compiles the Go backend, installs Electron dependencies, and invokes the platform-specific electron-builder target:
+
 ```bash
-# Ensure Go binary exists in parent directory
-ls ../new-api  # Should exist
-
-# Build for current platform
-npm run build
-
-# Platform-specific builds
-npm run build:mac    # Creates .dmg and .zip
-npm run build:win    # Creates .exe installer
-npm run build:linux  # Creates .AppImage and .deb
+cd electron
+./build.sh
 ```
 
-### Build Output
-- Built applications are in `electron/dist/`
-- macOS: `.dmg` (installer) and `.zip` (portable)
-- Windows: `.exe` (installer) and portable exe
-- Linux: `.AppImage` and `.deb`
+For an existing frontend and Go binary, the Electron package can also be built directly:
 
-## Configuration
-
-### Port
-Default port is 3000. To change, edit `main.js`:
-```javascript
-const PORT = 3000; // Change to desired port
+```bash
+npm install
+npm run build:mac
+npm run build:win
+npm run build:linux
 ```
 
-### Database Location
-- **Development**: `../data/new-api.db` (project directory)
-- **Production**:
-  - macOS: `~/Library/Application Support/New API/data/`
-  - Windows: `%APPDATA%/New API/data/`
-  - Linux: `~/.config/New API/data/`
+Artifacts are written to `electron/dist/`. The packaged application still requires `SQL_DSN` at runtime; back up the external MySQL database using normal MySQL backup tooling.

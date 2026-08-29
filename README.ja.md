@@ -128,17 +128,10 @@ docker-compose up -d
 # 最新のイメージをプル
 docker pull calciumion/new-api:latest
 
-# SQLiteを使用（デフォルト）
+# MySQL 8.0+を使用（必須）
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  calciumion/new-api:latest
-
-# MySQLを使用
-docker run --name new-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
+  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
@@ -303,8 +296,7 @@ docker run --name new-api -d --restart always \
 
 | コンポーネント | 要件 |
 |------|------|
-| **ローカルデータベース** | SQLite（Dockerは `/data` ディレクトリをマウントする必要があります）|
-| **リモートデータベース** | MySQL ≥ 5.7.8 または PostgreSQL ≥ 9.6 |
+| **データベース** | MySQL 8.0+（`SQL_DSN` は必須） |
 | **コンテナエンジン** | Docker / Docker Compose |
 
 ### ⚙️ 環境変数設定
@@ -316,7 +308,7 @@ docker run --name new-api -d --restart always \
 |--------|------|--------|
 | `SESSION_SECRET` | セッションシークレット（マルチマシンデプロイに必須） | - |
 | `CRYPTO_SECRET` | 暗号化シークレット（Redisに必須） | - |
-| `SQL_DSN** | データベース接続文字列 | - |
+| `SQL_DSN` | MySQL 8.0+ 接続文字列（必須） | - |
 | `REDIS_CONN_STRING` | Redis接続文字列 | - |
 | `STREAMING_TIMEOUT` | ストリーミング応答のタイムアウト時間（秒） | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | ストリームスキャナの1行あたりバッファ上限（MB）。4K画像など巨大なbase64 `data:` ペイロードを扱う場合は値を増加させてください | `64` |
@@ -357,20 +349,11 @@ docker-compose up -d
 <details>
 <summary><strong>方法 2: Dockerコマンド</strong></summary>
 
-**SQLiteを使用:**
+**MySQL 8.0+を使用:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e TZ=Asia/Shanghai \
-  -v ./data:/data \
-  calciumion/new-api:latest
-```
-
-**MySQLを使用:**
-```bash
-docker run --name new-api -d --restart always \
-  -p 3000:3000 \
-  -e SQL_DSN="root:123456@tcp(localhost:3306)/oneapi" \
+  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest

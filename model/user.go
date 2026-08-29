@@ -285,11 +285,8 @@ func EnsureEmailAvailable(email string, excludeUserID int) error {
 // by two transactions. It must be called inside an active transaction; the lock
 // is scoped to that transaction and released on commit/rollback.
 //
-//   - PostgreSQL: transaction-level advisory lock keyed by the normalized email.
-//   - MySQL (default REPEATABLE READ): a locking read that takes a next-key/gap
-//     lock on the email index, blocking concurrent inserts of the same value.
-//   - SQLite: no explicit lock; the single-writer model already serializes the
-//     write, so a racing second write fails instead of duplicating.
+// MySQL 默认 REPEATABLE READ 下，锁定读会在 email 索引上取得 next-key/gap lock，
+// 阻止相同规范化邮箱的并发插入。
 //
 // An empty email is allowed to repeat and needs no serialization.
 func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) error) error {
@@ -297,16 +294,13 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 	if email == "" {
 		return fn(tx)
 	}
-	switch {
-	case common.UsingPostgreSQL:
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
-			return err
-		}
-	case common.UsingMySQL:
-		var ids []int
-		if err := tx.Raw("SELECT id FROM users WHERE email = ? FOR UPDATE", email).Scan(&ids).Error; err != nil {
-			return err
-		}
+	var ids []int
+	if err := tx.Model(&User{}).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id").
+		Where("email = ?", email).
+		Find(&ids).Error; err != nil {
+		return err
 	}
 	return fn(tx)
 }
@@ -365,9 +359,9 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOpts UserSortOptions, roles []in
 	}()
 
 	// eflow: 角色 / 状态 / 分组三个筛选都接到后端，跨页正确。
-	// - role 列三库通用，不需要 commonRoleCol 包装
+	// - role 列不需要额外包装
 	// - status 同 role
-	// - group 是 SQL 保留字，必须走 commonGroupCol（PG 双引号 / MySQL 反引号 / SQLite 反引号）
+	// - group 是 SQL 保留字，必须使用 MySQL 反引号包装
 	base := tx.Unscoped().Model(&User{})
 	if len(roles) > 0 {
 		base = base.Where("role IN ?", roles)
@@ -494,11 +488,10 @@ func SearchUsers(keyword string, group string, roles []int, statuses []int, star
 // （历史裸 SQL 改过、倍率配置删掉但用户没迁等场景，会出现 users 里有 worker 但
 // 倍率配置里没有的情况）。用户列表筛选下拉要展示真实分布，必须直查这一列。
 //
-// 返回切片不含空串。group 是 SQL 保留字，必须走 commonGroupCol 跨库变量包装
-// （PG 双引号 / MySQL/SQLite 反引号）。
+// 返回切片不含空串。group 是 SQL 保留字，必须使用 commonGroupCol 包装。
 func GetDistinctUserGroups() ([]string, error) {
 	// eflow: 直查 users.group 列实际出现过的所有取值。
-	// 跨库：commonGroupCol 包装 group 关键字的引号差异。GORM 的 Distinct + Pluck 链
+	// commonGroupCol 负责包装 group 关键字。GORM 的 Distinct + Pluck 链
 	// 在某些版本会把 SELECT 拼成两次（既加 Distinct 又被 Pluck 重写 SELECT），改用 Raw
 	// 拼一句 SQL 最稳。包含已禁用账号（status=2）：admin 在筛选下拉里要能选到，
 	// 用来快速找到"被禁用且属于某个分组"的用户。已 hard delete 的用户 GORM 会带 deleted_at IS NOT NULL
@@ -526,7 +519,7 @@ type TicketStaffUser struct {
 // GetTicketStaffUsers 返回所有可以处理工单的账号（客服 + 管理员 + 超级管理员），
 // 仅限已启用状态。列表按角色降序 + Id 升序排序，便于前端分组渲染。
 //
-// 用 commonGroupCol 包装 group 关键字，兼容 MySQL / SQLite（反引号）与 PostgreSQL（双引号）。
+// 用 commonGroupCol 包装 MySQL 的 group 关键字。
 func GetTicketStaffUsers() ([]*TicketStaffUser, error) {
 	var users []*TicketStaffUser
 	err := DB.Table("users").
@@ -1495,8 +1488,7 @@ const (
 // the source counter inside a row-locked transaction. Returns the snapshot
 // after the increment plus rolled=true when the window was reset.
 //
-// SQLite ignores Locking{Strength: "UPDATE"} but serializes writes by default,
-// so the same correctness guarantee holds across all three supported DBs.
+// The MySQL row lock serializes concurrent counter updates for the same user.
 func IncrementEnforcementHit(userID int, source string, windowSeconds int64, now int64) (*EnforcementCounterSnapshot, bool, error) {
 	if userID <= 0 {
 		return nil, false, errors.New("invalid user id")

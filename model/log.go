@@ -86,15 +86,10 @@ func logQueryCtx() (context.Context, context.CancelFunc) {
 // COUNT 被 ctx 取消（KILL QUERY）后让整页报错、前端弹「context 异常」。
 func estimatedLogTotal() int64 {
 	var n int64
-	switch {
-	case common.UsingMySQL:
-		// information_schema 统计值（InnoDB 估算，误差几个百分点但瞬时返回，不锁表不全扫）
-		_ = LOG_DB.Raw("SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", "logs").Scan(&n).Error
-	case common.UsingPostgreSQL:
-		_ = LOG_DB.Raw("SELECT reltuples::bigint FROM pg_class WHERE relname = ?", "logs").Scan(&n).Error
-	}
+	// information_schema 统计值（InnoDB 估算，误差几个百分点但瞬时返回，不锁表不全扫）
+	_ = LOG_DB.Raw("SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", "logs").Scan(&n).Error
 	if n <= 0 {
-		// SQLite / 估算拿不到 → 退回真实 count（小库无压力），仍受 ctx 兜底
+		// 估算拿不到时退回真实 count，仍受 ctx 兜底。
 		ctx, cancel := logQueryCtx()
 		defer cancel()
 		_ = LOG_DB.WithContext(ctx).Model(&Log{}).Count(&n).Error
