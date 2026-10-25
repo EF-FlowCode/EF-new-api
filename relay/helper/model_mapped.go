@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 

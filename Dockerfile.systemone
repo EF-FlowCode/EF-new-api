@@ -1,0 +1,16 @@
+FROM golang:1.26.10-alpine@sha256:27f2d3b83cfc5803c8078f8e730af0f7c431bf067afaec8f60a36fb763187cba AS builder
+WORKDIR /build
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+COPY go.mod go.sum ./
+COPY relaykit/go.mod relaykit/go.sum ./relaykit/
+COPY cmd/systemone-proxy/ ./cmd/systemone-proxy/
+COPY internal/systemoneproxy/ ./internal/systemoneproxy/
+RUN go build -mod=readonly -trimpath -ldflags="-s -w" -o /systemone-proxy ./cmd/systemone-proxy
+
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /systemone-proxy /systemone-proxy
+USER 65532:65532
+EXPOSE 8091 8092
+ENTRYPOINT ["/systemone-proxy"]
+CMD ["-config", "/etc/systemone-proxy.json"]

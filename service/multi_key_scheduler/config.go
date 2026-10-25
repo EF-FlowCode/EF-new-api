@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 // 满载策略，与 channel_limiter 保持一致

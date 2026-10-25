@@ -54,6 +54,12 @@ export function MultiSelect({
     (option) => !selected.includes(option.value)
   )
 
+  const handleSelect = (value: string) => {
+    setInputValue('')
+    onChange([...selected, value])
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
   return (
     <Command
       onKeyDown={handleKeyDown}
@@ -67,6 +73,7 @@ export function MultiSelect({
               <Badge key={value} variant='secondary'>
                 {option?.label || value}
                 <Button
+                  type='button'
                   variant='ghost'
                   size='icon-sm'
                   aria-label='Remove'
@@ -109,14 +116,12 @@ export function MultiSelect({
                 return (
                   <CommandItem
                     key={option.value}
-                    onMouseDown={(e) => {
+                    value={option.value}
+                    onPointerDown={(e) => {
                       e.preventDefault()
-                      e.stopPropagation()
+                      handleSelect(option.value)
                     }}
-                    onSelect={() => {
-                      setInputValue('')
-                      onChange([...selected, option.value])
-                    }}
+                    onSelect={() => handleSelect(option.value)}
                     className='cursor-pointer'
                   >
                     {option.label}

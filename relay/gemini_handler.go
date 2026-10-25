@@ -6,16 +6,15 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel/gemini"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,12 +32,12 @@ func isNoThinkingRequest(req *dto.GeminiChatRequest) bool {
 
 func trimModelThinking(modelName string) string {
 	// 去除模型名称中的 -nothinking 后缀
-	if strings.HasSuffix(modelName, "-nothinking") {
-		return strings.TrimSuffix(modelName, "-nothinking")
+	if before, ok := strings.CutSuffix(modelName, "-nothinking"); ok {
+		return before
 	}
 	// 去除模型名称中的 -thinking 后缀
-	if strings.HasSuffix(modelName, "-thinking") {
-		return strings.TrimSuffix(modelName, "-thinking")
+	if before, ok := strings.CutSuffix(modelName, "-thinking"); ok {
+		return before
 	}
 
 	// 去除模型名称中的 -thinking-number
@@ -83,12 +82,9 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				}
 			}
 		}
-		if request.GenerationConfig.ThinkingConfig == nil {
-			gemini.ThinkingAdaptor(request, info)
-		}
 	}
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForInfo(info)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
@@ -141,7 +137,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		// 使用 ConvertGeminiRequest 转换请求格式
 		convertedRequest, err := adaptor.ConvertGeminiRequest(c, info, request)
@@ -164,13 +160,12 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 		logger.LogDebug(c, "Gemini request body: %s", jsonData)
 
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
 		jsonData = nil
-		info.UpstreamRequestBodySize = size
 		requestBody = body
 	}
 
@@ -200,7 +195,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return openaiErr
 	}
 
-	if retryErr := service.StreamAbortRetryError(info); retryErr != nil {
+	if retryErr := service.StreamAbortRetryError(c, info); retryErr != nil {
 		return retryErr
 	}
 
@@ -253,7 +248,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 
 	req.SetModelName("models/" + info.UpstreamModelName)
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForInfo(info)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
@@ -273,13 +268,12 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		}
 	}
 	logger.LogDebug(c, "Gemini embedding request body: %s", jsonData)
-	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	defer closer.Close()
 	jsonData = nil
-	info.UpstreamRequestBodySize = size
 	requestBody = body
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)

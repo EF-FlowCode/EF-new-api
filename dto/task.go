@@ -10,7 +10,9 @@ type TaskError struct {
 	Data       any    `json:"data"`
 	StatusCode int    `json:"-"`
 	LocalError bool   `json:"-"`
-	Error      error  `json:"-"`
+	// SkipRetry prevents replay when a provider may already have accepted a task.
+	SkipRetry bool  `json:"-"`
+	Error     error `json:"-"`
 }
 
 type TaskData interface {
@@ -37,7 +39,7 @@ type TaskDto struct {
 	Platform   string          `json:"platform"`
 	UserId     int             `json:"user_id"`
 	Group      string          `json:"group"`
-	ChannelId  int             `json:"channel_id"`
+	ChannelId  int             `json:"channel_id,omitempty"`
 	Quota      int             `json:"quota"`
 	Action     string          `json:"action"`
 	Status     string          `json:"status"`
@@ -50,6 +52,8 @@ type TaskDto struct {
 	Properties any             `json:"properties"`
 	Username   string          `json:"username,omitempty"`
 	Data       json.RawMessage `json:"data"`
+	// "disabled" when a terminal task's channel/binding is no longer active.
+	ChannelStatus string `json:"channel_status,omitempty"`
 }
 
 type FetchReq struct {

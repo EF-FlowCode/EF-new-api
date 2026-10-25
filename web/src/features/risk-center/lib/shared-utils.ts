@@ -6,14 +6,42 @@ export const RISK_METRIC_DEFINITIONS: Array<{
   value: string
   scopes: Array<'token' | 'user' | 'ip'>
 }> = [
-  { label: 'Distinct IPs (10m)', value: 'distinct_ip_10m', scopes: ['token', 'user'] },
-  { label: 'Distinct IPs (1h)', value: 'distinct_ip_1h', scopes: ['token', 'user'] },
+  {
+    label: 'Distinct IPs (10m)',
+    value: 'distinct_ip_10m',
+    scopes: ['token', 'user'],
+  },
+  {
+    label: 'Distinct IPs (1h)',
+    value: 'distinct_ip_1h',
+    scopes: ['token', 'user'],
+  },
   { label: 'Distinct UAs (10m)', value: 'distinct_ua_10m', scopes: ['token'] },
-  { label: 'Tokens per IP (10m)', value: 'tokens_per_ip_10m', scopes: ['token'] },
-  { label: 'Requests (1m)', value: 'request_count_1m', scopes: ['token', 'user'] },
-  { label: 'Requests (10m)', value: 'request_count_10m', scopes: ['token', 'user'] },
-  { label: 'In-flight (now)', value: 'inflight_now', scopes: ['token', 'user'] },
-  { label: 'Rule hits (24h)', value: 'rule_hit_count_24h', scopes: ['token', 'user'] },
+  {
+    label: 'Tokens per IP (10m)',
+    value: 'tokens_per_ip_10m',
+    scopes: ['token'],
+  },
+  {
+    label: 'Requests (1m)',
+    value: 'request_count_1m',
+    scopes: ['token', 'user'],
+  },
+  {
+    label: 'Requests (10m)',
+    value: 'request_count_10m',
+    scopes: ['token', 'user'],
+  },
+  {
+    label: 'In-flight (now)',
+    value: 'inflight_now',
+    scopes: ['token', 'user'],
+  },
+  {
+    label: 'Rule hits (24h)',
+    value: 'rule_hit_count_24h',
+    scopes: ['token', 'user'],
+  },
   { label: 'Risk score', value: 'risk_score', scopes: ['token', 'user'] },
 ]
 

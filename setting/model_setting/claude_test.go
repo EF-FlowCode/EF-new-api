@@ -3,7 +3,27 @@ package model_setting
 import (
 	"net/http"
 	"testing"
+
+	"eflow.local/new-api/internal/testconfig"
+	"eflow.local/new-api/setting/config"
 )
+
+func TestGetClaudeSettingsAppliesDefaultToSnapshotOnly(t *testing.T) {
+	testconfig.Set(t, "claude", map[string]string{
+		"default_max_tokens": "{}",
+	})
+
+	settings := GetClaudeSettings()
+	if settings.DefaultMaxTokens["default"] != 8192 {
+		t.Fatalf("default max tokens = %d, want 8192", settings.DefaultMaxTokens["default"])
+	}
+	settings.DefaultMaxTokens["default"] = 1
+
+	raw := config.MustSnapshot[ClaudeSettings]("claude")
+	if _, exists := raw.DefaultMaxTokens["default"]; exists {
+		t.Fatalf("derived default leaked into published config: %+v", raw.DefaultMaxTokens)
+	}
+}
 
 func TestClaudeSettingsWriteHeadersMergesConfiguredValuesIntoSingleHeader(t *testing.T) {
 	settings := &ClaudeSettings{

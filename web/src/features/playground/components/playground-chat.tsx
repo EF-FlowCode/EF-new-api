@@ -1,11 +1,4 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -183,14 +176,11 @@ const ChatMessageRow = memo(
                         isAssistant &&
                         !message.isReasoningStreaming &&
                         (message.status === 'loading' ||
-                          (message.status === 'streaming' &&
-                            !version.content))
+                          (message.status === 'streaming' && !version.content))
                       const showMessageContent =
                         (message.from === MESSAGE_ROLES.USER ||
                           !message.isReasoningStreaming) &&
-                        (isMultimodalUser
-                          ? hasUserPayload
-                          : !!version.content)
+                        (isMultimodalUser ? hasUserPayload : !!version.content)
 
                       // Assistant 可见正文：流式期间用 A1 增量算好的
                       // streamingVisible（不再每 token parseThinkTags 重扫）；
@@ -224,19 +214,15 @@ const ChatMessageRow = memo(
                           {/* Sources */}
                           {hasSources && (
                             <Sources>
-                              <SourcesTrigger
-                                count={message.sources!.length}
-                              />
+                              <SourcesTrigger count={message.sources!.length} />
                               <SourcesContent>
-                                {message.sources!.map(
-                                  (source, sourceIndex) => (
-                                    <Source
-                                      href={source.href}
-                                      key={`${message.key}-source-${sourceIndex}`}
-                                      title={source.title}
-                                    />
-                                  )
-                                )}
+                                {message.sources!.map((source, sourceIndex) => (
+                                  <Source
+                                    href={source.href}
+                                    key={`${message.key}-source-${sourceIndex}`}
+                                    title={source.title}
+                                  />
+                                ))}
                               </SourcesContent>
                             </Sources>
                           )}

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/types"
+
+	"github.com/gin-gonic/gin"
 )
 
 // StreamAbortRetryError returns a retryable 503 error when the stream ended
@@ -16,13 +18,14 @@ import (
 // Returns nil when:
 //   - the request is not a stream
 //   - the stream ended normally
-//   - data was already sent (retry impossible — HTTP response committed)
+//   - data was already sent (retry impossible — HTTP response committed; the
+//     caller settles what was delivered instead of refunding it)
 //   - the client disconnected (not a server fault)
-func StreamAbortRetryError(info *relaycommon.RelayInfo) *types.NewAPIError {
+func StreamAbortRetryError(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	if !info.IsStream || info.StreamStatus == nil {
 		return nil
 	}
-	if info.StreamStatus.IsServerSideError() && info.SendResponseCount == 0 {
+	if info.StreamStatus.IsServerSideError() && !info.ClientReceivedOutput(c) {
 		return types.NewErrorWithStatusCode(
 			fmt.Errorf("stream failed before sending data: %s", info.StreamStatus.Summary()),
 			types.ErrorCodeBadResponse,

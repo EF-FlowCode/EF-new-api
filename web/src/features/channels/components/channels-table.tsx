@@ -11,7 +11,7 @@ import {
   type ExpandedState,
   type Row,
 } from '@tanstack/react-table'
-import { useDebounce, useMediaQuery } from '@/hooks'
+import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
@@ -48,6 +48,8 @@ import {
   isTagAggregateRow,
   getChannelTypeIcon,
   getChannelTypeLabel,
+  loadChannelColumnVisibility,
+  saveChannelColumnVisibility,
 } from '../lib'
 import type { Channel } from '../types'
 import { useChannelsColumns } from './channels-columns'
@@ -69,14 +71,9 @@ export function ChannelsTable() {
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
-    id: false,
-    models: false,
-    tag: false,
-    priority: false,
-    weight: false,
-    test_time: false,
-  })
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    loadChannelColumnVisibility
+  )
   const [rowSelection, setRowSelection] = useState({})
   const [expanded, setExpanded] = useState<ExpandedState>({})
 
@@ -101,6 +98,7 @@ export function ChannelsTable() {
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'type', searchKey: 'type', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
+      { columnId: 'address', searchKey: 'address', type: 'array' },
       { columnId: 'model', searchKey: 'model', type: 'string' },
     ],
   })
@@ -115,29 +113,28 @@ export function ChannelsTable() {
   )
   const groupFilter =
     (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
+  const addressFilterValue = (
+    (columnFilters.find((f) => f.id === 'address')?.value as string[]) || []
+  ).find((value) => value !== 'all')
   const modelFilterFromUrl =
     (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
 
-  // Local state for immediate input feedback
+  // Local draft; commit the model filter together with the main search button.
   const [modelFilterInput, setModelFilterInput] = useState(modelFilterFromUrl)
-  const debouncedModelFilter = useDebounce(modelFilterInput, 500)
 
   // Sync local input with URL when URL changes (e.g., from back/forward navigation)
   useEffect(() => {
     setModelFilterInput(modelFilterFromUrl)
   }, [modelFilterFromUrl])
 
-  // Update URL when debounced value changes
-  useEffect(() => {
-    if (debouncedModelFilter !== modelFilterFromUrl) {
-      onColumnFiltersChange((prev) => {
-        const filtered = prev.filter((f) => f.id !== 'model')
-        return debouncedModelFilter
-          ? [...filtered, { id: 'model', value: debouncedModelFilter }]
-          : filtered
-      })
-    }
-  }, [debouncedModelFilter, modelFilterFromUrl, onColumnFiltersChange])
+  const applyModelFilter = () => {
+    const value = modelFilterInput.trim()
+    if (value === modelFilterFromUrl) return
+    onColumnFiltersChange((prev) => {
+      const filtered = prev.filter((f) => f.id !== 'model')
+      return value ? [...filtered, { id: 'model', value }] : filtered
+    })
+  }
 
   const modelFilter = modelFilterFromUrl
 
@@ -187,6 +184,7 @@ export function ChannelsTable() {
         typeFilter.length > 0 && !typeFilter.includes('all')
           ? Number(typeFilter[0])
           : undefined,
+      address: addressFilterValue,
       tag_mode: enableTagMode,
       id_sort: idSort,
       sort_by: sortBy,
@@ -211,6 +209,7 @@ export function ChannelsTable() {
             typeFilter.length > 0 && !typeFilter.includes('all')
               ? Number(typeFilter[0])
               : undefined,
+          address: addressFilterValue,
           tag_mode: enableTagMode,
           id_sort: idSort,
           sort_by: sortBy,
@@ -232,6 +231,7 @@ export function ChannelsTable() {
             typeFilter.length > 0 && !typeFilter.includes('all')
               ? Number(typeFilter[0])
               : undefined,
+          address: addressFilterValue,
           tag_mode: enableTagMode,
           id_sort: idSort,
           sort_by: sortBy,
@@ -257,6 +257,7 @@ export function ChannelsTable() {
 
   const totalCount = data?.data?.total || 0
   const typeCounts = data?.data?.type_counts
+  const addressCounts = data?.data?.address_counts
   const pageStats = useMemo(() => {
     const items = data?.data?.items || []
     return {
@@ -273,6 +274,10 @@ export function ChannelsTable() {
 
   // Columns configuration
   const columns = useChannelsColumns()
+
+  useEffect(() => {
+    saveChannelColumnVisibility(columnVisibility)
+  }, [columnVisibility])
 
   // React Table instance
   const table = useReactTable({
@@ -368,6 +373,16 @@ export function ChannelsTable() {
     ...groupOptions,
   ]
 
+  const addressFilterOptions = [
+    {
+      label: t('All Addresses'),
+      value: 'all',
+      count: (addressCounts?.ip ?? 0) + (addressCounts?.domain ?? 0),
+    },
+    { label: t('Domain'), value: 'domain', count: addressCounts?.domain ?? 0 },
+    { label: t('IP address'), value: 'ip', count: addressCounts?.ip ?? 0 },
+  ]
+
   return (
     <>
       <div className='space-y-3 sm:space-y-4'>
@@ -416,12 +431,20 @@ export function ChannelsTable() {
 
         <DataTableToolbar
           table={table}
+          searchMode='manual'
+          onSearch={applyModelFilter}
           searchPlaceholder={t('Filter by name, ID, or key...')}
           additionalSearch={
             <Input
               placeholder={t('Filter by model...')}
               value={modelFilterInput}
               onChange={(e) => setModelFilterInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  applyModelFilter()
+                }
+              }}
               className='h-8 w-full sm:w-[150px] lg:w-[200px]'
             />
           }
@@ -444,6 +467,12 @@ export function ChannelsTable() {
               options: groupFilterOptions,
               singleSelect: true,
             },
+            {
+              columnId: 'address',
+              title: t('Address'),
+              options: addressFilterOptions,
+              singleSelect: true,
+            },
           ]}
         />
 
@@ -451,8 +480,10 @@ export function ChannelsTable() {
           <MobileCardList
             table={table}
             isLoading={isLoading}
-            emptyTitle='No Channels Found'
-            emptyDescription='No channels available. Create your first channel to get started.'
+            emptyTitle={t('No Channels Found')}
+            emptyDescription={t(
+              'No channels available. Create your first channel to get started.'
+            )}
             getRowClassName={(row) =>
               isDisabledChannelRow(row.original)
                 ? DISABLED_ROW_MOBILE

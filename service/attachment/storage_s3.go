@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/setting"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -26,14 +26,19 @@ type S3Storage struct {
 	presign    *s3.PresignClient
 	bucket     string
 	customHost string // 可选 CDN / 自定义域名，仅用于重写签名 URL 的 scheme+host
+	defaultTTL time.Duration
 }
 
 func NewS3Storage() (Storage, error) {
-	bucket := strings.TrimSpace(setting.TicketAttachmentS3Bucket)
-	region := strings.TrimSpace(setting.TicketAttachmentS3Region)
-	ak := strings.TrimSpace(setting.TicketAttachmentS3AccessKeyId)
-	sk := strings.TrimSpace(setting.TicketAttachmentS3AccessKeySecret)
-	endpoint := strings.TrimSpace(setting.TicketAttachmentS3Endpoint)
+	return newS3Storage(setting.GetTicketAttachmentSettings())
+}
+
+func newS3Storage(settings setting.TicketAttachmentSettings) (Storage, error) {
+	bucket := strings.TrimSpace(settings.S3Bucket)
+	region := strings.TrimSpace(settings.S3Region)
+	ak := strings.TrimSpace(settings.S3AccessKeyID)
+	sk := strings.TrimSpace(settings.S3AccessKeySecret)
+	endpoint := strings.TrimSpace(settings.S3Endpoint)
 	if bucket == "" || region == "" || ak == "" || sk == "" {
 		return nil, ErrStorageNotConfigured
 	}
@@ -56,7 +61,8 @@ func NewS3Storage() (Storage, error) {
 		client:     client,
 		presign:    s3.NewPresignClient(client),
 		bucket:     bucket,
-		customHost: strings.TrimRight(strings.TrimSpace(setting.TicketAttachmentS3CustomDomain), "/"),
+		customHost: strings.TrimRight(strings.TrimSpace(settings.S3CustomDomain), "/"),
+		defaultTTL: time.Duration(settings.SignedURLTTL) * time.Second,
 	}, nil
 }
 
@@ -124,7 +130,7 @@ func (s *S3Storage) Exists(ctx context.Context, key string) (bool, error) {
 
 func (s *S3Storage) SignedURL(ctx context.Context, key string, ttl time.Duration, filename string) (string, error) {
 	if ttl <= 0 {
-		ttl = time.Duration(setting.TicketAttachmentSignedURLTTL) * time.Second
+		ttl = s.defaultTTL
 	}
 	in := &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),

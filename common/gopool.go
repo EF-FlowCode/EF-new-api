@@ -2,6 +2,7 @@ package common
 
 import (
 	"context"
+	"eflow.local/new-api/internal/drainpool"
 	"fmt"
 	"math"
 
@@ -12,7 +13,7 @@ var relayGoPool gopool.Pool
 
 func init() {
 	relayGoPool = gopool.NewPool("gopool.RelayPool", math.MaxInt32, gopool.NewConfig())
-	relayGoPool.SetPanicHandler(func(ctx context.Context, i interface{}) {
+	relayGoPool.SetPanicHandler(func(ctx context.Context, i any) {
 		if stopChan, ok := ctx.Value("stop_chan").(chan bool); ok {
 			SafeSendBool(stopChan, true)
 		}
@@ -21,5 +22,6 @@ func init() {
 }
 
 func RelayCtxGo(ctx context.Context, f func()) {
-	relayGoPool.CtxGo(ctx, f)
+	drainpool.Add()
+	relayGoPool.CtxGo(ctx, func() { defer drainpool.Done(); f() })
 }

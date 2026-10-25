@@ -17,7 +17,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 import { InvitationCodePolicyVisualEditor } from './invitation-code-policy-visual-editor'
 
 const basicAuthSchema = z.object({
@@ -46,7 +46,7 @@ type BasicAuthSectionProps = {
 
 export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const formDefaults = useMemo<BasicAuthFormValues>(
     () => ({
@@ -85,9 +85,8 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
       }
     })
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(updates)
   }
 
   return (
@@ -285,9 +284,12 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
             render={({ field }) => (
               <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
                 <div className='space-y-0.5'>
-                  <FormLabel className='text-base'>OAuth 注册也要求邀请码</FormLabel>
+                  <FormLabel className='text-base'>
+                    OAuth 注册也要求邀请码
+                  </FormLabel>
                   <FormDescription>
-                    GitHub / Discord / OIDC / Telegram 等第三方登录注册时也强制邀请码。仅在已启用邀请码注册时生效。
+                    GitHub / Discord / OIDC / Telegram
+                    等第三方登录注册时也强制邀请码。仅在已启用邀请码注册时生效。
                   </FormDescription>
                 </div>
                 <FormControl>
@@ -306,7 +308,9 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
             render={({ field }) => (
               <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
                 <div className='space-y-0.5'>
-                  <FormLabel className='text-base'>允许用户自助生成邀请码</FormLabel>
+                  <FormLabel className='text-base'>
+                    允许用户自助生成邀请码
+                  </FormLabel>
                   <FormDescription>
                     关闭则只能管理员后台批量生成；开启后用户可在「我的邀请码」页面自助生成。
                   </FormDescription>
@@ -328,7 +332,8 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
               <FormItem className='rounded-lg border p-4'>
                 <FormLabel className='text-base'>邀请码策略</FormLabel>
                 <FormDescription>
-                  控制最低账龄、终身/月度配额、每码使用次数、有效期，以及按角色 / 分组定制配额。
+                  控制最低账龄、终身/月度配额、每码使用次数、有效期，以及按角色
+                  / 分组定制配额。
                 </FormDescription>
                 <FormControl>
                   <InvitationCodePolicyVisualEditor
@@ -341,8 +346,8 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

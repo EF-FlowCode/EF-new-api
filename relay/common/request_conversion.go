@@ -1,8 +1,8 @@
 package common
 
 import (
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/types"
 )
 
 func GuessRelayFormatFromRequest(req any) (types.RelayFormat, bool) {

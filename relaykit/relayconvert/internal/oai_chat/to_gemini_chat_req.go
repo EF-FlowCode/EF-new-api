@@ -3,14 +3,16 @@ package oaichat
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"context"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
-	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	relaymedia "eflow.local/new-api/relaykit/relayconvert/internal/media"
+	sharedgemini "eflow.local/new-api/relaykit/relayconvert/internal/shared/gemini"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
 )
 
 func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto.GeneralOpenAIRequest, info convmeta.Meta) (*dto.GeminiChatRequest, error) {
@@ -50,69 +52,54 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		geminiRequest.GenerationConfig.StopSequences = stopSequences
 	}
 
-	adaptorWithExtraBody := false
 	if len(textRequest.ExtraBody) > 0 {
-		var extraBody map[string]interface{}
+		var extraBody map[string]any
 		if err := kitutil.Unmarshal(textRequest.ExtraBody, &extraBody); err != nil {
 			return nil, fmt.Errorf("invalid extra body: %w", err)
 		}
 
-		if googleBody, ok := extraBody["google"].(map[string]interface{}); ok {
-			if !strings.HasSuffix(upstreamModelName, "-nothinking") {
-				adaptorWithExtraBody = true
-				if _, hasErrorParam := googleBody["thinkingConfig"]; hasErrorParam {
-					return nil, errors.New("extra_body.google.thinkingConfig is not supported, use extra_body.google.thinking_config instead")
+		if googleBody, ok := extraBody["google"].(map[string]any); ok {
+			if _, hasErrorParam := googleBody["thinkingConfig"]; hasErrorParam {
+				return nil, reasoning.AsClientError(errors.New("extra_body.google.thinkingConfig is not supported, use extra_body.google.thinking_config instead"))
+			}
+
+			if thinkingConfig, ok := googleBody["thinking_config"].(map[string]any); ok {
+				if _, hasErrorParam := thinkingConfig["thinkingBudget"]; hasErrorParam {
+					return nil, reasoning.AsClientError(errors.New("extra_body.google.thinking_config.thinkingBudget is not supported, use extra_body.google.thinking_config.thinking_budget instead"))
+				}
+				var hasThinkingConfig bool
+				var tempThinkingConfig dto.GeminiThinkingConfig
+
+				if thinkingBudget, exists := thinkingConfig["thinking_budget"]; exists {
+					v, ok := thinkingBudget.(float64)
+					maxInt := int(^uint(0) >> 1)
+					if !ok || math.IsNaN(v) || math.IsInf(v, 0) || math.Trunc(v) != v || v > float64(maxInt) || v < float64(-maxInt-1) {
+						return nil, reasoning.AsClientError(errors.New("extra_body.google.thinking_config.thinking_budget must be an integer"))
+					}
+					budgetInt := int(v)
+					tempThinkingConfig.ThinkingBudget = kitutil.GetPointer(budgetInt)
+					hasThinkingConfig = true
 				}
 
-				if thinkingConfig, ok := googleBody["thinking_config"].(map[string]interface{}); ok {
-					if _, hasErrorParam := thinkingConfig["thinkingBudget"]; hasErrorParam {
-						return nil, errors.New("extra_body.google.thinking_config.thinkingBudget is not supported, use extra_body.google.thinking_config.thinking_budget instead")
+				if includeThoughts, exists := thinkingConfig["include_thoughts"]; exists {
+					if v, ok := includeThoughts.(bool); ok {
+						tempThinkingConfig.IncludeThoughts = kitutil.GetPointer(v)
+						hasThinkingConfig = true
+					} else {
+						return nil, reasoning.AsClientError(errors.New("extra_body.google.thinking_config.include_thoughts must be a boolean"))
 					}
-					var hasThinkingConfig bool
-					var tempThinkingConfig dto.GeminiThinkingConfig
+				}
+				if thinkingLevel, exists := thinkingConfig["thinking_level"]; exists {
+					if v, ok := thinkingLevel.(string); ok {
+						tempThinkingConfig.ThinkingLevel = v
+						hasThinkingConfig = true
+					} else {
+						return nil, reasoning.AsClientError(errors.New("extra_body.google.thinking_config.thinking_level must be a string"))
+					}
+				}
 
-					if thinkingBudget, exists := thinkingConfig["thinking_budget"]; exists {
-						switch v := thinkingBudget.(type) {
-						case float64:
-							budgetInt := int(v)
-							tempThinkingConfig.ThinkingBudget = kitutil.GetPointer(budgetInt)
-							tempThinkingConfig.IncludeThoughts = budgetInt > 0
-							hasThinkingConfig = true
-						default:
-							return nil, errors.New("extra_body.google.thinking_config.thinking_budget must be an integer")
-						}
-					}
-
-					if includeThoughts, exists := thinkingConfig["include_thoughts"]; exists {
-						if v, ok := includeThoughts.(bool); ok {
-							tempThinkingConfig.IncludeThoughts = v
-							hasThinkingConfig = true
-						} else {
-							return nil, errors.New("extra_body.google.thinking_config.include_thoughts must be a boolean")
-						}
-					}
-					if thinkingLevel, exists := thinkingConfig["thinking_level"]; exists {
-						if v, ok := thinkingLevel.(string); ok {
-							tempThinkingConfig.ThinkingLevel = v
-							hasThinkingConfig = true
-						} else {
-							return nil, errors.New("extra_body.google.thinking_config.thinking_level must be a string")
-						}
-					}
-
-					if hasThinkingConfig {
-						if geminiRequest.GenerationConfig.ThinkingConfig == nil {
-							geminiRequest.GenerationConfig.ThinkingConfig = &tempThinkingConfig
-						} else {
-							if tempThinkingConfig.ThinkingBudget != nil {
-								geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = tempThinkingConfig.ThinkingBudget
-							}
-							geminiRequest.GenerationConfig.ThinkingConfig.IncludeThoughts = tempThinkingConfig.IncludeThoughts
-							if tempThinkingConfig.ThinkingLevel != "" {
-								geminiRequest.GenerationConfig.ThinkingConfig.ThinkingLevel = tempThinkingConfig.ThinkingLevel
-							}
-						}
-					}
+				if hasThinkingConfig {
+					geminiRequest.GenerationConfig.ThinkingConfig = &tempThinkingConfig
 				}
 			}
 
@@ -120,7 +107,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 				return nil, errors.New("extra_body.google.imageConfig is not supported, use extra_body.google.image_config instead")
 			}
 
-			if imageConfig, ok := googleBody["image_config"].(map[string]interface{}); ok {
+			if imageConfig, ok := googleBody["image_config"].(map[string]any); ok {
 				if _, hasErrorParam := imageConfig["aspectRatio"]; hasErrorParam {
 					return nil, errors.New("extra_body.google.image_config.aspectRatio is not supported, use extra_body.google.image_config.aspect_ratio instead")
 				}
@@ -128,7 +115,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 					return nil, errors.New("extra_body.google.image_config.imageSize is not supported, use extra_body.google.image_config.image_size instead")
 				}
 
-				geminiImageConfig := make(map[string]interface{})
+				geminiImageConfig := make(map[string]any)
 				if aspectRatio, ok := imageConfig["aspect_ratio"]; ok {
 					geminiImageConfig["aspectRatio"] = aspectRatio
 				}
@@ -147,8 +134,8 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		}
 	}
 
-	if !adaptorWithExtraBody {
-		sharedgemini.ApplyThinkingConfig(&geminiRequest, info, textRequest)
+	if err := sharedgemini.ApplyThinkingConfig(&geminiRequest, info, textRequest); err != nil {
+		return nil, reasoning.AsClientError(err)
 	}
 
 	var safetySettings []dto.GeminiChatSafetySettings
@@ -167,7 +154,8 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 	}
 
 	if textRequest.Tools != nil {
-		functions := make([]dto.FunctionRequest, 0, len(textRequest.Tools))
+		jsonSchema := opts.Gemini.SupportsJSONSchemaModel(upstreamModelName)
+		functions := make([]sharedgemini.FunctionDeclaration, 0, len(textRequest.Tools))
 		googleSearch := false
 		codeExecution := false
 		urlContext := false
@@ -184,15 +172,9 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 				urlContext = true
 				continue
 			}
-			if tool.Function.Parameters != nil {
-				if params, ok := tool.Function.Parameters.(map[string]interface{}); ok {
-					if props, hasProps := params["properties"].(map[string]interface{}); hasProps && len(props) == 0 {
-						tool.Function.Parameters = nil
-					}
-				}
-			}
-			tool.Function.Parameters = sharedgemini.CleanFunctionParameters(tool.Function.Parameters)
-			functions = append(functions, tool.Function)
+			// A schema Gemini's typed Schema cannot hold goes unchanged in
+			// parametersJsonSchema where the upstream accepts it.
+			functions = append(functions, sharedgemini.NewFunctionDeclaration(tool.Function, jsonSchema))
 		}
 		geminiTools := geminiRequest.GetTools()
 		if codeExecution {
@@ -226,11 +208,8 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		geminiRequest.GenerationConfig.ResponseMimeType = "application/json"
 
 		if len(textRequest.ResponseFormat.JsonSchema) > 0 {
-			var jsonSchema dto.FormatJsonSchema
-			if err := kitutil.Unmarshal(textRequest.ResponseFormat.JsonSchema, &jsonSchema); err == nil {
-				cleanedSchema := sharedgemini.RemoveAdditionalProperties(jsonSchema.Schema, 0)
-				geminiRequest.GenerationConfig.ResponseSchema = cleanedSchema
-			}
+			sharedgemini.ApplyResponseSchema(&geminiRequest.GenerationConfig, textRequest.ResponseFormat.JsonSchema,
+				opts.Gemini.SupportsJSONSchemaModel(upstreamModelName))
 		}
 	}
 
@@ -254,15 +233,15 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 			} else if val, exists := toolCallIDs[message.ToolCallId]; exists {
 				name = val
 			}
-			var contentMap map[string]interface{}
+			var contentMap map[string]any
 			contentStr := message.StringContent()
 
 			if err := kitutil.Unmarshal([]byte(contentStr), &contentMap); err != nil {
-				var contentSlice []interface{}
+				var contentSlice []any
 				if err := kitutil.Unmarshal([]byte(contentStr), &contentSlice); err == nil {
-					contentMap = map[string]interface{}{"result": contentSlice}
+					contentMap = map[string]any{"result": contentSlice}
 				} else {
-					contentMap = map[string]interface{}{"content": contentStr}
+					contentMap = map[string]any{"content": contentStr}
 				}
 			}
 
@@ -285,7 +264,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		signatureAttached := false
 		if message.ToolCalls != nil {
 			for _, call := range message.ParseToolCalls() {
-				args := map[string]interface{}{}
+				args := map[string]any{}
 				if call.Function.Arguments != "" {
 					if kitutil.Unmarshal([]byte(call.Function.Arguments), &args) != nil {
 						return nil, fmt.Errorf("invalid arguments for function %s, args: %s", call.Function.Name, call.Function.Arguments)
@@ -371,7 +350,7 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 					return nil, fmt.Errorf("get file data from '%s' failed: %w", source.GetIdentifier(), err)
 				}
 
-				if _, ok := sharedgemini.SupportedMimeTypes[strings.ToLower(mimeType)]; !ok {
+				if !sharedgemini.IsSupportedMimeType(mimeType) {
 					return nil, fmt.Errorf("mime type is not supported by Gemini: '%s', url: '%s', supported types are: %v", mimeType, source.GetIdentifier(), sharedgemini.SupportedMimeTypesList())
 				}
 

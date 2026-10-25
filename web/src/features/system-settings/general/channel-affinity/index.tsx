@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Edit, FileText, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getRequestErrorMessage } from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -27,7 +28,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { StatusBadge } from '@/components/status-badge'
 import { SettingsSection } from '../../components/settings-section'
-import { useUpdateOption } from '../../hooks/use-update-option'
+import { useUpdateOptions } from '../../hooks/use-update-option'
 import {
   getCacheStats,
   clearAllCache,
@@ -61,7 +62,7 @@ interface Props {
 
 export function ChannelAffinitySection(props: Props) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const [enabled, setEnabled] = useState(
     props.defaultValues['channel_affinity_setting.enabled']
@@ -134,9 +135,15 @@ export function ChannelAffinitySection(props: Props) {
     setCacheLoading(true)
     try {
       const res = await getCacheStats()
-      if (res.success) setCacheStats(res.data || null)
-    } catch {
-      toast.error(t('Failed to refresh cache stats'))
+      if (res.success) {
+        setCacheStats(res.data || null)
+      } else {
+        toast.error(res.message || t('Failed to refresh cache stats'))
+      }
+    } catch (error: unknown) {
+      toast.error(
+        getRequestErrorMessage(error, t('Failed to refresh cache stats'))
+      )
     } finally {
       setCacheLoading(false)
     }
@@ -253,12 +260,9 @@ export function ChannelAffinitySection(props: Props) {
         return
       }
 
-      for (const u of updates) {
-        await updateOption.mutateAsync(u)
-      }
-      toast.success(t('Saved successfully'))
+      await updateOptions.mutateAsync(updates)
     } catch {
-      toast.error(t('Failed to save'))
+      // The mutation owns request error feedback.
     } finally {
       setSaving(false)
     }
@@ -287,22 +291,36 @@ export function ChannelAffinitySection(props: Props) {
   }
 
   const handleClearAll = async () => {
-    const res = await clearAllCache()
-    if (res.success) {
-      toast.success(t('Cleared'))
-      refreshCache()
+    try {
+      const res = await clearAllCache()
+      if (res.success) {
+        toast.success(t('Cleared'))
+        refreshCache()
+      } else {
+        toast.error(res.message || t('Request failed'))
+      }
+    } catch (error: unknown) {
+      toast.error(getRequestErrorMessage(error, t('Request failed')))
+    } finally {
+      setClearAllDialogOpen(false)
     }
-    setClearAllDialogOpen(false)
   }
 
   const handleClearRule = async () => {
     if (!clearRuleName) return
-    const res = await clearRuleCache(clearRuleName)
-    if (res.success) {
-      toast.success(t('Cleared'))
-      refreshCache()
+    try {
+      const res = await clearRuleCache(clearRuleName)
+      if (res.success) {
+        toast.success(t('Cleared'))
+        refreshCache()
+      } else {
+        toast.error(res.message || t('Request failed'))
+      }
+    } catch (error: unknown) {
+      toast.error(getRequestErrorMessage(error, t('Request failed')))
+    } finally {
+      setClearRuleName(null)
     }
-    setClearRuleName(null)
   }
 
   const groupOptions = useMemo<ComboboxOption[]>(() => {
@@ -318,15 +336,20 @@ export function ChannelAffinitySection(props: Props) {
   const handleClearGroup = async () => {
     const group = groupToClear.trim()
     if (!group) return
-    const res = await clearGroupCache(group)
-    if (res.success) {
-      toast.success(`${t('Cleared')}: ${res.data?.deleted ?? 0}`)
-      setGroupToClear('')
-      refreshCache()
-    } else {
-      toast.error(res.message || t('Failed to save'))
+    try {
+      const res = await clearGroupCache(group)
+      if (res.success) {
+        toast.success(`${t('Cleared')}: ${res.data?.deleted ?? 0}`)
+        setGroupToClear('')
+        refreshCache()
+      } else {
+        toast.error(res.message || t('Request failed'))
+      }
+    } catch (error: unknown) {
+      toast.error(getRequestErrorMessage(error, t('Request failed')))
+    } finally {
+      setClearGroupDialogOpen(false)
     }
-    setClearGroupDialogOpen(false)
   }
 
   const switchToJsonMode = () => {

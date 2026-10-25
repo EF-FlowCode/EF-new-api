@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 )
 
 func formatNotifyType(channelId int, status int) string {
@@ -42,8 +42,8 @@ func EnableChannel(channelId int, usingKey string, channelName string) {
 	}
 }
 
-func ShouldDisableChannel(err *types.NewAPIError) bool {
-	if !common.AutomaticDisableChannelEnabled {
+func ShouldDisableChannelWithPolicy(err *types.NewAPIError, policy operation_setting.ChannelFailurePolicy) bool {
+	if !policy.AutomaticDisableChannelEnabled {
 		return false
 	}
 	if err == nil {
@@ -55,17 +55,17 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if types.IsSkipRetryError(err) {
 		return false
 	}
-	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
+	if policy.ShouldDisableByStatusCode(err.StatusCode) {
 		return true
 	}
 
 	lowerMessage := strings.ToLower(err.Error())
-	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
+	search, _ := AcSearch(lowerMessage, policy.AutomaticDisableKeywords, true)
 	return search
 }
 
-func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
-	if !common.AutomaticEnableChannelEnabled {
+func ShouldEnableChannelWithPolicy(newAPIError *types.NewAPIError, status int, policy operation_setting.ChannelFailurePolicy) bool {
+	if !policy.AutomaticEnableChannelEnabled {
 		return false
 	}
 	if newAPIError != nil {

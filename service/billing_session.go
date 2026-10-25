@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -67,13 +68,13 @@ func (s *BillingSession) Compensate(c *gin.Context) error {
 		tokenID = 0
 		tokenAmount = 0
 	}
-	if err := model.RefundBillingQuotaAtomic(model.BillingQuotaRefund{
+	if err := refundWithRetry(model.BillingQuotaRefund{
 		UserID:        s.relayInfo.UserId,
 		TokenID:       tokenID,
 		TokenKey:      s.relayInfo.TokenKey,
 		FundingAmount: s.settledQuota,
 		TokenAmount:   tokenAmount,
-	}); err != nil {
+	}, "task insert compensation"); err != nil {
 		return err
 	}
 	s.refunded = true
@@ -95,14 +96,13 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		tokenID = 0
 		tokenAmount = 0
 	}
-	if err := model.RefundBillingQuotaAtomic(model.BillingQuotaRefund{
+	if err := refundWithRetry(model.BillingQuotaRefund{
 		UserID:        s.relayInfo.UserId,
 		TokenID:       tokenID,
 		TokenKey:      s.relayInfo.TokenKey,
 		FundingAmount: s.walletConsumed,
 		TokenAmount:   tokenAmount,
-	}); err != nil {
-		common.SysLog("error refunding billing quota atomically: " + err.Error())
+	}, "pre-consume refund"); err != nil {
 		return
 	}
 	s.refunded = true
@@ -129,14 +129,25 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 		return nil
 	}
 	delta := targetQuota - s.preConsumedQuota
-	if err := model.DecreaseUserQuota(s.relayInfo.UserId, delta, false); err != nil {
-		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
-	}
+	// Same floor-checked primitives as preConsume: an extra reservation must
+	// never push the wallet or token below zero.
 	if err := s.reserveToken(delta); err != nil {
-		if rollbackErr := model.IncreaseUserQuota(s.relayInfo.UserId, delta, false); rollbackErr != nil {
-			common.SysLog("error rolling back wallet funding reserve: " + rollbackErr.Error())
-		}
 		return err
+	}
+	reserved, err := model.TryReserveUserQuota(s.relayInfo.UserId, delta)
+	if err != nil || !reserved {
+		if !s.relayInfo.IsPlayground {
+			if rollbackErr := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, delta); rollbackErr != nil {
+				common.SysLog("error rolling back token quota reserve: " + rollbackErr.Error())
+			}
+		}
+		if err == nil {
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("用户额度不足, 需要追加预扣费额度: %s", logger.FormatQuota(delta)),
+				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
 	s.walletConsumed += delta
 	s.preConsumedQuota += delta
@@ -159,13 +170,24 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			return types.NewErrorWithStatusCode(err, types.ErrorCodePreConsumeTokenQuotaFailed, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		s.tokenConsumed = effectiveQuota
-		if err := model.DecreaseUserQuota(s.relayInfo.UserId, effectiveQuota, false); err != nil {
+		reserved, err := model.TryReserveUserQuota(s.relayInfo.UserId, effectiveQuota)
+		if err != nil || !reserved {
 			if !s.relayInfo.IsPlayground {
 				if rollbackErr := model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, s.tokenConsumed); rollbackErr != nil {
 					common.SysLog("error rolling back token quota: " + rollbackErr.Error())
 				}
 			}
 			s.tokenConsumed = 0
+			if err == nil {
+				userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
+				if quotaErr != nil {
+					userQuota = 0
+				}
+				return types.NewErrorWithStatusCode(
+					fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+					types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+					types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			}
 			return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		s.walletConsumed = effectiveQuota
@@ -224,4 +246,22 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, apiErr
 	}
 	return session, nil
+}
+
+// refundWithRetry retries a failed refund a few times before giving up. A
+// refund that still fails is logged with its amounts for manual reconciliation.
+func refundWithRetry(refund model.BillingQuotaRefund, reason string) error {
+	var err error
+	for attempt, wait := range []time.Duration{0, 200 * time.Millisecond, time.Second} {
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+		if err = model.RefundBillingQuotaAtomic(refund); err == nil {
+			return nil
+		}
+		common.SysLog(fmt.Sprintf("billing refund attempt %d failed (%s): %s", attempt+1, reason, err.Error()))
+	}
+	common.SysError(fmt.Sprintf("billing refund abandoned (%s): user_id=%d token_id=%d funding=%d token=%d error=%s",
+		reason, refund.UserID, refund.TokenID, refund.FundingAmount, refund.TokenAmount, err.Error()))
+	return err
 }

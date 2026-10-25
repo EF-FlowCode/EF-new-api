@@ -1,6 +1,7 @@
 package model
 
 import (
+	"slices"
 	"time"
 
 	"gorm.io/gorm"
@@ -89,17 +90,6 @@ func GetLastMonitoringHistoryBefore(groupName string, beforeTime int64) (*Monito
 	return &h, nil
 }
 
-func UpsertChannelMonitoringStat(stat *ChannelMonitoringStat) error {
-	stat.UpdatedAt = time.Now().Unix()
-	return DB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "group_name"}, {Name: "channel_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"availability_rate", "cache_hit_rate", "avg_response_time", "avg_frt",
-			"last_test_time", "last_test_model", "is_online", "updated_at",
-		}),
-	}).Create(stat).Error
-}
-
 func UpsertGroupMonitoringStat(stat *GroupMonitoringStat) error {
 	stat.UpdatedAt = time.Now().Unix()
 	return DB.Clauses(clause.OnConflict{
@@ -150,11 +140,8 @@ func GetAllChannelsByGroup(groupName string) ([]*Channel, error) {
 	var result []*Channel
 	for _, ch := range channels {
 		groups := ch.GetGroups()
-		for _, g := range groups {
-			if g == groupName {
-				result = append(result, ch)
-				break
-			}
+		if slices.Contains(groups, groupName) {
+			result = append(result, ch)
 		}
 	}
 	return result, nil
@@ -170,9 +157,9 @@ type MonitoringLogAggRow struct {
 
 func AggregateLogsForMonitoring(sinceTimestamp int64) ([]MonitoringLogAggRow, error) {
 	var rows []MonitoringLogAggRow
-	query := "SELECT " + logGroupCol + " as grp, channel as channel_id, type as log_type, COUNT(*) as cnt, COALESCE(SUM(use_time),0) as sum_time " +
+	query := "SELECT " + logGroupCol + " as grp, channel_id, type as log_type, COUNT(*) as cnt, COALESCE(SUM(use_time),0) as sum_time " +
 		"FROM logs WHERE created_at >= ? AND type IN (2, 5) " +
-		"GROUP BY " + logGroupCol + ", channel, type"
+		"GROUP BY " + logGroupCol + ", channel_id, type"
 	type rawRow struct {
 		Grp       string `gorm:"column:grp"`
 		ChannelId int    `gorm:"column:channel_id"`
@@ -198,6 +185,7 @@ func AggregateLogsForMonitoring(sinceTimestamp int64) ([]MonitoringLogAggRow, er
 }
 
 type MonitoringErrorRow struct {
+	RequestId string
 	Group     string
 	ChannelId int
 	ModelName string
@@ -213,9 +201,10 @@ type MonitoringErrorRow struct {
 func GetMonitoringErrorRows(sinceTimestamp int64) ([]MonitoringErrorRow, error) {
 	ctx, cancel := logQueryCtx()
 	defer cancel()
-	query := "SELECT " + logGroupCol + " as grp, channel_id, model_name, content, other " +
-		"FROM logs WHERE created_at >= ? AND type = ?"
+	query := "SELECT request_id, " + logGroupCol + " as grp, channel_id, model_name, content, other " +
+		"FROM logs WHERE created_at >= ? AND type = ? ORDER BY created_at, id"
 	type rawRow struct {
+		RequestId string `gorm:"column:request_id"`
 		Grp       string `gorm:"column:grp"`
 		ChannelId int    `gorm:"column:channel_id"`
 		ModelName string `gorm:"column:model_name"`
@@ -229,6 +218,7 @@ func GetMonitoringErrorRows(sinceTimestamp int64) ([]MonitoringErrorRow, error) 
 	rows := make([]MonitoringErrorRow, 0, len(raw))
 	for _, r := range raw {
 		rows = append(rows, MonitoringErrorRow{
+			RequestId: r.RequestId,
 			Group:     r.Grp,
 			ChannelId: r.ChannelId,
 			ModelName: r.ModelName,
@@ -237,6 +227,42 @@ func GetMonitoringErrorRows(sinceTimestamp int64) ([]MonitoringErrorRow, error) 
 		})
 	}
 	return rows, nil
+}
+
+func GetMonitoringSuccessfulRequestIds(sinceTimestamp int64) (map[string]struct{}, error) {
+	ctx, cancel := logQueryCtx()
+	defer cancel()
+	var ids []string
+	if err := LOG_DB.WithContext(ctx).Model(&Log{}).
+		Distinct("request_id").
+		Where("created_at >= ? AND type = ? AND request_id <> ''", sinceTimestamp, LogTypeConsume).
+		Pluck("request_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		result[id] = struct{}{}
+	}
+	return result, nil
+}
+
+// ResetStaleChannelMonitoringStats 把本轮聚合窗口内没有数据的渠道统计置为"无数据"：
+// 可用率/缓存命中 -1、离线，保留 updated_at 作为最后一次有数据的时间，不删除行。
+// cycleStart 是本轮开始时间，本轮刚写入的行 updated_at 不小于它。
+func ResetStaleChannelMonitoringStats(groups []string, cycleStart int64) error {
+	if len(groups) == 0 {
+		return nil
+	}
+	return DB.Model(&ChannelMonitoringStat{}).
+		Where("group_name IN ? AND updated_at < ?", groups, cycleStart).
+		Where("availability_rate <> -1 OR cache_hit_rate <> -1 OR is_online = ? OR avg_response_time <> 0 OR avg_frt <> 0", true).
+		UpdateColumns(map[string]any{
+			"availability_rate": -1,
+			"cache_hit_rate":    -1,
+			"avg_response_time": 0,
+			"avg_frt":           0,
+			"is_online":         false,
+		}).Error
 }
 
 func BatchUpsertChannelMonitoringStats(stats []*ChannelMonitoringStat) error {

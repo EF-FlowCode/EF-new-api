@@ -3,7 +3,7 @@ import { LayoutDashboard } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -106,7 +106,7 @@ export function SidebarModulesCard() {
 
   const loadConfig = useCallback(async () => {
     try {
-      const res = await api.get('/api/user/self')
+      const res = await api.get('/api/user/self', CALLER_HANDLED_REQUEST_CONFIG)
       if (res.data.success && res.data.data?.sidebar_modules) {
         const raw = res.data.data.sidebar_modules
         const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
@@ -151,9 +151,13 @@ export function SidebarModulesCard() {
     setLoading(true)
     try {
       const serialized = JSON.stringify(config)
-      const res = await api.put('/api/user/self', {
-        sidebar_modules: serialized,
-      })
+      const res = await api.put(
+        '/api/user/self',
+        {
+          sidebar_modules: serialized,
+        },
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data.success) {
         // Sync to auth-store so useSidebarConfig re-runs and the sidebar
         // updates immediately without needing a page refresh.

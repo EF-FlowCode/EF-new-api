@@ -26,7 +26,8 @@ export function DiscoveryButton(props: DiscoveryButtonProps) {
       return
     }
 
-    const res = await discover.mutateAsync(wellKnown)
+    const res = await discover.mutateAsync(wellKnown).catch(() => undefined)
+    if (!res) return
     if (res.success && res.data?.discovery) {
       const disc = res.data.discovery
       if (disc.authorization_endpoint) {

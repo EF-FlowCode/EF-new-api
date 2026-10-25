@@ -1,133 +1,163 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
-	"time"
+	"strconv"
+	"strings"
 
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	// SecureVerificationSessionKey 安全验证的 session key（与 controller 保持一致）
-	SecureVerificationSessionKey       = "secure_verified_at"
-	secureVerificationMethodSessionKey = "secure_verified_method"
-	// SecureVerificationTimeout 验证有效期（秒）
-	SecureVerificationTimeout = 300 // 5分钟
+	// LoginAtSessionKey 与 controller.LoginAtSessionKey 保持一致：本次登录完成的时间戳（秒）。
+	LoginAtSessionKey = "login_at"
+	// stepUpNonceSessionKey binds proofs to a browser session when the session
+	// store has no server-side id (cookie store in development and tests).
+	stepUpNonceSessionKey = "step_up_nonce"
+	// SecurityProofHeader carries a single-use, action-bound verification proof.
+	SecurityProofHeader = "X-Security-Proof"
 )
 
-// SecureVerificationRequired 安全验证中间件
-// 检查用户是否在有效时间内通过了安全验证
-// 如果未验证或验证已过期，返回 401 错误
+// SecureVerificationRequired protects channel key disclosure. Other sensitive
+// operations validate their narrower proof scopes in their controller.
 func SecureVerificationRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查用户是否已登录
-		userId := c.GetInt("id")
-		if userId == 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": "未登录",
-			})
-			c.Abort()
+		channelID, err := strconv.Atoi(c.Param("id"))
+		if err != nil || channelID <= 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "code": "SECURITY_CONTEXT_INVALID", "message": service.ErrVerificationContextInvalid.Error()})
 			return
 		}
-
-		// 检查 session 中的验证时间戳
-		session := sessions.Default(c)
-		verifiedAtRaw := session.Get(SecureVerificationSessionKey)
-
-		if verifiedAtRaw == nil {
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"message": "需要安全验证",
-				"code":    "VERIFICATION_REQUIRED",
-			})
-			c.Abort()
+		context, err := common.Marshal(service.ChannelKeyReadContext{ChannelID: channelID})
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
 			return
 		}
-
-		verifiedAt, ok := verifiedAtRaw.(int64)
-		if !ok {
-			// session 数据格式错误
-			clearSecureVerificationSession(session)
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"message": "验证状态异常，请重新验证",
-				"code":    "VERIFICATION_INVALID",
-			})
-			c.Abort()
+		if RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeChannelKeyRead, Context: context}) == nil {
 			return
 		}
-
-		// 检查验证是否过期
-		elapsed := time.Now().Unix() - verifiedAt
-		if elapsed >= SecureVerificationTimeout {
-			// 验证已过期，清除 session
-			clearSecureVerificationSession(session)
-			c.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"message": "验证已过期，请重新验证",
-				"code":    "VERIFICATION_EXPIRED",
-			})
-			c.Abort()
-			return
-		}
-
-		c.Next()
-	}
-}
-
-func clearSecureVerificationSession(session sessions.Session) {
-	session.Delete(SecureVerificationSessionKey)
-	session.Delete(secureVerificationMethodSessionKey)
-	_ = session.Save()
-}
-
-// OptionalSecureVerification 可选的安全验证中间件
-// 如果用户已验证，则在 context 中设置标记，但不阻止请求继续
-// 用于某些需要区分是否已验证的场景
-func OptionalSecureVerification() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		userId := c.GetInt("id")
-		if userId == 0 {
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		session := sessions.Default(c)
-		verifiedAtRaw := session.Get(SecureVerificationSessionKey)
-
-		if verifiedAtRaw == nil {
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		verifiedAt, ok := verifiedAtRaw.(int64)
-		if !ok {
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
-		elapsed := time.Now().Unix() - verifiedAt
-		if elapsed >= SecureVerificationTimeout {
-			clearSecureVerificationSession(session)
-			c.Set("secure_verified", false)
-			c.Next()
-			return
-		}
-
 		c.Set("secure_verified", true)
-		c.Set("secure_verified_at", verifiedAt)
 		c.Next()
 	}
 }
 
-// ClearSecureVerification 清除安全验证状态
-// 用于用户登出或需要强制重新验证的场景
-func ClearSecureVerification(c *gin.Context) {
+// GetStepUpIdentity returns the identity a proof is bound to: the browser
+// session, or a scoped access token. Legacy access tokens cannot complete
+// step-up verification.
+func GetStepUpIdentity(c *gin.Context) (service.AuthIdentity, bool) {
+	userID := c.GetInt("id")
+	if userID <= 0 {
+		return service.AuthIdentity{}, false
+	}
+	if c.GetBool("use_access_token") {
+		tokenID := c.GetInt("access_token_id")
+		if tokenID <= 0 {
+			return service.AuthIdentity{}, false
+		}
+		return service.NewAuthIdentity(userID, model.AccessTokenSessionID(tokenID)), true
+	}
+	sessionID, ok := stepUpSessionID(c)
+	if !ok {
+		return service.AuthIdentity{}, false
+	}
+	return service.NewAuthIdentity(userID, sessionID), true
+}
+
+// GetStepUpContext returns the request facts the verification policy needs.
+func GetStepUpContext(c *gin.Context) service.StepUpContext {
+	if c.GetBool("use_access_token") {
+		return service.StepUpContext{AccessToken: true}
+	}
+	stepUp := service.StepUpContext{}
+	if _, ok := c.Get(sessions.DefaultKey); ok {
+		stepUp.LoginAt, _ = sessions.Default(c).Get(LoginAtSessionKey).(int64)
+	}
+	return stepUp
+}
+
+func stepUpSessionID(c *gin.Context) (string, bool) {
+	if _, ok := c.Get(sessions.DefaultKey); !ok {
+		return "", false
+	}
 	session := sessions.Default(c)
-	clearSecureVerificationSession(session)
+	if sid := common.CurrentSessionID(session); sid != "" {
+		return "session:" + sid, true
+	}
+	nonce, _ := session.Get(stepUpNonceSessionKey).(string)
+	if nonce == "" {
+		nonce = common.GetRandomString(32)
+		session.Set(stepUpNonceSessionKey, nonce)
+		if err := session.Save(); err != nil {
+			return "", false
+		}
+	}
+	return "nonce:" + nonce, true
+}
+
+// RequireSecurityProof validates a proof against the authenticated session or
+// scoped access token and writes the shared proof error contract on failure.
+func RequireSecurityProof(c *gin.Context, operation service.VerificationOperation) *service.StepUpAuthorization {
+	identity, ok := GetStepUpIdentity(c)
+	if !ok {
+		securityProofError(c, "SECURITY_PROOF_INVALID", "Security verification is no longer valid. Please verify again.")
+		return nil
+	}
+	raw := strings.TrimSpace(c.GetHeader(SecurityProofHeader))
+	if raw == "" {
+		securityProofError(c, "SECURITY_PROOF_REQUIRED", "Additional verification required")
+		return nil
+	}
+	authorization, err := service.ConsumeOperationProof(raw, identity, GetStepUpContext(c), operation)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrAuthTokenExpired):
+			securityProofError(c, "SECURITY_PROOF_EXPIRED", "Security verification has expired. Please verify again.")
+		case errors.Is(err, service.ErrProofScope):
+			securityProofError(c, "SECURITY_PROOF_SCOPE_MISMATCH", "Verification does not match this action.")
+		case errors.Is(err, service.ErrVerificationContextInvalid):
+			c.Set("security_error_code", "SECURITY_CONTEXT_INVALID")
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "code": "SECURITY_CONTEXT_INVALID", "message": service.ErrVerificationContextInvalid.Error()})
+		case errors.Is(err, service.ErrVerificationUnavailable):
+			securityProofError(c, "SECURITY_METHOD_UNAVAILABLE", service.ErrVerificationUnavailable.Error())
+		case errors.Is(err, service.ErrProofMethod):
+			securityProofError(c, "SECURITY_PROOF_METHOD_MISMATCH", "This verification method is not allowed for this action.")
+		case errors.Is(err, service.ErrProofConsumed):
+			securityProofError(c, "SECURITY_PROOF_CONSUMED", "This verification has already been used. Please verify again.")
+		case errors.Is(err, service.ErrProofContext):
+			securityProofError(c, "SECURITY_PROOF_CONTEXT_MISMATCH", "Verification does not match this action's details. Please verify again.")
+		case errors.Is(err, service.ErrVerificationForbidden):
+			securityProofError(c, "SECURITY_ACTION_FORBIDDEN", service.ErrVerificationForbidden.Error())
+		case errors.Is(err, service.ErrAuthTokenInvalid):
+			securityProofError(c, "SECURITY_PROOF_INVALID", "Security verification is no longer valid. Please verify again.")
+		default:
+			_ = c.Error(err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"success": false, "code": "AUTH_INTERNAL_ERROR", "message": "Please try again later."})
+		}
+		return nil
+	}
+	return authorization
+}
+
+func securityProofError(c *gin.Context, code, message string) {
+	c.Set("security_error_code", code)
+	c.JSON(http.StatusForbidden, gin.H{
+		"success": false,
+		"message": message,
+		"code":    code,
+	})
+	c.Abort()
+}
+
+// ResetStepUpSession drops step-up state bound to the browser session, so a
+// sign-in in the same browser never inherits a previous account's binding.
+// It also removes the pre-proof session markers of older releases.
+func ResetStepUpSession(session sessions.Session) {
+	session.Delete(stepUpNonceSessionKey)
+	session.Delete("secure_verified_at")
+	session.Delete("secure_verified_method")
+	session.Delete("secure_passkey_ready_at")
 }

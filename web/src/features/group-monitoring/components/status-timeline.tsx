@@ -1,12 +1,12 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
 import type { HistoryPoint } from '../types'
 
 function segmentColor(rate: number | null | undefined): string {
@@ -76,7 +76,7 @@ export function StatusTimeline({
   return (
     <div className='space-y-1.5'>
       {!compact && (
-        <div className='text-muted-foreground flex items-center justify-between text-[10px] font-medium uppercase tracking-wider'>
+        <div className='text-muted-foreground flex items-center justify-between text-[10px] font-medium tracking-wider uppercase'>
           <span>
             {filled <= 1
               ? t('History (latest)')
@@ -124,11 +124,12 @@ export function StatusTimeline({
                           {t('Availability')}: {rate.toFixed(1)}%
                         </div>
                       )}
-                      {seg?.cache_hit_rate != null && seg.cache_hit_rate >= 0 && (
-                        <div>
-                          {t('Cache hit')}: {seg.cache_hit_rate.toFixed(1)}%
-                        </div>
-                      )}
+                      {seg?.cache_hit_rate != null &&
+                        seg.cache_hit_rate >= 0 && (
+                          <div>
+                            {t('Cache hit')}: {seg.cache_hit_rate.toFixed(1)}%
+                          </div>
+                        )}
                     </div>
                   )}
                 </TooltipContent>

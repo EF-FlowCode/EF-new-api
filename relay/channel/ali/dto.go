@@ -3,9 +3,9 @@ package ali
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -212,13 +212,15 @@ type WanImageParameters struct {
 }
 
 type AliRerankParameters struct {
-	TopN            *int  `json:"top_n,omitempty"`
-	ReturnDocuments *bool `json:"return_documents,omitempty"`
+	Instruct        string   `json:"instruct,omitempty"`
+	FPS             *float64 `json:"fps,omitempty"`
+	TopN            *int     `json:"top_n,omitempty"`
+	ReturnDocuments *bool    `json:"return_documents,omitempty"`
 }
 
 type AliRerankInput struct {
-	Query     string `json:"query"`
-	Documents []any  `json:"documents"`
+	Query     any   `json:"query"`
+	Documents []any `json:"documents"`
 }
 
 type AliRerankRequest struct {
@@ -228,7 +230,8 @@ type AliRerankRequest struct {
 }
 
 type AliRerankResponse struct {
-	Output struct {
+	Results []dto.RerankResponseResult `json:"results,omitempty"`
+	Output  struct {
 		Results []dto.RerankResponseResult `json:"results"`
 	} `json:"output"`
 	Usage     AliUsage `json:"usage"`

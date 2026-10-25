@@ -1,13 +1,14 @@
 package service
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 )
 
 func makeRule(t *testing.T, name, scope, action string, enabled bool, groups []string, conditions []types.RiskCondition) *model.RiskRule {
@@ -211,10 +212,10 @@ func TestIsRiskControlEnabledForGroup(t *testing.T) {
 	}{
 		{"vip", true},
 		{"free", true},
-		{"default", false},                                    // not in whitelist
-		{"", false},                                           // empty group
-		{operation_setting.RiskControlAutoGroup, false},       // auto explicitly rejected
-		{"observed_listed_no_mode", false},                    // not in GroupModes => off
+		{"default", false}, // not in whitelist
+		{"", false},        // empty group
+		{operation_setting.RiskControlAutoGroup, false}, // auto explicitly rejected
+		{"observed_listed_no_mode", false},              // not in GroupModes => off
 	}
 	cfg.EnabledGroups = append(cfg.EnabledGroups, "observed_listed_no_mode")
 	for _, tc := range cases {
@@ -272,10 +273,5 @@ func TestNormalizeFiltersAutoAndInvalidModes(t *testing.T) {
 }
 
 func contains(s []string, x string) bool {
-	for _, v := range s {
-		if v == x {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, x)
 }

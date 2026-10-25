@@ -2,18 +2,30 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/ratio_setting"
+	"github.com/go-redis/redis/v8"
 )
+
+const monitoringRefreshKey = "gm:refresh:pending"
+
+var ErrMonitoringRefreshUnavailable = errors.New("monitoring refresh unavailable; please retry later")
+
+var acknowledgeMonitoringRefresh = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+`)
 
 var (
 	aggregationRunning int32
@@ -21,13 +33,20 @@ var (
 )
 
 func StartGroupMonitoringAggregation() {
-	if !common.IsMasterNode {
-		return
-	}
 	common.GroupMonitoringHook = func(group string, channelId int, isSuccess bool, promptTokens, cacheTokens, useTimeMs, frtMs int, modelName string, statusCode int, content string) {
 		RecordMonitoringMetric(group, channelId, isSuccess, promptTokens, cacheTokens, useTimeMs, frtMs, modelName, statusCode, content)
 	}
 	refreshMonitoredGroupsCache()
+	if !common.IsMasterNode {
+		go func() {
+			ticker := time.NewTicker(time.Duration(common.SyncFrequency) * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				refreshMonitoredGroupsCache()
+			}
+		}()
+		return
+	}
 	go monitoringLoop()
 }
 
@@ -41,6 +60,8 @@ func monitoringLoop() {
 	}
 	ticker := time.NewTicker(time.Duration(interval) * time.Minute)
 	defer ticker.Stop()
+	refreshTicker := time.NewTicker(time.Second)
+	defer refreshTicker.Stop()
 
 	for {
 		select {
@@ -50,20 +71,65 @@ func monitoringLoop() {
 		case <-triggerCh:
 			refreshMonitoredGroupsCache()
 			runAggregationCycle()
+		case <-refreshTicker.C:
+			if err := processPendingMonitoringRefresh(model.ReloadOptions, runAggregationCycle); err != nil {
+				common.SysError("group monitoring refresh failed: " + err.Error())
+			}
 		}
 	}
 }
 
-func TriggerAggregationRefresh() bool {
+func TriggerAggregationRefresh() (bool, error) {
+	if common.RedisEnabled {
+		if common.RDB == nil {
+			return false, ErrMonitoringRefreshUnavailable
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		// One durable, coalesced signal. A new generation survives an in-flight refresh.
+		if err := common.RDB.Set(ctx, monitoringRefreshKey, common.GenerateVerificationCode(0), 0).Err(); err != nil {
+			return false, ErrMonitoringRefreshUnavailable
+		}
+		return true, nil
+	}
+	if !common.IsMasterNode {
+		return false, ErrMonitoringRefreshUnavailable
+	}
 	if !atomic.CompareAndSwapInt32(&aggregationRunning, 0, 1) {
-		return false
+		return false, nil
 	}
 	atomic.StoreInt32(&aggregationRunning, 0)
 	select {
 	case triggerCh <- struct{}{}:
 	default:
 	}
-	return true
+	return true, nil
+}
+
+func processPendingMonitoringRefresh(reload func() error, aggregate func()) error {
+	if !common.IsMasterNode || !common.RedisEnabled {
+		return nil
+	}
+	if common.RDB == nil {
+		return ErrMonitoringRefreshUnavailable
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	generation, err := common.RDB.Get(ctx, monitoringRefreshKey).Result()
+	cancel()
+	if errors.Is(err, redis.Nil) {
+		return nil
+	}
+	if err != nil {
+		return ErrMonitoringRefreshUnavailable
+	}
+	if err := reload(); err != nil {
+		return err
+	}
+	refreshMonitoredGroupsCache()
+	aggregate()
+	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return acknowledgeMonitoringRefresh.Run(ctx, common.RDB, []string{monitoringRefreshKey}, generation).Err()
 }
 
 type bucketData struct {
@@ -73,6 +139,7 @@ type bucketData struct {
 	CacheTokens  int64
 	PromptTokens int64
 	RespTimeMs   int64
+	RespCount    int64 // 响应时间样本数（全部请求）
 	FRTSumMs     int64
 	FRTCount     int64
 }
@@ -104,20 +171,43 @@ func runAggregationCycle() {
 // 的「计入可用率」错误条数。eflow: 这是把可用率排除从写时挪到读时的关键——错误数不再依赖
 // Redis 里写死的 e 计数，改配置后下个聚合周期即按新规则全量重判，可回溯。命中排除的错误整条
 // 丢弃（既不进 error 也不进 total），与写时语义一致。
-func computeFilteredErrorCounts(cfg operation_setting.GroupMonitoringSetting, sinceTs int64, monitoredSet map[string]struct{}) map[channelKey]int64 {
+// 查询失败时返回错误：调用方必须放弃本轮，否则错误数为 0 会把可用率写成 100%。
+func computeFilteredErrorCounts(cfg operation_setting.GroupMonitoringSetting, sinceTs int64, monitoredSet map[string]struct{}) (map[channelKey]int64, error) {
 	rows, err := model.GetMonitoringErrorRows(sinceTs)
 	if err != nil {
-		common.SysError("group monitoring: fetch error logs error: " + err.Error())
-		return nil
+		return nil, fmt.Errorf("fetch error logs: %w", err)
 	}
-	result := make(map[channelKey]int64)
+	succeeded, err := model.GetMonitoringSuccessfulRequestIds(sinceTs)
+	if err != nil {
+		return nil, fmt.Errorf("fetch successful request ids: %w", err)
+	}
+	return countFilteredFinalErrors(cfg, rows, succeeded, monitoredSet), nil
+}
+
+func countFilteredFinalErrors(cfg operation_setting.GroupMonitoringSetting, rows []model.MonitoringErrorRow, succeeded map[string]struct{}, monitoredSet map[string]struct{}) map[channelKey]int64 {
+	finalRows := make(map[string]model.MonitoringErrorRow)
+	legacyRows := make([]model.MonitoringErrorRow, 0)
 	for _, r := range rows {
+		if r.RequestId == "" {
+			legacyRows = append(legacyRows, r)
+			continue
+		}
+		if _, ok := succeeded[r.RequestId]; !ok {
+			finalRows[r.RequestId] = r
+		}
+	}
+	for _, r := range finalRows {
+		legacyRows = append(legacyRows, r)
+	}
+
+	result := make(map[channelKey]int64)
+	for _, r := range legacyRows {
 		if _, ok := monitoredSet[r.Group]; !ok {
 			continue
 		}
 		statusCode := 0
 		if r.Other != "" {
-			var other map[string]interface{}
+			var other map[string]any
 			if err := common.UnmarshalJsonStr(r.Other, &other); err == nil {
 				if v, ok := other["status_code"]; ok {
 					switch n := v.(type) {
@@ -129,7 +219,7 @@ func computeFilteredErrorCounts(cfg operation_setting.GroupMonitoringSetting, si
 				}
 			}
 		}
-		if isAvailabilityExcluded(cfg, statusCode, r.ModelName, r.Content) {
+		if cfg.IsAvailabilityExcluded(statusCode, r.ModelName, r.Content) {
 			continue
 		}
 		result[channelKey{Group: r.Group, ChannelId: r.ChannelId}]++
@@ -156,8 +246,9 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 	for {
 		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, "gm:b:*", 200).Result()
 		if err != nil {
+			// 扫描不完整时放弃本轮，保留上一轮快照，避免写入残缺统计。
 			common.SysError("group monitoring: redis scan error: " + err.Error())
-			break
+			return
 		}
 
 		for _, key := range keys {
@@ -187,6 +278,7 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 				agg.Success += bd.Success
 				agg.Error += bd.Error
 				agg.RespTimeMs += bd.RespTimeMs
+				agg.RespCount += bd.RespCount
 				agg.FRTSumMs += bd.FRTSumMs
 				agg.FRTCount += bd.FRTCount
 			}
@@ -213,7 +305,11 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 	}
 
 	// eflow: 错误数读时从 logs 现算（可回溯排除）；成功数仍取上面 Redis 扫描的结果。
-	filteredErr := computeFilteredErrorCounts(cfg, availStart, monitoredSet)
+	filteredErr, err := computeFilteredErrorCounts(cfg, availStart, monitoredSet)
+	if err != nil {
+		common.SysError("group monitoring: skip cycle, " + err.Error())
+		return
+	}
 	// 只有错误、没有 Redis 成功桶的渠道，补一个空条目，确保它进入下面的统计循环。
 	for ck := range filteredErr {
 		if _, ok := channelAvailData[ck]; !ok {
@@ -261,9 +357,9 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 			stat.CacheHitRate = -1
 		}
 
-		// 响应时间分母仍用 Redis 全量请求数（rt 对所有请求记录，与可用率口径相互独立）。
-		if avail.Total > 0 {
-			stat.AvgResponseTime = int(avail.RespTimeMs / avail.Total)
+		// 响应时间分母用全量请求数 n（rt 对所有请求记录，与可用率口径相互独立）。
+		if avail.RespCount > 0 {
+			stat.AvgResponseTime = int(avail.RespTimeMs / avail.RespCount)
 		}
 		if avail.FRTCount > 0 {
 			stat.AvgFRT = int(avail.FRTSumMs / avail.FRTCount)
@@ -289,7 +385,7 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 			ga.totalPromptTok += cache.PromptTokens
 		}
 		ga.totalRespMs += avail.RespTimeMs
-		ga.respCount += avail.Total
+		ga.respCount += avail.RespCount
 		ga.totalFRTMs += avail.FRTSumMs
 		ga.totalFRTCount += avail.FRTCount
 		ga.totalChannels++
@@ -298,11 +394,7 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 		}
 	}
 
-	if len(channelStats) > 0 {
-		if err := model.BatchUpsertChannelMonitoringStats(channelStats); err != nil {
-			common.SysError("group monitoring: upsert channel stats error: " + err.Error())
-		}
-	}
+	upsertChannelStatsAndResetStale(cfg.MonitoringGroups, channelStats, now)
 
 	for _, groupName := range cfg.MonitoringGroups {
 		ga, ok := groupStats[groupName]
@@ -350,6 +442,20 @@ func runRedisAggregation(cfg operation_setting.GroupMonitoringSetting) {
 
 	cleanupThreshold := time.Now().Add(-30 * 24 * time.Hour).Unix()
 	_ = model.CleanupOldMonitoringHistory(cleanupThreshold)
+}
+
+// upsertChannelStatsAndResetStale 写入本轮有数据的渠道统计；写入成功后才把窗口内无数据的
+// 渠道置为"无数据"，避免写入失败时把所有渠道误判为过期。
+func upsertChannelStatsAndResetStale(groups []string, channelStats []*model.ChannelMonitoringStat, cycleStart int64) {
+	if len(channelStats) > 0 {
+		if err := model.BatchUpsertChannelMonitoringStats(channelStats); err != nil {
+			common.SysError("group monitoring: upsert channel stats error: " + err.Error())
+			return
+		}
+	}
+	if err := model.ResetStaleChannelMonitoringStats(groups, cycleStart); err != nil {
+		common.SysError("group monitoring: reset stale channel stats error: " + err.Error())
+	}
 }
 
 func runDBFallbackAggregation(cfg operation_setting.GroupMonitoringSetting) {
@@ -432,9 +538,7 @@ func runDBFallbackAggregation(cfg operation_setting.GroupMonitoringSetting) {
 		}
 	}
 
-	if len(channelStats) > 0 {
-		_ = model.BatchUpsertChannelMonitoringStats(channelStats)
-	}
+	upsertChannelStatsAndResetStale(cfg.MonitoringGroups, channelStats, now)
 
 	for _, groupName := range cfg.MonitoringGroups {
 		ga := groupAggs[groupName]
@@ -508,6 +612,12 @@ func parseBucketValues(vals map[string]string) bucketData {
 	if v, ok := vals["rt"]; ok {
 		bd.RespTimeMs, _ = strconv.ParseInt(v, 10, 64)
 	}
+	if v, ok := vals["n"]; ok {
+		bd.RespCount, _ = strconv.ParseInt(v, 10, 64)
+	} else {
+		// 旧版本写入的桶没有 n，只能退回 t（与旧口径一致）。
+		bd.RespCount = bd.Total
+	}
 	if v, ok := vals["fs"]; ok {
 		bd.FRTSumMs, _ = strconv.ParseInt(v, 10, 64)
 	}
@@ -520,6 +630,3 @@ func parseBucketValues(vals map[string]string) bucketData {
 // Exported for testing
 var ParseMonitoringKey = parseMonitoringKey
 var ParseBucketValues = parseBucketValues
-
-// MonitoringAggregationLoopStarted tracks whether the loop was started (for tests)
-var monitoringLoopOnce sync.Once

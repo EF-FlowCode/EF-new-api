@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 type memoryEntry struct {
@@ -81,22 +81,4 @@ func (b *memoryBackend) Acquire(_ context.Context, channelID int, cfg *dto.Chann
 			}
 		},
 	}, Decision{Allowed: true}
-}
-
-func (b *memoryBackend) Peek(_ context.Context, channelID int, cfg *dto.ChannelRateLimit) Decision {
-	e := b.entry(channelID)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	now := time.Now().UnixMilli()
-	if cfg.RPM > 0 {
-		e.trimRPMLocked(now - rpmWindowSeconds*1000)
-		if len(e.rpmHits) >= cfg.RPM {
-			return Decision{Allowed: false, Reason: ReasonRPMExceeded}
-		}
-	}
-	if cfg.Concurrency > 0 && e.concurrency >= cfg.Concurrency {
-		return Decision{Allowed: false, Reason: ReasonConcurrencyExceeded}
-	}
-	return Decision{Allowed: true}
 }

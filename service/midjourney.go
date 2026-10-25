@@ -3,18 +3,20 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -25,6 +27,52 @@ func CovertMjpActionToModelName(mjAction string) string {
 		modelName = "swap_face"
 	}
 	return modelName
+}
+
+// RefundMidjourneyQuota reverses the accounting recorded for a persisted
+// legacy Midjourney task. The caller should invoke it only after winning the
+// task status CAS, so repeated polling cannot refund the same task twice.
+func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason string) bool {
+	if task == nil || task.Quota <= 0 {
+		return true
+	}
+	quota := task.Quota
+	if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 用户额度失败 task %s: %s", task.MjId, err.Error()))
+		return false
+	}
+
+	if task.TokenId > 0 {
+		tokenKey := resolveTokenKey(ctx, task.TokenId, task.MjId)
+		if tokenKey != "" {
+			if err := model.IncreaseTokenQuota(task.TokenId, tokenKey, quota); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("退还 Midjourney 令牌额度失败 task %s: %s", task.MjId, err.Error()))
+			}
+		}
+	}
+
+	billingChannelId := task.GetBillingChannelId()
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+	model.UpdateChannelUsedQuota(billingChannelId, -quota)
+	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
+		UserId:    task.UserId,
+		LogType:   model.LogTypeRefund,
+		Content:   reason,
+		ChannelId: billingChannelId,
+		ModelName: CovertMjpActionToModelName(task.Action),
+		Quota:     quota,
+		TokenId:   task.TokenId,
+		Other: map[string]any{
+			"task_id": task.MjId,
+			"reason":  reason,
+		},
+	})
+
+	task.Quota = 0
+	if err := task.UpdateBillingState(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Midjourney 退款成功但清除 quota 失败 task %s: %s", task.MjId, err.Error()))
+	}
+	return true
 }
 
 func GetMjRequestModel(relayMode int, midjRequest *dto.MidjourneyRequest) (string, *dto.MidjourneyResponse, bool) {
@@ -163,27 +211,28 @@ func ConvertSimpleChangeParams(content string) *dto.MidjourneyRequest {
 }
 
 func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestURL string) (*dto.MidjourneyResponseWithStatusCode, []byte, error) {
+	midjourneySettings := setting.GetMidjourneySettings()
 	var nullBytes []byte
 	//var requestBody io.Reader
 	//requestBody = c.Request.Body
 	// read request body to json, delete accountFilter and notifyHook
-	var mapResult map[string]interface{}
+	var mapResult map[string]any
 	// if get request, no need to read request body
 	if c.Request.Method != "GET" {
 		err := json.NewDecoder(c.Request.Body).Decode(&mapResult)
 		if err != nil {
 			return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "read_request_body_failed", http.StatusInternalServerError), nullBytes, err
 		}
-		if !setting.MjAccountFilterEnabled {
+		if !midjourneySettings.AccountFilterEnabled {
 			delete(mapResult, "accountFilter")
 		}
-		if !setting.MjNotifyEnabled {
+		if !midjourneySettings.NotifyEnabled {
 			delete(mapResult, "notifyHook")
 		}
 		//req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 		// make new request with mapResult
 	}
-	if setting.MjModeClearEnabled {
+	if midjourneySettings.ModeClearEnabled {
 		if prompt, ok := mapResult["prompt"].(string); ok {
 			prompt = strings.Replace(prompt, "--fast", "", -1)
 			prompt = strings.Replace(prompt, "--relax", "", -1)
@@ -211,7 +260,8 @@ func DoMidjourneyHttpRequest(c *gin.Context, timeout time.Duration, fullRequestU
 		req.Header.Set("mj-api-secret", auth)
 	}
 	defer cancel()
-	resp, err := GetHttpClient().Do(req)
+	// net/http keeps mj-api-secret on cross-host redirects; do not follow them.
+	resp, err := NewRedirectlessHTTPClient(GetHttpClient()).Do(req)
 	if err != nil {
 		common.SysLog("do request failed: " + err.Error())
 		return MidjourneyErrorWithStatusCodeWrapper(constant.MjErrorUnknown, "do_request_failed", http.StatusInternalServerError), nullBytes, err

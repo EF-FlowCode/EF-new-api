@@ -15,18 +15,9 @@ const USAGE_MODE_LABEL_KEYS: Record<SetupFormValues['usageMode'], string> = {
   demo: 'Demo site mode',
 }
 
-const DATABASE_VARIANT: Record<
-  string,
-  'info' | 'success' | 'warning' | 'neutral'
-> = {
-  mysql: 'success',
-}
-
 export function CompleteStep({ status, values }: CompleteStepProps) {
   const { t } = useTranslation()
   const usageLabelKey = USAGE_MODE_LABEL_KEYS[values.usageMode]
-  const dbType = status?.database_type ?? 'Unknown'
-  const databaseVariant = DATABASE_VARIANT[dbType.toLowerCase()] ?? 'neutral'
 
   return (
     <div className='flex flex-col items-center gap-6 text-center'>
@@ -51,12 +42,8 @@ export function CompleteStep({ status, values }: CompleteStepProps) {
               {t('Database')}
             </dt>
             <dd className='flex flex-wrap items-center gap-2'>
-              <span className='text-sm font-semibold'>{dbType}</span>
-              <StatusBadge
-                label={dbType}
-                variant={databaseVariant}
-                copyable={false}
-              />
+              <span className='text-sm font-semibold'>MySQL 8</span>
+              <StatusBadge label='MySQL 8' variant='success' copyable={false} />
             </dd>
           </div>
 

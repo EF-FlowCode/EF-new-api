@@ -13,6 +13,8 @@ const defaultIntegrationSettings: IntegrationSettingsType = {
   SMTPToken: '',
   SMTPArchiveBcc: '',
   SMTPSSLEnabled: false,
+  SMTPStartTLSEnabled: false,
+  SMTPInsecureSkipVerify: false,
   SMTPForceAuthLogin: false,
   TicketNotifyEnabled: false,
   TicketAdminEmail: '',
@@ -32,6 +34,8 @@ const defaultIntegrationSettings: IntegrationSettingsType = {
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
   'monitor_setting.auto_test_channel_enabled': false,
   'monitor_setting.auto_test_channel_minutes': 10,
+  'monitor_setting.channel_test_mode': 'scheduled_all',
+  'monitor_setting.channel_test_concurrency': 1,
   'model_deployment.ionet.api_key': '',
   'model_deployment.ionet.enabled': false,
   PayAddress: '',
@@ -71,16 +75,11 @@ const defaultIntegrationSettings: IntegrationSettingsType = {
   WaffoNotifyUrl: '',
   WaffoReturnUrl: '',
   WaffoPayMethods: '[]',
-  WaffoPancakeEnabled: false,
-  WaffoPancakeSandbox: false,
   WaffoPancakeMerchantID: '',
   WaffoPancakePrivateKey: '',
-  WaffoPancakeWebhookPublicKey: '',
-  WaffoPancakeWebhookTestKey: '',
   WaffoPancakeStoreID: '',
   WaffoPancakeProductID: '',
   WaffoPancakeReturnURL: '',
-  WaffoPancakeCurrency: 'USD',
   WaffoPancakeUnitPrice: 1,
   WaffoPancakeMinTopUp: 1,
   // TicketNotifyEnabled / TicketAdminEmail 已在上方默认值中定义，此处删除重复键
@@ -101,6 +100,8 @@ const defaultIntegrationSettings: IntegrationSettingsType = {
   'group_monitoring_setting.availability_exclude_keywords': '',
   'group_monitoring_setting.availability_exclude_status_codes': '',
   'group_monitoring_setting.cache_tokens_separate_groups': '',
+  'web_group_setting.enabled': false,
+  'web_group_setting.rules': '{}',
 }
 
 export function IntegrationSettings() {

@@ -9,13 +9,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/requestip"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
-	"github.com/bytedance/gopkg/util/gopool"
+	"eflow.local/new-api/common"
+	gopool "eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/pkg/requestip"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -271,7 +271,7 @@ func CreateRiskRule(rule *model.RiskRule) error {
 	if err := model.CreateRiskRule(rule); err != nil {
 		return err
 	}
-	return ReloadRiskRules()
+	return reloadRiskRulesAndPublish()
 }
 
 func UpdateRiskRule(rule *model.RiskRule) error {
@@ -281,14 +281,22 @@ func UpdateRiskRule(rule *model.RiskRule) error {
 	if err := model.UpdateRiskRule(rule); err != nil {
 		return err
 	}
-	return ReloadRiskRules()
+	return reloadRiskRulesAndPublish()
 }
 
 func DeleteRiskRule(id int) error {
 	if err := model.DeleteRiskRule(id); err != nil {
 		return err
 	}
-	return ReloadRiskRules()
+	return reloadRiskRulesAndPublish()
+}
+
+// reloadRiskRulesAndPublish 重载本实例规则后通知其他实例；数据库已提交，
+// 即使本地重载失败也要通知，其他实例各自从数据库读取。
+func reloadRiskRulesAndPublish() error {
+	err := ReloadRiskRules()
+	publishRuntimeRevision(runtimeSyncRiskRulesKey)
+	return err
 }
 
 func ListRiskSubjectSnapshots(query model.RiskSubjectQuery, pageInfo *common.PageInfo) ([]*model.RiskSubjectSnapshot, int64, error) {
@@ -318,6 +326,8 @@ func UnblockRiskSubject(scope string, subjectID int, group, operator string) err
 		return err
 	}
 	globalRiskCenter.cache.Delete(riskMemoryKey(scope, subjectID, group))
+	// 其他实例的网关缓存可能仍持有该封禁直到 BlockUntil，通知它们清空后回源。
+	publishRuntimeRevision(runtimeSyncRiskBlocksKey)
 	snapshot, err := model.GetRiskSubjectSnapshot(scope, subjectID, group)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -518,9 +528,12 @@ func (r *riskControlCenter) enqueueEvent(event *RiskEvent) {
 	if !isRiskControlActiveForGroup(operation_setting.GetRiskControlSetting(), event.Group) {
 		return
 	}
+	gopool.Add()
+	event.drainDone = gopool.Done
 	select {
 	case r.queue <- event:
 	default:
+		event.drainDone()
 		r.dropCount.Add(1)
 		if r.dropCount.Load()%100 == 1 {
 			common.SysLog("risk control event queue is full, dropping events")
@@ -542,6 +555,9 @@ func (r *riskControlCenter) runWorker() {
 			if err := r.handleFinishEvent(event); err != nil {
 				common.SysError("risk control handle finish event failed: " + err.Error())
 			}
+		}
+		if event.drainDone != nil {
+			event.drainDone()
 		}
 	}
 }
@@ -639,10 +655,14 @@ func (r *riskControlCenter) evaluateAndPersistSubject(event *RiskEvent, scope st
 			}
 		})
 		// Hand off to the unified enforcement layer for email + counter +
-		// auto-ban handling. EnforcementHit is internally async and does
-		// nothing when the layer is disabled, so this is safe to call here.
-		EnforcementHit(uid, group, operation_setting.EnforcementSourceRiskDistribution,
-			"distribution_"+decision.Action)
+		// auto-ban handling. Only block decisions count toward enforcement;
+		// observe hits must not accumulate into an automatic ban.
+		// EnforcementHit is internally async and does nothing when the
+		// layer is disabled, so this is safe to call here.
+		if decision.Decision == RiskDecisionBlock {
+			EnforcementHit(uid, group, operation_setting.EnforcementSourceRiskDistribution,
+				"distribution_"+decision.Action)
+		}
 	}
 	snapshot := buildRiskSubjectSnapshot(event, scope, subjectID, group, metrics, decision, matched, previous)
 	if err = model.UpsertRiskSubjectSnapshot(snapshot); err != nil {
@@ -999,6 +1019,14 @@ func buildRiskIncident(event *RiskEvent, snapshot *model.RiskSubjectSnapshot, de
 	}
 }
 
+// clearGateCache 丢弃本实例的网关决策缓存，下一次请求回源共享存储。
+func (r *riskControlCenter) clearGateCache() {
+	r.cache.Range(func(key, _ any) bool {
+		r.cache.Delete(key)
+		return true
+	})
+}
+
 func (r *riskControlCenter) getCachedDecision(scope string, subjectID int, group string) *types.RiskDecision {
 	if subjectID <= 0 || group == "" {
 		return nil
@@ -1070,6 +1098,7 @@ func validateRiskRule(rule *model.RiskRule) error {
 	if rule == nil {
 		return errors.New("rule is nil")
 	}
+	cfg := operation_setting.GetRiskControlSetting()
 	rule.Name = strings.TrimSpace(rule.Name)
 	if rule.Name == "" {
 		return errors.New("rule name is required")
@@ -1087,13 +1116,13 @@ func validateRiskRule(rule *model.RiskRule) error {
 		rule.Action = RiskActionObserve
 	}
 	if rule.ResponseStatusCode <= 0 {
-		rule.ResponseStatusCode = operation_setting.GetRiskControlSetting().DefaultStatusCode
+		rule.ResponseStatusCode = cfg.DefaultStatusCode
 	}
 	if rule.RecoverAfterSeconds <= 0 {
-		rule.RecoverAfterSeconds = operation_setting.GetRiskControlSetting().DefaultRecoverAfterSecs
+		rule.RecoverAfterSeconds = cfg.DefaultRecoverAfterSecs
 	}
 	if strings.TrimSpace(rule.RecoverMode) == "" {
-		rule.RecoverMode = operation_setting.GetRiskControlSetting().DefaultRecoverMode
+		rule.RecoverMode = cfg.DefaultRecoverMode
 	}
 	var conditions []types.RiskCondition
 	if err := common.UnmarshalJsonStr(rule.Conditions, &conditions); err != nil {
@@ -1153,8 +1182,10 @@ func seedDefaultRiskRules() error {
 	if count > 0 {
 		return nil
 	}
+	cfg := operation_setting.GetRiskControlSetting()
 	defaultRules := []*model.RiskRule{
 		newDefaultRiskRule(
+			cfg,
 			"token_multi_ip_observe",
 			"单个 API key 在短时间内出现多个不同 IP，先进入观察状态（启用前请绑定分组）",
 			RiskSubjectTypeToken,
@@ -1165,6 +1196,7 @@ func seedDefaultRiskRules() error {
 			[]types.RiskCondition{{Metric: "distinct_ip_10m", Op: ">=", Value: 3}},
 		),
 		newDefaultRiskRule(
+			cfg,
 			"token_multi_ip_high_concurrency_block",
 			"单个 API key 在短时间内出现多个不同 IP 且并发明显偏高，自动封禁 15 分钟（启用前请绑定分组）",
 			RiskSubjectTypeToken,
@@ -1178,6 +1210,7 @@ func seedDefaultRiskRules() error {
 			},
 		),
 		newDefaultRiskRule(
+			cfg,
 			"token_multi_ip_burst_block",
 			"单个 API key 在 10 分钟内请求量异常且伴随多 IP 轮询，自动封禁 1 小时（启用前请绑定分组）",
 			RiskSubjectTypeToken,
@@ -1191,6 +1224,7 @@ func seedDefaultRiskRules() error {
 			},
 		),
 		newDefaultRiskRule(
+			cfg,
 			"shared_ip_multi_token_observe",
 			"同一 IP 在 10 分钟内关联多个 API key，先进入观察状态（启用前请绑定分组）",
 			RiskSubjectTypeToken,
@@ -1201,6 +1235,7 @@ func seedDefaultRiskRules() error {
 			[]types.RiskCondition{{Metric: "tokens_per_ip_10m", Op: ">=", Value: 3}},
 		),
 		newDefaultRiskRule(
+			cfg,
 			"shared_ip_multi_token_high_volume_block",
 			"同一 IP 在 10 分钟内关联多个 API key 且请求量明显偏高，自动封禁 15 分钟（启用前请绑定分组）",
 			RiskSubjectTypeToken,
@@ -1214,6 +1249,7 @@ func seedDefaultRiskRules() error {
 			},
 		),
 		newDefaultRiskRule(
+			cfg,
 			"user_multi_ip_observe",
 			"同一用户在 1 小时内出现异常多的不同 IP，进入用户级观察（启用前请绑定分组）",
 			RiskSubjectTypeUser,
@@ -1232,9 +1268,9 @@ func seedDefaultRiskRules() error {
 	return nil
 }
 
-func newDefaultRiskRule(name string, description string, scope string, action string, autoBlock bool, score int, recoverAfterSeconds int, conditions []types.RiskCondition) *model.RiskRule {
+func newDefaultRiskRule(cfg *operation_setting.RiskControlSetting, name string, description string, scope string, action string, autoBlock bool, score int, recoverAfterSeconds int, conditions []types.RiskCondition) *model.RiskRule {
 	if recoverAfterSeconds <= 0 {
-		recoverAfterSeconds = operation_setting.GetRiskControlSetting().DefaultRecoverAfterSecs
+		recoverAfterSeconds = cfg.DefaultRecoverAfterSecs
 	}
 	return &model.RiskRule{
 		Name:                name,
@@ -1247,10 +1283,10 @@ func newDefaultRiskRule(name string, description string, scope string, action st
 		Action:              action,
 		AutoBlock:           autoBlock,
 		AutoRecover:         true,
-		RecoverMode:         operation_setting.GetRiskControlSetting().DefaultRecoverMode,
+		RecoverMode:         cfg.DefaultRecoverMode,
 		RecoverAfterSeconds: recoverAfterSeconds,
-		ResponseStatusCode:  operation_setting.GetRiskControlSetting().DefaultStatusCode,
-		ResponseMessage:     operation_setting.GetRiskControlSetting().DefaultResponseMessage,
+		ResponseStatusCode:  cfg.DefaultStatusCode,
+		ResponseMessage:     cfg.DefaultResponseMessage,
 		ScoreWeight:         score,
 		Groups:              "",
 		Conditions:          encodeRiskJSON(conditions),
@@ -1322,9 +1358,14 @@ func cleanupExpiredRiskData(now int64) error {
 	return model.DeleteExpiredRiskIncidents(cutoff)
 }
 
-// minInt is defined in rankings.go (same package).
+func minInt(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
-func AppendRiskAuditToOther(other map[string]interface{}, audit *types.RiskAudit) {
+func AppendRiskAuditToOther(other map[string]any, audit *types.RiskAudit) {
 	if other == nil || audit == nil {
 		return
 	}

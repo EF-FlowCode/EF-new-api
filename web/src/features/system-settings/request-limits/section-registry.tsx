@@ -19,7 +19,11 @@ const REQUEST_LIMITS_SECTIONS = [
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
           ModelRequestRateLimitGroup: settings.ModelRequestRateLimitGroup,
+          ModelRPMConfig: settings.ModelRPMConfig,
         }}
+        modelRatio={settings.ModelRatio}
+        modelPrice={settings.ModelPrice}
+        topupGroupRatio={settings.TopupGroupRatio}
       />
     ),
   },

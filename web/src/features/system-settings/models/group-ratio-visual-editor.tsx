@@ -1033,7 +1033,11 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
       />
 
       {/* Auto Group Dialog */}
-      <Dialog open={autoGroupDialogOpen} onOpenChange={setAutoGroupDialogOpen}>
+      <Dialog
+        open={autoGroupDialogOpen}
+        onOpenChange={setAutoGroupDialogOpen}
+        modal={false}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('Add auto group')}</DialogTitle>
@@ -1229,7 +1233,7 @@ function UsableGroupDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
@@ -1323,7 +1327,7 @@ function GroupOverrideDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>

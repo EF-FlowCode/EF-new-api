@@ -9,12 +9,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -98,7 +98,7 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 }
 
 func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)

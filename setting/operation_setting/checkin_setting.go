@@ -1,6 +1,6 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 // CheckinSetting 签到功能配置
 type CheckinSetting struct {
@@ -23,15 +23,17 @@ func init() {
 
 // GetCheckinSetting 获取签到配置
 func GetCheckinSetting() *CheckinSetting {
-	return &checkinSetting
+	setting := config.MustSnapshot[CheckinSetting]("checkin_setting")
+	return &setting
 }
 
 // IsCheckinEnabled 是否启用签到功能
 func IsCheckinEnabled() bool {
-	return checkinSetting.Enabled
+	return GetCheckinSetting().Enabled
 }
 
 // GetCheckinQuotaRange 获取签到额度范围
 func GetCheckinQuotaRange() (min, max int) {
-	return checkinSetting.MinQuota, checkinSetting.MaxQuota
+	setting := GetCheckinSetting()
+	return setting.MinQuota, setting.MaxQuota
 }

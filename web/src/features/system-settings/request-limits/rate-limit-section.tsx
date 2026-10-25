@@ -18,7 +18,8 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
+import { ModelRPMVisualEditor } from './model-rpm-visual-editor'
 import { RateLimitVisualEditor } from './rate-limit-visual-editor'
 
 const isValidJSON = (value: string | undefined) => {
@@ -40,6 +41,31 @@ const isValidJSON = (value: string | undefined) => {
   }
 }
 
+const isValidModelRPMConfig = (value: string) => {
+  try {
+    const config = JSON.parse(value) as {
+      enabled?: unknown
+      models?: Record<
+        string,
+        { global_rpm?: unknown; group_rpm?: Record<string, unknown> }
+      >
+    }
+    if (typeof config.enabled !== 'boolean' || !config.models) return false
+    return Object.entries(config.models).every(
+      ([modelName, rule]) =>
+        modelName.trim() !== '' &&
+        typeof rule.global_rpm === 'number' &&
+        rule.global_rpm >= 1 &&
+        Object.entries(rule.group_rpm ?? {}).every(
+          ([tier, rpm]) =>
+            tier.trim() !== '' && typeof rpm === 'number' && rpm >= 1
+        )
+    )
+  } catch {
+    return false
+  }
+}
+
 const createRateLimitSchema = (t: (key: string) => string) =>
   z.object({
     ModelRequestRateLimitEnabled: z.boolean(),
@@ -52,17 +78,28 @@ const createRateLimitSchema = (t: (key: string) => string) =>
       .refine(isValidJSON, {
         message: t('Invalid JSON format or values out of allowed range'),
       }),
+    ModelRPMConfig: z.string().refine(isValidModelRPMConfig, {
+      message: t('Invalid model RPM configuration'),
+    }),
   })
 
 type RateLimitFormValues = z.infer<ReturnType<typeof createRateLimitSchema>>
 
 type RateLimitSectionProps = {
   defaultValues: RateLimitFormValues
+  modelRatio: string
+  modelPrice: string
+  topupGroupRatio: string
 }
 
-export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
+export function RateLimitSection({
+  defaultValues,
+  modelRatio,
+  modelPrice,
+  topupGroupRatio,
+}: RateLimitSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const [useVisualEditor, setUseVisualEditor] = useState(true)
 
   const rateLimitSchema = createRateLimitSchema(t)
@@ -83,9 +120,10 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
         value !== defaultValues[key as keyof RateLimitFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value: value ?? '' }))
+    )
   }
 
   return (
@@ -294,8 +332,27 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save rate limits')}
+          <FormField
+            control={form.control}
+            name='ModelRPMConfig'
+            render={({ field }) => (
+              <FormItem>
+                <FormControl>
+                  <ModelRPMVisualEditor
+                    value={field.value}
+                    modelRatio={modelRatio}
+                    modelPrice={modelPrice}
+                    topupGroupRatio={topupGroupRatio}
+                    onChange={field.onChange}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save rate limits')}
           </Button>
         </form>
       </Form>

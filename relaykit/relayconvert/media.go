@@ -1,6 +1,6 @@
 package relayconvert
 
-import relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
+import relaymedia "eflow.local/new-api/relaykit/relayconvert/internal/media"
 
 type MediaResolver = relaymedia.MediaResolver
 

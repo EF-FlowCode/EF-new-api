@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getUserModels, getUserGroups } from './api'
 import { ContextUsageBar } from './components/context-usage-bar'
-import { PlaygroundSidebar } from './components/playground-sidebar'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
+import { PlaygroundSidebar } from './components/playground-sidebar'
 import { DEFAULT_GROUP, MESSAGE_STATUS } from './constants'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import {
@@ -83,7 +83,10 @@ export function Playground() {
     // "auto" 进下拉 + 默认选中，会让首次发送直接 403。
     // 真实可用列表（后端 /api/user/self/groups 返回）原样吐给前端，
     // 用户没选时 group="" 命中后端的"跳过校验、走用户默认 group"分支。
-    setGroups(groupsData)
+    const visibleGroups = groupsData.filter(
+      (group) => group.available !== false || group.value === config.group
+    )
+    setGroups(visibleGroups)
 
     // 历史缓存清理：老用户 localStorage 里 group='auto' 之类的值，
     // 如果不在真实可用列表里，回退到空（让后端走默认 group）。
@@ -133,10 +136,7 @@ export function Playground() {
         streamingVisible: undefined,
       }
       // UI/流式目标：含新空版本的 assistant 作为最后一条
-      const displayMessages = [
-        ...messages.slice(0, messageIndex),
-        regenerated,
-      ]
+      const displayMessages = [...messages.slice(0, messageIndex), regenerated]
       updateMessages(displayMessages)
       // payload 上下文：截到该 assistant 之前（不含它自身，避免把旧/空答案带入）
       sendChat(messages.slice(0, messageIndex))

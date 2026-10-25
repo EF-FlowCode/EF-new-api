@@ -1,19 +1,21 @@
 package types
 
-type RelayFormat string
+import relaytypes "eflow.local/new-api/relaykit/types"
+
+type RelayFormat = relaytypes.RelayFormat
 
 const (
-	RelayFormatOpenAI                    RelayFormat = "openai"
-	RelayFormatClaude                                = "claude"
-	RelayFormatGemini                                = "gemini"
-	RelayFormatOpenAIResponses                       = "openai_responses"
-	RelayFormatOpenAIResponsesCompaction             = "openai_responses_compaction"
-	RelayFormatOpenAIAudio                           = "openai_audio"
-	RelayFormatOpenAIImage                           = "openai_image"
-	RelayFormatOpenAIRealtime                        = "openai_realtime"
-	RelayFormatRerank                                = "rerank"
-	RelayFormatEmbedding                             = "embedding"
-
-	RelayFormatTask    = "task"
-	RelayFormatMjProxy = "mj_proxy"
+	RelayFormatOpenAI                    = relaytypes.RelayFormatOpenAI
+	RelayFormatClaude                    = relaytypes.RelayFormatClaude
+	RelayFormatGemini                    = relaytypes.RelayFormatGemini
+	RelayFormatOpenAIResponses           = relaytypes.RelayFormatOpenAIResponses
+	RelayFormatOpenAIResponsesCompaction = relaytypes.RelayFormatOpenAIResponsesCompaction
+	RelayFormatOpenAIAlphaSearch         = relaytypes.RelayFormatOpenAIAlphaSearch
+	RelayFormatOpenAIAudio               = relaytypes.RelayFormatOpenAIAudio
+	RelayFormatOpenAIImage               = relaytypes.RelayFormatOpenAIImage
+	RelayFormatOpenAIRealtime            = relaytypes.RelayFormatOpenAIRealtime
+	RelayFormatRerank                    = relaytypes.RelayFormatRerank
+	RelayFormatEmbedding                 = relaytypes.RelayFormatEmbedding
+	RelayFormatTask                      = relaytypes.RelayFormatTask
+	RelayFormatMjProxy                   = relaytypes.RelayFormatMjProxy
 )

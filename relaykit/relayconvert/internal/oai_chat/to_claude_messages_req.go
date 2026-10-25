@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"context"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
-	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	relaymedia "eflow.local/new-api/relaykit/relayconvert/internal/media"
+	sharedclaude "eflow.local/new-api/relaykit/relayconvert/internal/shared/claude"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
 )
 
 const (
@@ -33,25 +33,14 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
-		if params, ok := tool.Function.Parameters.(map[string]any); ok {
-			claudeTool := dto.Tool{
-				Name:        tool.Function.Name,
-				Description: tool.Function.Description,
-			}
-			claudeTool.InputSchema = make(map[string]interface{})
-			if params["type"] != nil {
-				claudeTool.InputSchema["type"] = params["type"].(string)
-			}
-			claudeTool.InputSchema["properties"] = params["properties"]
-			claudeTool.InputSchema["required"] = params["required"]
-			for key, value := range params {
-				if key == "type" || key == "properties" || key == "required" {
-					continue
-				}
-				claudeTool.InputSchema[key] = value
-			}
-			claudeTools = append(claudeTools, &claudeTool)
+		if _, ok := tool.Function.Parameters.(map[string]any); !ok && tool.Type != "function" {
+			continue
 		}
+		claudeTools = append(claudeTools, &dto.Tool{
+			Name:        tool.Function.Name,
+			Description: tool.Function.Description,
+			InputSchema: sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters),
+		})
 	}
 
 	if textRequest.WebSearchOptions != nil {
@@ -65,9 +54,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				Type: "approximate",
 			}
 
-			var userLocationMap map[string]interface{}
+			var userLocationMap map[string]any
 			if err := kitutil.Unmarshal(textRequest.WebSearchOptions.UserLocation, &userLocationMap); err == nil {
-				if approximateData, ok := userLocationMap["approximate"].(map[string]interface{}); ok {
+				if approximateData, ok := userLocationMap["approximate"].(map[string]any); ok {
 					if timezone, ok := approximateData["timezone"].(string); ok && timezone != "" {
 						anthropicUserLocation.Timezone = timezone
 					}
@@ -102,7 +91,9 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		Model:         textRequest.Model,
 		StopSequences: nil,
 		Temperature:   textRequest.Temperature,
-		Tools:         claudeTools,
+	}
+	if len(claudeTools) > 0 {
+		claudeRequest.Tools = claudeTools
 	}
 	if maxTokens := textRequest.GetMaxTokens(); maxTokens > 0 {
 		claudeRequest.MaxTokens = kitutil.GetPointer(maxTokens)
@@ -139,7 +130,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		claudeRequest.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
-		claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
+		// Known models get the nearest effort level they accept.
+		claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, reasoning.ClaudeEffort(baseModel, effortLevel)))
 		if strings.HasPrefix(baseModel, "claude-opus-4-7") ||
 			strings.HasPrefix(baseModel, "claude-opus-4-8") {
 			claudeRequest.Thinking.Display = "summarized"
@@ -217,7 +209,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		switch stop := textRequest.Stop.(type) {
 		case string:
 			claudeRequest.StopSequences = []string{stop}
-		case []interface{}:
+		case []any:
 			stopSequences := make([]string, 0)
 			for _, item := range stop {
 				stopSequences = append(stopSequences, item.(string))
@@ -230,6 +222,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	lastMessage := dto.Message{
 		Role: "tool",
 	}
+	lastMessageHasPlaceholder := false
 	for i, message := range textRequest.Messages {
 		if message.Role == "" {
 			textRequest.Messages[i].Role = "user"
@@ -246,15 +239,35 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 		if lastMessage.Role == message.Role && lastMessage.Role != "tool" {
 			if lastMessage.IsStringContent() && message.IsStringContent() {
-				fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
+				previousToolCalls := lastMessage.ParseToolCalls()
+				currentToolCalls := fmtMessage.ParseToolCalls()
+				if len(previousToolCalls) > 0 || len(currentToolCalls) > 0 {
+					// Keep both messages' tool calls so later tool results still
+					// match a tool_use block.
+					texts := make([]string, 0, 2)
+					// Omit only text injected for an empty tool-call message.
+					isToolPlaceholder := lastMessageHasPlaceholder && len(previousToolCalls) > 0
+					if previousText := lastMessage.StringContent(); previousText != "" && !isToolPlaceholder {
+						texts = append(texts, previousText)
+					}
+					if currentText := message.StringContent(); currentText != "" {
+						texts = append(texts, currentText)
+					}
+					fmtMessage.SetStringContent(strings.Join(texts, " "))
+					fmtMessage.SetToolCalls(append(previousToolCalls, currentToolCalls...))
+				} else {
+					fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
+				}
 				formatMessages = formatMessages[:len(formatMessages)-1]
 			}
 		}
-		if fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "") {
+		hasPlaceholder := fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "")
+		if hasPlaceholder {
 			fmtMessage.SetStringContent("...")
 		}
 		formatMessages = append(formatMessages, fmtMessage)
 		lastMessage = fmtMessage
+		lastMessageHasPlaceholder = hasPlaceholder
 	}
 
 	claudeMessages := make([]dto.ClaudeMessage, 0)

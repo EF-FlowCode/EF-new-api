@@ -1,6 +1,6 @@
 package claude
 
-import "github.com/QuantumNous/new-api/relaykit/dto"
+import "eflow.local/new-api/relaykit/dto"
 
 func MapOpenAIToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToolChoice {
 	var claudeToolChoice *dto.ClaudeToolChoice
@@ -20,8 +20,8 @@ func MapOpenAIToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToo
 				Type: "none",
 			}
 		}
-	} else if toolChoiceMap, ok := toolChoice.(map[string]interface{}); ok {
-		if function, ok := toolChoiceMap["function"].(map[string]interface{}); ok {
+	} else if toolChoiceMap, ok := toolChoice.(map[string]any); ok {
+		if function, ok := toolChoiceMap["function"].(map[string]any); ok {
 			if toolName, ok := function["name"].(string); ok {
 				claudeToolChoice = &dto.ClaudeToolChoice{
 					Type: "tool",

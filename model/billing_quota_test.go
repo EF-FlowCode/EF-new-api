@@ -1,29 +1,9 @@
 package model
 
-import (
-	"testing"
-
-	"github.com/glebarez/sqlite"
-	"gorm.io/gorm"
-)
-
-func useBillingQuotaTestDB(t *testing.T, models ...any) *gorm.DB {
-	t.Helper()
-	oldDB := DB
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open test database: %v", err)
-	}
-	if err = db.AutoMigrate(models...); err != nil {
-		t.Fatalf("migrate test database: %v", err)
-	}
-	DB = db
-	t.Cleanup(func() { DB = oldDB })
-	return db
-}
+import "testing"
 
 func TestAdjustBillingQuotaAtomicRollsBackFundingWhenTokenUpdateFails(t *testing.T) {
-	db := useBillingQuotaTestDB(t, &User{})
+	db := useModelIntegrationTestDB(t, &User{})
 	user := User{Username: "atomic-rollback", Password: "password", Quota: 100}
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
@@ -47,7 +27,7 @@ func TestAdjustBillingQuotaAtomicRollsBackFundingWhenTokenUpdateFails(t *testing
 }
 
 func TestAdjustBillingQuotaAtomicUpdatesWalletAndTokenTogether(t *testing.T) {
-	db := useBillingQuotaTestDB(t, &User{}, &Token{})
+	db := useModelIntegrationTestDB(t, &User{}, &Token{})
 	user := User{Username: "atomic-success", Password: "password", Quota: 100}
 	token := Token{UserId: 1, Key: "atomic-token", RemainQuota: 80, UsedQuota: 20}
 	if err := db.Create(&user).Error; err != nil {

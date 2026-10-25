@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { VChart } from '@visactor/react-vchart'
-import { AreaChart, BarChart3, WalletCards, Coins, Hash, DollarSign } from 'lucide-react'
+import {
+  AreaChart,
+  BarChart3,
+  WalletCards,
+  Coins,
+  Hash,
+  DollarSign,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TimeGranularity } from '@/lib/time'
 import { VCHART_OPTION } from '@/lib/vchart'
@@ -17,7 +24,11 @@ import type {
 } from '@/features/dashboard/types'
 
 // eflow: chart metric switcher options (Quota / Tokens / Requests)
-const METRIC_OPTIONS: Array<{ value: ChartMetric; labelKey: string; icon: typeof DollarSign }> = [
+const METRIC_OPTIONS: Array<{
+  value: ChartMetric
+  labelKey: string
+  icon: typeof DollarSign
+}> = [
   { value: 'quota', labelKey: 'Quota', icon: DollarSign },
   { value: 'tokens', labelKey: 'Tokens', icon: Coins },
   { value: 'requests', labelKey: 'Requests', icon: Hash },
@@ -34,11 +45,13 @@ interface ConsumptionDistributionChartProps {
   defaultChartType?: ConsumptionDistributionChartType
 }
 
-const CHART_TYPE_ICONS: Record<ConsumptionDistributionChartType, typeof BarChart3> =
-  {
-    bar: BarChart3,
-    area: AreaChart,
-  }
+const CHART_TYPE_ICONS: Record<
+  ConsumptionDistributionChartType,
+  typeof BarChart3
+> = {
+  bar: BarChart3,
+  area: AreaChart,
+}
 
 export function ConsumptionDistributionChart(
   props: ConsumptionDistributionChartProps
@@ -53,12 +66,19 @@ export function ConsumptionDistributionChart(
   const [metric, setMetric] = useState<ChartMetric>(() => {
     try {
       const saved = localStorage.getItem('eflow:dashboard.consumption.metric')
-      if (saved === 'tokens' || saved === 'requests' || saved === 'quota') return saved
-    } catch {}
+      if (saved === 'tokens' || saved === 'requests' || saved === 'quota')
+        return saved
+    } catch {
+      // Storage can be unavailable in private browsing or restricted contexts.
+    }
     return 'quota'
   })
   useEffect(() => {
-    try { localStorage.setItem('eflow:dashboard.consumption.metric', metric) } catch {}
+    try {
+      localStorage.setItem('eflow:dashboard.consumption.metric', metric)
+    } catch {
+      // Keep the in-memory preference when persistence is unavailable.
+    }
   }, [metric])
   const [themeReady, setThemeReady] = useState(false)
   const themeManagerRef = useRef<
@@ -82,7 +102,9 @@ export function ConsumptionDistributionChart(
 
       const ThemeManager = await themeManagerPromise
       themeManagerRef.current = ThemeManager
-      ThemeManager.setCurrentTheme(resolvedTheme === 'midnight' ? 'dark' : 'light')
+      ThemeManager.setCurrentTheme(
+        resolvedTheme === 'midnight' ? 'dark' : 'light'
+      )
       setThemeReady(true)
     }
 
@@ -90,7 +112,13 @@ export function ConsumptionDistributionChart(
   }, [resolvedTheme])
 
   const chartData = useMemo(
-    () => processChartData(props.loading ? [] : props.data, timeGranularity, t, metric),
+    () =>
+      processChartData(
+        props.loading ? [] : props.data,
+        timeGranularity,
+        t,
+        metric
+      ),
     [props.data, props.loading, timeGranularity, t, metric]
   )
   const spec = chartType === 'bar' ? chartData.spec_line : chartData.spec_area

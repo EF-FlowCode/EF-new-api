@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw, Trophy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { PageShell } from '@/components/layout'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import { getLobeIcon } from '@/lib/lobe-icon'
-import { getPricing } from '@/features/pricing/api'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { PageShell } from '@/components/layout'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
+import { getPricing } from '@/features/pricing/api'
 import {
   ModelPerfBadge,
   type ModelPerfBadgeData,
@@ -151,7 +152,10 @@ function rangeContextText(
 ): { windowText: string; prevText: string } {
   if (!data) return { windowText: '—', prevText: '—' }
   if (range === 'all') {
-    return { windowText: t('All history'), prevText: t('No comparable previous period') }
+    return {
+      windowText: t('All history'),
+      prevText: t('No comparable previous period'),
+    }
   }
   if (range === 'today') {
     return {
@@ -179,7 +183,9 @@ export function Leaderboard() {
   const { t } = useTranslation()
   const [range, setRange] = useState<LeaderboardRange>('week')
   const [data, setData] = useState<ModelRankingPayload | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loadedRankingRequest, setLoadedRankingRequest] = useState<
+    string | null
+  >(null)
   // eflow: 手动刷新——tick 自增触发下面三个 fetch 的 effect 重跑;
   // refreshing 只驱动按钮转圈,由榜单(ranking) effect 的 finally 收尾。
   const [refreshTick, setRefreshTick] = useState(0)
@@ -192,17 +198,18 @@ export function Leaderboard() {
   const [rankSeriesMap, setRankSeriesMap] = useState<Map<string, number[]>>(
     new Map()
   )
+  const rankingRequestKey = `${range}:${refreshTick}`
+  const loading = loadedRankingRequest !== rankingRequestKey
 
   // Vendor icon/name map (reuses the public pricing endpoint), fetched once.
+  // Pricing may require sign-in; icons are optional here, so fail silently.
   // 注意:原始 model 的 vendor_icon/vendor_name 是空的——厂商 logo 存在独立的
   // res.vendors[] 里,model 用 vendor_id 引用。必须按 vendor_id join 出来,
   // 否则全部回退首字母(与模型广场 usePricingData 的 enrich 逻辑一致)。
   useEffect(() => {
-    getPricing()
+    getPricing(CALLER_HANDLED_REQUEST_CONFIG)
       .then((res) => {
-        const vendorById = new Map(
-          (res?.vendors ?? []).map((v) => [v.id, v])
-        )
+        const vendorById = new Map((res?.vendors ?? []).map((v) => [v.id, v]))
         const map = new Map<string, VendorInfo>()
         for (const m of res?.data ?? []) {
           const vendor = m.vendor_id ? vendorById.get(m.vendor_id) : undefined
@@ -236,7 +243,6 @@ export function Leaderboard() {
 
   useEffect(() => {
     let active = true
-    setLoading(true)
     getModelRanking(range)
       .then((res) => {
         if (!active) return
@@ -271,14 +277,14 @@ export function Leaderboard() {
       })
       .finally(() => {
         if (active) {
-          setLoading(false)
+          setLoadedRankingRequest(rankingRequestKey)
           setRefreshing(false)
         }
       })
     return () => {
       active = false
     }
-  }, [range, refreshTick])
+  }, [range, rankingRequestKey])
 
   const handleRefresh = () => {
     if (refreshing) return
@@ -361,7 +367,9 @@ export function Leaderboard() {
           <div className='mb-3 flex items-center gap-2'>
             <Trophy className='size-5 text-amber-500' />
             <div>
-              <div className='text-base font-semibold'>{t('LLM Leaderboard')}</div>
+              <div className='text-base font-semibold'>
+                {t('LLM Leaderboard')}
+              </div>
               <div className='text-muted-foreground text-xs'>
                 {t('Most-used models on this platform')}
               </div>

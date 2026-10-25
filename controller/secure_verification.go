@@ -1,179 +1,124 @@
 package controller
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
-	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-contrib/sessions"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
 	"github.com/gin-gonic/gin"
+	"github.com/go-webauthn/webauthn/protocol"
 )
 
-const (
-	// SecureVerificationSessionKey means the user has fully passed secure verification.
-	SecureVerificationSessionKey       = "secure_verified_at"
-	secureVerificationMethodSessionKey = "secure_verified_method"
-	secureVerificationMethod2FA        = "2fa"
-	secureVerificationMethodPasskey    = "passkey"
-	// PasskeyReadySessionKey means WebAuthn finished and /api/verify can finalize step-up verification.
-	PasskeyReadySessionKey = "secure_passkey_ready_at"
-	// SecureVerificationTimeout 验证有效期（秒）
-	SecureVerificationTimeout = 300 // 5分钟
-	// PasskeyReadyTimeout passkey ready 标记有效期（秒）
-	PasskeyReadyTimeout = 60
-)
+// LoginAtSessionKey eflow: 本次登录完成的时间戳（秒），无任何验证手段的账号据此判断"刚登录过"。
+const LoginAtSessionKey = middleware.LoginAtSessionKey
 
-type UniversalVerifyRequest struct {
-	Method string `json:"method"` // "2fa" 或 "passkey"
-	Code   string `json:"code,omitempty"`
-}
-
-type VerificationStatusResponse struct {
-	Verified  bool  `json:"verified"`
-	ExpiresAt int64 `json:"expires_at,omitempty"`
-}
-
-// UniversalVerify 通用验证接口
-// 支持 2FA 和 Passkey 验证，验证成功后在 session 中记录时间戳
-func UniversalVerify(c *gin.Context) {
-	userId := c.GetInt("id")
-	if userId == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "未登录",
-		})
-		return
-	}
-
-	var req UniversalVerifyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiError(c, fmt.Errorf("参数错误: %v", err))
-		return
-	}
-
-	// 获取用户信息
-	user := &model.User{Id: userId}
-	if err := user.FillUserById(); err != nil {
-		common.ApiError(c, fmt.Errorf("获取用户信息失败: %v", err))
-		return
-	}
-
-	if user.Status != common.UserStatusEnabled {
-		common.ApiError(c, fmt.Errorf("该用户已被禁用"))
-		return
-	}
-
-	// 检查用户的验证方式
-	twoFA, _ := model.GetTwoFAByUserId(userId)
-	has2FA := twoFA != nil && twoFA.IsEnabled
-
-	passkey, passkeyErr := model.GetPasskeyByUserID(userId)
-	hasPasskey := passkeyErr == nil && passkey != nil
-
-	if !has2FA && !hasPasskey {
-		common.ApiError(c, fmt.Errorf("用户未启用2FA或Passkey"))
-		return
-	}
-
-	// 根据验证方式进行验证
-	var verified bool
-	var verifyMethod string
-	var err error
-
-	switch req.Method {
-	case "2fa":
-		if !has2FA {
-			common.ApiError(c, fmt.Errorf("用户未启用2FA"))
-			return
-		}
-		if req.Code == "" {
-			common.ApiError(c, fmt.Errorf("验证码不能为空"))
-			return
-		}
-		verified = validateTwoFactorAuth(twoFA, req.Code)
-		verifyMethod = "2FA"
-
-	case "passkey":
-		if !hasPasskey {
-			common.ApiError(c, fmt.Errorf("用户未启用Passkey"))
-			return
-		}
-		// Passkey branch only trusts the short-lived marker written by PasskeyVerifyFinish.
-		verified, err = consumePasskeyReady(c)
-		if err != nil {
-			common.ApiError(c, fmt.Errorf("Passkey 验证状态异常: %v", err))
-			return
-		}
-		if !verified {
-			common.ApiError(c, fmt.Errorf("请先完成 Passkey 验证"))
-			return
-		}
-		verifyMethod = "Passkey"
-
-	default:
-		common.ApiError(c, fmt.Errorf("不支持的验证方式: %s", req.Method))
-		return
-	}
-
-	if !verified {
-		common.ApiError(c, fmt.Errorf("验证失败，请检查验证码"))
-		return
-	}
-
-	// 验证成功，在 session 中记录时间戳
-	now, err := setSecureVerificationSession(c, req.Method)
-	if err != nil {
-		common.ApiError(c, fmt.Errorf("保存验证状态失败: %v", err))
-		return
-	}
-
-	// 记录日志
-	model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("通用安全验证成功 (验证方式: %s)", verifyMethod))
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "验证成功",
-		"data": gin.H{
-			"verified":   true,
-			"expires_at": now + SecureVerificationTimeout,
-		},
-	})
-}
-
-func setSecureVerificationSession(c *gin.Context, method string) (int64, error) {
-	session := sessions.Default(c)
-	session.Delete(PasskeyReadySessionKey)
-	now := time.Now().Unix()
-	session.Set(SecureVerificationSessionKey, now)
-	session.Set(secureVerificationMethodSessionKey, method)
-	if err := session.Save(); err != nil {
-		return 0, err
-	}
-	return now, nil
-}
-
-func consumePasskeyReady(c *gin.Context) (bool, error) {
-	session := sessions.Default(c)
-	readyAtRaw := session.Get(PasskeyReadySessionKey)
-	if readyAtRaw == nil {
-		return false, nil
-	}
-
-	readyAt, ok := readyAtRaw.(int64)
+// GetVerificationMethods returns the verification methods allowed for ?scope=.
+func GetVerificationMethods(c *gin.Context) {
+	identity, ok := middleware.GetStepUpIdentity(c)
 	if !ok {
-		session.Delete(PasskeyReadySessionKey)
-		_ = session.Save()
-		return false, fmt.Errorf("无效的 Passkey 验证状态")
+		writeSecurityStatusError(c, http.StatusUnauthorized, "SECURITY_PROOF_INVALID", "The current sign-in method does not support security verification")
+		return
 	}
-	session.Delete(PasskeyReadySessionKey)
-	if err := session.Save(); err != nil {
-		return false, err
+	requirements, err := service.GetVerificationRequirements(identity, middleware.GetStepUpContext(c), c.Query("scope"))
+	if err != nil {
+		writeSecurityOperationError(c, err)
+		return
 	}
-	// Expired ready markers cannot be reused.
-	if time.Now().Unix()-readyAt >= PasskeyReadyTimeout {
-		return false, nil
+	common.ApiSuccess(c, requirements)
+}
+
+// UniversalVerify verifies a TOTP/backup code, the password or a recent
+// sign-in for one scoped action and returns a single-use proof for it.
+func UniversalVerify(c *gin.Context) {
+	identity, ok := middleware.GetStepUpIdentity(c)
+	if !ok {
+		writeSecurityStatusError(c, http.StatusUnauthorized, "SECURITY_PROOF_INVALID", "The current sign-in method does not support security verification")
+		return
 	}
-	return true, nil
+	var request service.VerificationInput
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "Invalid parameters")
+		return
+	}
+	proof, err := service.VerifySecurityInput(identity, middleware.GetStepUpContext(c), request)
+	if err != nil {
+		recordUserSecurityAudit(c, identity.UserID, "user.security_verify", map[string]any{"method": request.Method, "scope": request.Scope, "success": false})
+		writeSecurityOperationError(c, err)
+		return
+	}
+	recordUserSecurityAudit(c, identity.UserID, "user.security_verify", map[string]any{"method": proof.Method, "scope": proof.Scope})
+	common.ApiSuccess(c, proof)
+}
+
+// writeSecurityOperationError only exposes known, fixed business messages
+// with a stable code; the frontend translates the English message.
+func writeSecurityOperationError(c *gin.Context, err error) {
+	status := http.StatusOK
+	var code, message string
+	var protocolError *protocol.Error
+	switch {
+	case errors.Is(err, service.ErrVerificationContextInvalid):
+		status = http.StatusBadRequest
+		code, message = "SECURITY_CONTEXT_INVALID", service.ErrVerificationContextInvalid.Error()
+	case errors.Is(err, service.ErrVerificationForbidden):
+		status = http.StatusForbidden
+		code, message = "SECURITY_ACTION_FORBIDDEN", service.ErrVerificationForbidden.Error()
+	case errors.Is(err, service.ErrVerificationFailed), errors.As(err, &protocolError):
+		code, message = "SECURITY_VERIFICATION_FAILED", service.ErrVerificationFailed.Error()
+	case errors.Is(err, service.ErrVerificationLocked):
+		code, message = "SECURITY_VERIFICATION_LOCKED", service.ErrVerificationLocked.Error()
+	case errors.Is(err, service.ErrVerificationReauthRequired):
+		code, message = "REAUTH_REQUIRED", service.ErrVerificationReauthRequired.Error()
+	case errors.Is(err, service.ErrVerificationUnavailable):
+		code, message = "SECURITY_METHOD_UNAVAILABLE", service.ErrVerificationUnavailable.Error()
+	case errors.Is(err, service.ErrVerificationFlowRequired):
+		status = http.StatusBadRequest
+		code, message = "SECURITY_VERIFICATION_FLOW_REQUIRED", service.ErrVerificationFlowRequired.Error()
+	case errors.Is(err, service.ErrProofMethod):
+		code, message = "SECURITY_PROOF_METHOD_MISMATCH", "This verification method is not allowed for this action."
+	case errors.Is(err, service.ErrProofScope):
+		code, message = "SECURITY_PROOF_SCOPE_MISMATCH", "Verification does not match this action."
+	case errors.Is(err, model.ErrTwoFAAlreadyEnabled):
+		code, message = "TWOFA_ALREADY_ENABLED", "Two-factor authentication is already enabled."
+	case errors.Is(err, model.ErrTwoFANotEnabled):
+		code, message = "TWOFA_NOT_ENABLED", "Two-factor authentication is not enabled."
+	case errors.Is(err, model.ErrPasskeyNotFound):
+		code, message = "PASSKEY_NOT_FOUND", "No Passkey is registered."
+	case errors.Is(err, errPasskeyFlowInvalid), errors.Is(err, service.ErrAuthTokenInvalid), errors.Is(err, service.ErrAuthTokenExpired):
+		code, message = "AUTH_FLOW_INVALID", "Verification flow expired"
+	default:
+		c.Set("security_error_code", "AUTH_INTERNAL_ERROR")
+		common.SysError("security operation failed: " + err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "code": "AUTH_INTERNAL_ERROR", "message": "Please try again later."})
+		return
+	}
+	writeSecurityStatusError(c, status, code, message)
+}
+
+func writeSecurityStatusError(c *gin.Context, status int, code, message string) {
+	c.Set("security_error_code", code)
+	c.JSON(status, gin.H{"success": false, "code": code, "message": message})
+}
+
+// requireAdminUserProof consumes the step-up proof for an administrative user
+// operation after the caller has already authorized the operator against the
+// managed user. context is one of the service.AdminUser*Context structs.
+func requireAdminUserProof(c *gin.Context, scope string, context any) *service.StepUpAuthorization {
+	payload, err := common.Marshal(context)
+	if err != nil {
+		common.ApiError(c, err)
+		return nil
+	}
+	return middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: scope, Context: payload})
+}
+
+// adminUserStatusExempt reports whether an enable/disable request may skip
+// step-up. eflow: automation authenticated with an access token (admin-api)
+// enables and disables users without a proof; scoped tokens still need the
+// user:write route scope. Browser sessions always need a proof.
+func adminUserStatusExempt(c *gin.Context, action string) bool {
+	return (action == "enable" || action == "disable") && c.GetBool("use_access_token")
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { nanoid } from 'nanoid'
 import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react'
+import { nanoid } from 'nanoid'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { loadSystemPresets, saveSystemPresets } from '../lib'
@@ -79,7 +79,7 @@ export function SystemPromptPanel({
           />
           <div className='flex flex-wrap items-center gap-2'>
             <select
-              className='bg-background h-7 min-w-0 max-w-[40%] flex-1 truncate rounded-md border px-2 text-xs'
+              className='bg-background h-7 max-w-[40%] min-w-0 flex-1 truncate rounded-md border px-2 text-xs'
               value={selected}
               disabled={disabled || presets.length === 0}
               onChange={(e) => handleApply(e.target.value)}

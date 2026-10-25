@@ -1,0 +1,11 @@
+{
+  "public_listen": "0.0.0.0:8091",
+  "upstream_listen": "0.0.0.0:8092",
+  "gateway_chat_endpoint": "http://new-api-dev:3000/v1/chat/completions",
+  "targets": {
+    "provider": {
+      "protocol": "typesafe",
+      "endpoint": "https://systemone-provider.example/v1/systemone"
+    }
+  }
+}

@@ -3,8 +3,8 @@ package service
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/ratio_setting"
 )
 
 func GetUserUsableGroups(userGroup string) map[string]string {
@@ -14,13 +14,13 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 		if b {
 			// 处理特殊可用分组
 			for specialGroup, desc := range specialSettings {
-				if strings.HasPrefix(specialGroup, "-:") {
+				if after, ok := strings.CutPrefix(specialGroup, "-:"); ok {
 					// 移除分组
-					groupToRemove := strings.TrimPrefix(specialGroup, "-:")
+					groupToRemove := after
 					delete(groupsCopy, groupToRemove)
-				} else if strings.HasPrefix(specialGroup, "+:") {
+				} else if after, ok := strings.CutPrefix(specialGroup, "+:"); ok {
 					// 添加分组
-					groupToAdd := strings.TrimPrefix(specialGroup, "+:")
+					groupToAdd := after
 					groupsCopy[groupToAdd] = desc
 				} else {
 					// 直接添加分组
@@ -53,9 +53,17 @@ func GroupInUserEffectiveGroups(userGroup string, additionalTiers []string, grou
 
 // GetUserAutoGroup 根据用户分组获取自动分组设置
 func GetUserAutoGroup(userGroup string, additionalTiers []string) []string {
+	return GetUserAutoGroupWithPolicy(userGroup, additionalTiers, setting.GetAutoGroupPolicy())
+}
+
+func GetUserAutoGroupWithPolicy(userGroup string, additionalTiers []string, policy setting.AutoGroupPolicy) []string {
+	return getUserAutoGroupFromConfiguredGroups(userGroup, additionalTiers, policy.Groups)
+}
+
+func getUserAutoGroupFromConfiguredGroups(userGroup string, additionalTiers, configuredGroups []string) []string {
 	groups := GetUserEffectiveGroups(userGroup, additionalTiers)
 	autoGroups := make([]string, 0)
-	for _, group := range setting.GetAutoGroups() {
+	for _, group := range configuredGroups {
 		if _, ok := groups[group]; ok {
 			autoGroups = append(autoGroups, group)
 		}

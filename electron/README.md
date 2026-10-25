@@ -7,7 +7,7 @@ This directory contains the Electron wrapper for New API, with native windows an
 - Go 1.25.1+
 - Bun
 - Node.js and npm
-- An externally reachable MySQL 8.0+ database
+- An externally reachable MySQL 8.x database
 - A valid MySQL DSN in the `SQL_DSN` environment variable
 
 The desktop app does not embed a local database. The packaged backend refuses to start without `SQL_DSN`.

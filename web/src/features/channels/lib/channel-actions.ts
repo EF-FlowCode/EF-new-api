@@ -52,6 +52,8 @@ export async function handleEnableChannel(
       toast.success(i18next.t(SUCCESS_MESSAGES.ENABLED))
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
       onSuccess?.()
+    } else {
+      toast.error(response.message || i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
     }
   } catch (_error) {
     toast.error(i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -74,6 +76,8 @@ export async function handleDisableChannel(
       toast.success(i18next.t(SUCCESS_MESSAGES.DISABLED))
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
       onSuccess?.()
+    } else {
+      toast.error(response.message || i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
     }
   } catch (_error) {
     toast.error(i18next.t(ERROR_MESSAGES.UPDATE_FAILED))
@@ -333,8 +337,10 @@ export async function handleBatchEnable(
     )
     const results = await Promise.allSettled(promises)
 
-    const successCount = results.filter((r) => r.status === 'fulfilled').length
-    const failCount = results.filter((r) => r.status === 'rejected').length
+    const successCount = results.filter(
+      (result) => result.status === 'fulfilled' && result.value.success
+    ).length
+    const failCount = results.length - successCount
 
     if (successCount > 0) {
       toast.success(
@@ -374,8 +380,10 @@ export async function handleBatchDisable(
     )
     const results = await Promise.allSettled(promises)
 
-    const successCount = results.filter((r) => r.status === 'fulfilled').length
-    const failCount = results.filter((r) => r.status === 'rejected').length
+    const successCount = results.filter(
+      (result) => result.status === 'fulfilled' && result.value.success
+    ).length
+    const failCount = results.length - successCount
 
     if (successCount > 0) {
       toast.success(

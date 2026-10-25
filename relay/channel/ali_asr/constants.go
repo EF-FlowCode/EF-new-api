@@ -7,10 +7,10 @@ package ali_asr
 //
 //   - qwen3-asr-flash           : multimodal-generation 同步，base64 上传
 //   - fun-asr                   : 异步录音转写，input.file_urls(数组)，
-//                                 结果 output.results[].transcription_url
+//     结果 output.results[].transcription_url
 //   - qwen3-asr-flash-filetrans : 异步录音转写(最长 12h)，input 用
-//                                 file_url(单数字符串)，结果在
-//                                 output.result.transcription_url(单数对象)
+//     file_url(单数字符串)，结果在
+//     output.result.transcription_url(单数对象)
 //
 // 三个异步/同步模型都吃 base64 data: URI（DashScope 自动转存 OSS），
 // 无需站内托管上传文件。

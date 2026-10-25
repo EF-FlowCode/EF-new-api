@@ -6,20 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -36,7 +37,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return "", errors.New("replicate adaptor: relay info is nil")
 	}
 	if info.ChannelBaseUrl == "" {
-		info.ChannelBaseUrl = constant.ChannelBaseURLs[constant.ChannelTypeReplicate]
+		info.ChannelBaseUrl = constant.GetChannelBaseURL(constant.ChannelTypeReplicate)
 	}
 	requestPath := info.RequestURLPath
 	if requestPath == "" {
@@ -140,9 +141,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		if err := common.Unmarshal(request.ExtraFields, &extra); err != nil {
 			return nil, fmt.Errorf("replicate adaptor: failed to decode extra_fields: %w", err)
 		}
-		for key, val := range extra {
-			inputPayload[key] = val
-		}
+		maps.Copy(inputPayload, extra)
 	}
 
 	for key, raw := range request.Extra {
@@ -151,9 +150,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			if err := common.Unmarshal(raw, &extraInput); err != nil {
 				return nil, fmt.Errorf("replicate adaptor: failed to decode extra input: %w", err)
 			}
-			for k, v := range extraInput {
-				inputPayload[k] = v
-			}
+			maps.Copy(inputPayload, extraInput)
 			continue
 		}
 		if raw == nil {
@@ -467,7 +464,7 @@ func uploadFileFromForm(c *gin.Context, info *relaycommon.RelayInfo, fieldCandid
 
 	baseURL := info.ChannelBaseUrl
 	if baseURL == "" {
-		baseURL = constant.ChannelBaseURLs[constant.ChannelTypeReplicate]
+		baseURL = constant.GetChannelBaseURL(constant.ChannelTypeReplicate)
 	}
 	uploadURL := relaycommon.GetFullRequestURL(baseURL, "/v1/files", info.ChannelType)
 

@@ -1,0 +1,59 @@
+{
+  "unixNow": 1700000000,
+  "cases": [
+    {
+      "name": "Wan3 combines input and output seconds without rounding",
+      "hook": "extractUsageOnComplete",
+      "args": [{"model": "wan3.0-video"}, {}, {"usage": {"input_video_duration": 4.25, "output_video_duration": 6.5, "SR": 720}}],
+      "expected": {"seconds": 10.75, "resolution": "720P"}
+    },
+    {
+      "name": "Missing input duration does not invent authoritative seconds",
+      "hook": "extractUsageOnComplete",
+      "args": [{"model": "wan3.0-video"}, {}, {"usage": {"output_video_duration": 6, "SR": 720}}],
+      "expected": {"resolution": "720P"}
+    },
+    {
+      "name": "Invalid negative facts stay invalid for the future host validator",
+      "hook": "extractUsageOnComplete",
+      "args": [{"model": "wan3.0-video"}, {}, {"usage": {"input_video_duration": -5, "output_video_duration": 10}}],
+      "expected": {"seconds": -5}
+    },
+    {
+      "name": "Authoritative zero is preserved",
+      "hook": "extractUsageOnComplete",
+      "args": [{"model": "wan3.0-video"}, {}, {"usage": {"input_video_duration": 0, "output_video_duration": 0, "SR": 1080}}],
+      "expected": {"seconds": 0, "resolution": "1080P"}
+    },
+    {
+      "name": "Legacy Wan request usage remains in seconds and resolution",
+      "hook": "extractUsage",
+      "args": [{"upstreamModel": "wan2.5-i2v-preview", "requestBody": {"model": "wan2.5-i2v-preview", "prompt": "a cat", "images": ["https://cdn.example/first.png"], "duration": 5, "size": "720P"}}],
+      "expected": {"seconds": 5, "resolution": "720P"}
+    },
+    {
+      "name": "Wan3 smart duration reserves the declared maximum",
+      "hook": "extractUsage",
+      "args": [{"upstreamModel": "wan3.0-video", "requestBody": {"model": "wan3.0-video", "prompt": "a cat", "auto_duration": true}}],
+      "expected": {"seconds": 30, "resolution": "1080P"}
+    },
+    {
+      "name": "Wan3 rejects duration above model limit",
+      "hook": "buildSubmitRequest",
+      "args": [{"upstreamModel": "wan3.0-video", "baseUrl": "https://dashscope.example", "apiKey": "fixture-key", "requestBody": {"model": "wan3.0-video", "prompt": "a cat", "duration": 31}}],
+      "expectedError": "duration"
+    },
+    {
+      "name": "Query hook returns a descriptor and performs no network request",
+      "hook": "buildQueryRequest",
+      "args": [{"baseUrl": "https://dashscope.example", "apiKey": "fixture-key", "taskId": "task-test"}],
+      "expected": {"url": "https://dashscope.example/api/v1/tasks/task-test", "method": "GET", "headers": {"Authorization": "Bearer fixture-key"}}
+    },
+    {
+      "name": "Unknown task state must not become success",
+      "hook": "parseTaskResult",
+      "args": [{"model": "wan3.0-video"}, {"output": {"task_status": "NEW_STATUS"}}],
+      "expected": {"status": "UNKNOWN", "reason": "unrecognized status: NEW_STATUS"}
+    }
+  ]
+}

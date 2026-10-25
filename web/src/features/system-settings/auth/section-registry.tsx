@@ -55,6 +55,8 @@ const AUTH_SECTIONS = [
           TelegramOAuthEnabled: settings.TelegramOAuthEnabled,
           TelegramBotToken: settings.TelegramBotToken,
           TelegramBotName: settings.TelegramBotName,
+          TelegramClientId: settings.TelegramClientId,
+          TelegramClientSecret: settings.TelegramClientSecret,
           LinuxDOOAuthEnabled: settings.LinuxDOOAuthEnabled,
           LinuxDOClientId: settings.LinuxDOClientId,
           LinuxDOClientSecret: settings.LinuxDOClientSecret,

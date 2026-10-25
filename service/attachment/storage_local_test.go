@@ -122,7 +122,7 @@ func TestLocalStorage_ConcurrentWrites(t *testing.T) {
 	s := newTestLocal(t)
 	ctx := context.Background()
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

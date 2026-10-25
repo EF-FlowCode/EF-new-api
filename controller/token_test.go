@@ -6,18 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/internal/testconfig"
+	"eflow.local/new-api/internal/testdb"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
-	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -40,11 +39,6 @@ type tokenResponseItem struct {
 
 type tokenKeyResponse struct {
 	Key string `json:"key"`
-}
-
-type sqliteColumnInfo struct {
-	Name string `gorm:"column:name"`
-	Type string `gorm:"column:type"`
 }
 
 type legacyToken struct {
@@ -75,21 +69,15 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
+	db := testdb.OpenMySQL8(t)
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open sqlite db: %v", err)
-	}
-	model.DB = db
-	model.LOG_DB = db
-
 	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.RedisEnabled = oldRedisEnabled
 	})
 
 	return db
@@ -109,38 +97,6 @@ func setupTokenControllerTestDB(t *testing.T) *gorm.DB {
 	db := openTokenControllerTestDB(t)
 	migrateTokenControllerTestDB(t, db)
 	return db
-}
-
-func openTokenControllerMySQLTestDB(t *testing.T, dsn string) (*gorm.DB, *bool) {
-	t.Helper()
-
-	gin.SetMode(gin.TestMode)
-	common.RedisEnabled = false
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open mysql db: %v", err)
-	}
-
-	model.DB = db
-	model.LOG_DB = db
-
-	if db.Migrator().HasTable("tokens") {
-		t.Skip("refusing to run MySQL migration test against external database because tokens table already exists")
-	}
-
-	managedTokensTable := new(bool)
-
-	t.Cleanup(func() {
-		if *managedTokensTable && db.Migrator().HasTable("tokens") {
-			_ = db.Migrator().DropTable("tokens")
-		}
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
-	})
-
-	return db, managedTokensTable
 }
 
 func seedToken(t *testing.T, db *gorm.DB, userID int, name string, rawKey string) *model.Token {
@@ -216,45 +172,19 @@ func decodeAPIResponse(t *testing.T, recorder *httptest.ResponseRecorder) tokenA
 	return response
 }
 
-func getSQLiteColumnType(t *testing.T, db *gorm.DB, tableName string, columnName string) string {
+func getTokenKeyColumnType(t *testing.T, db *gorm.DB) string {
 	t.Helper()
 
-	var columns []sqliteColumnInfo
-	if err := db.Raw("PRAGMA table_info(" + tableName + ")").Scan(&columns).Error; err != nil {
-		t.Fatalf("failed to inspect %s schema: %v", tableName, err)
+	var columnType string
+	if err := db.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+		"tokens", "key").Scan(&columnType).Error; err != nil {
+		t.Fatalf("failed to inspect token key column: %v", err)
 	}
-
-	for _, column := range columns {
-		if column.Name == columnName {
-			return strings.ToLower(column.Type)
-		}
-	}
-
-	t.Fatalf("column %s not found in %s schema", columnName, tableName)
-	return ""
+	return strings.ToLower(columnType)
 }
 
-func getTokenKeyColumnType(t *testing.T, db *gorm.DB, dialect string) string {
-	t.Helper()
-
-	switch dialect {
-	case "sqlite":
-		return getSQLiteColumnType(t, db, "tokens", "key")
-	case "mysql":
-		var columnType string
-		if err := db.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
-			WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-			"tokens", "key").Scan(&columnType).Error; err != nil {
-			t.Fatalf("failed to inspect mysql token key column: %v", err)
-		}
-		return strings.ToLower(columnType)
-	default:
-		t.Fatalf("unsupported dialect %q", dialect)
-		return ""
-	}
-}
-
-func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect string, managedTokensTable *bool) {
+func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB) {
 	t.Helper()
 
 	legacyKey := strings.Repeat("a", 48)
@@ -262,9 +192,6 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 
 	if err := db.AutoMigrate(&legacyToken{}); err != nil {
 		t.Fatalf("failed to create legacy token schema: %v", err)
-	}
-	if managedTokensTable != nil {
-		*managedTokensTable = true
 	}
 	if err := db.Create(&legacyToken{
 		UserId:             7,
@@ -286,13 +213,13 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 		t.Fatalf("failed to seed legacy token row: %v", err)
 	}
 
-	if got := getTokenKeyColumnType(t, db, dialect); got != "char(48)" {
+	if got := getTokenKeyColumnType(t, db); got != "char(48)" {
 		t.Fatalf("expected legacy key column type char(48), got %q", got)
 	}
 
 	migrateTokenControllerTestDB(t, db)
 
-	if got := getTokenKeyColumnType(t, db, dialect); got != "varchar(128)" {
+	if got := getTokenKeyColumnType(t, db); got != "varchar(128)" {
 		t.Fatalf("expected migrated key column type varchar(128), got %q", got)
 	}
 
@@ -340,24 +267,14 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 func TestTokenAutoMigrateUsesVarchar128KeyColumn(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 
-	if got := getTokenKeyColumnType(t, db, "sqlite"); got != "varchar(128)" {
+	if got := getTokenKeyColumnType(t, db); got != "varchar(128)" {
 		t.Fatalf("expected key column type varchar(128), got %q", got)
 	}
 }
 
 func TestTokenMigrationFromChar48ToVarchar128(t *testing.T) {
 	db := openTokenControllerTestDB(t)
-	runTokenMigrationCompatibilityTest(t, db, "sqlite", nil)
-}
-
-func TestTokenMigrationFromChar48ToVarchar128MySQL(t *testing.T) {
-	dsn := os.Getenv("TEST_MYSQL_DSN")
-	if dsn == "" {
-		t.Skip("set TEST_MYSQL_DSN to run mysql migration compatibility test")
-	}
-
-	db, managedTokensTable := openTokenControllerMySQLTestDB(t, dsn)
-	runTokenMigrationCompatibilityTest(t, db, "mysql", managedTokensTable)
+	runTokenMigrationCompatibilityTest(t, db)
 }
 
 func TestGetAllTokensMasksKeyInResponse(t *testing.T) {
@@ -480,20 +397,17 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 func TestValidateTokenGroupForUserUsesAdditionalCustomerTiers(t *testing.T) {
 	originalRatios := ratio_setting.GroupRatio2JSONString()
 	originalUsable := setting.UserUsableGroups2JSONString()
-	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
-	originalSpecial := specialGroups.ReadAll()
 	t.Cleanup(func() {
 		_ = ratio_setting.UpdateGroupRatioByJSONString(originalRatios)
 		_ = setting.UpdateUserUsableGroupsByJSONString(originalUsable)
-		specialGroups.Clear()
-		specialGroups.AddAll(originalSpecial)
 	})
 	_ = ratio_setting.UpdateGroupRatioByJSONString(`{"base":1,"vip_token":1,"svip_token":1}`)
 	_ = setting.UpdateUserUsableGroupsByJSONString(`{"base":"Base"}`)
-	specialGroups.Clear()
-	specialGroups.AddAll(map[string]map[string]string{
-		"VIP":  {"+:vip_token": "VIP token group"},
-		"SVIP": {"+:svip_token": "SVIP token group"},
+	testconfig.Set(t, "group_ratio_setting", map[string]string{
+		"group_special_usable_group": testconfig.JSON(t, map[string]map[string]string{
+			"VIP":  {"+:vip_token": "VIP token group"},
+			"SVIP": {"+:svip_token": "SVIP token group"},
+		}),
 	})
 
 	db := setupTokenControllerTestDB(t)

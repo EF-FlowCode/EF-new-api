@@ -3,22 +3,21 @@ package service
 import (
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/pkg/billingexpr"
+	perfmetrics "eflow.local/new-api/pkg/perf_metrics"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/ratio_setting"
+	"eflow.local/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
+	gopool "eflow.local/new-api/internal/drainpool"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -52,11 +51,11 @@ func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 func calculateAudioQuota(info QuotaInfo) int {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
-		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		quotaPerUnit := decimal.NewFromFloat(common.GetQuotaPerUnit())
 		groupRatio := decimal.NewFromFloat(info.GroupRatio)
 
 		quota := modelPrice.Mul(quotaPerUnit).Mul(groupRatio)
-		return int(quota.IntPart())
+		return common.QuotaFromDecimal(quota.Truncate(0))
 	}
 
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
@@ -88,11 +87,13 @@ func calculateAudioQuota(info QuotaInfo) int {
 		quota = decimal.NewFromInt(1)
 	}
 
-	return int(quota.Round(0).IntPart())
+	return common.QuotaFromDecimal(quota)
 }
 
+// PreWssConsumeQuota gates a realtime session on its cumulative usage and keeps
+// the reservation topped up to that total.
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
-	if relayInfo.UsePrice {
+	if relayInfo.PriceData.UsePrice {
 		return nil
 	}
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
@@ -138,26 +139,44 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 			AudioTokens: audioOutTokens,
 		},
 		ModelName:  modelName,
-		UsePrice:   relayInfo.UsePrice,
+		UsePrice:   relayInfo.PriceData.UsePrice,
 		ModelRatio: modelRatio,
 		GroupRatio: actualGroupRatio,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
 
-	if userQuota < quota {
-		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
+	// quota is the cumulative cost of the session so far. Only the part not yet
+	// reserved is new; the final PostWssConsumeQuota settles the whole session
+	// once, so nothing is charged directly here.
+	reserved := relayInfo.FinalPreConsumedQuota
+	if relayInfo.Billing != nil {
+		reserved = relayInfo.Billing.GetPreConsumedQuota()
+	}
+	need := quota - reserved
+	if need <= 0 {
+		return nil
 	}
 
-	if !token.UnlimitedQuota && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
+	if userQuota < need {
+		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(need))
 	}
 
-	err = PostConsumeQuota(relayInfo, quota, 0, false)
-	if err != nil {
-		return err
+	if !token.UnlimitedQuota && token.RemainQuota < need {
+		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(need))
 	}
-	logger.LogInfo(ctx, "realtime streaming consume quota success, quota: "+fmt.Sprintf("%d", quota))
+
+	if relayInfo.Billing != nil {
+		if err = relayInfo.Billing.Reserve(quota); err != nil {
+			return err
+		}
+	} else {
+		if err = PostConsumeQuota(relayInfo, need, 0, false); err != nil {
+			return err
+		}
+		relayInfo.FinalPreConsumedQuota = quota
+	}
+	logger.LogInfo(ctx, "realtime streaming reserve quota success, total quota: "+fmt.Sprintf("%d", quota))
 	return nil
 }
 
@@ -265,10 +284,14 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {
+	return calcOpenRouterCacheCreateTokens(usage, priceData, common.GetQuotaPerUnit())
+}
+
+func calcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData, quotaPerUnit float64) int {
 	if priceData.CacheCreationRatio == 1 {
 		return 0
 	}
-	quotaPrice := priceData.ModelRatio / common.QuotaPerUnit
+	quotaPrice := priceData.ModelRatio / quotaPerUnit
 	promptCacheCreatePrice := quotaPrice * priceData.CacheCreationRatio
 	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
 	completionPrice := quotaPrice * priceData.CompletionRatio
@@ -278,11 +301,16 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	completionTokens := float64(usage.CompletionTokens)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)
 
-	return int(math.Round((cost -
+	value := (cost -
 		totalPromptTokens*quotaPrice +
 		promptCacheReadTokens*(quotaPrice-promptCacheReadPrice) -
 		completionTokens*completionPrice) /
-		(promptCacheCreatePrice - quotaPrice)))
+		(promptCacheCreatePrice - quotaPrice)
+	quota, clamp := common.QuotaRoundChecked(value)
+	if clamp != nil {
+		return -1
+	}
+	return quota
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
@@ -398,19 +426,16 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 	if relayInfo.IsPlayground {
 		return nil
 	}
-	//if relayInfo.TokenUnlimited {
-	//	return nil
-	//}
-	token, err := model.GetTokenByKey(relayInfo.TokenKey, false)
+	reserved, err := model.TryReserveTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota, relayInfo.TokenUnlimited)
 	if err != nil {
 		return err
 	}
-	if !relayInfo.TokenUnlimited && token.RemainQuota < quota {
-		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
-	}
-	err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
-	if err != nil {
-		return err
+	if !reserved {
+		remainQuota := 0
+		if token, tokenErr := model.GetTokenByKey(relayInfo.TokenKey, false); tokenErr == nil && token != nil {
+			remainQuota = token.RemainQuota
+		}
+		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(remainQuota), logger.FormatQuota(quota))
 	}
 	return nil
 }
@@ -443,9 +468,10 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 }
 
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
+	quotaSettings := common.GetUserQuotaSettings()
 	gopool.Go(func() {
 		userSetting := relayInfo.UserSetting
-		threshold := common.QuotaRemindThreshold
+		threshold := quotaSettings.QuotaRemindThreshold
 		if userSetting.QuotaWarningThreshold != 0 {
 			threshold = int(userSetting.QuotaWarningThreshold)
 		}
@@ -462,24 +488,26 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 
 			// 根据通知方式生成不同的内容格式
 			var content string
-			var values []interface{}
+			var values []any
 
 			notifyType := userSetting.NotifyType
 			if notifyType == "" {
 				notifyType = dto.NotifyTypeEmail
 			}
 
-			if notifyType == dto.NotifyTypeBark {
+			if notifyType == dto.NotifyTypeEmail {
+				prompt, content = RenderQuotaWarningEmail(common.SystemNameOrDefault(), logger.FormatQuota(relayInfo.UserQuota), topUpLink)
+			} else if notifyType == dto.NotifyTypeBark {
 				// Bark推送使用简短文本，不支持HTML
 				content = "{{value}}，剩余额度：{{value}}，请及时充值"
-				values = []interface{}{prompt, logger.FormatQuota(relayInfo.UserQuota)}
+				values = []any{prompt, logger.FormatQuota(relayInfo.UserQuota)}
 			} else if notifyType == dto.NotifyTypeGotify {
 				content = "{{value}}，当前剩余额度为 {{value}}，请及时充值。"
-				values = []interface{}{prompt, logger.FormatQuota(relayInfo.UserQuota)}
+				values = []any{prompt, logger.FormatQuota(relayInfo.UserQuota)}
 			} else {
-				// 默认内容格式，适用于Email和Webhook（支持HTML）
+				// Webhook 等渠道保留原 HTML 内容格式。
 				content = "{{value}}，当前剩余额度为 {{value}}，为了不影响您的使用，请及时充值。<br/>充值链接：<a href='{{value}}'>{{value}}</a>"
-				values = []interface{}{prompt, logger.FormatQuota(relayInfo.UserQuota), topUpLink, topUpLink}
+				values = []any{prompt, logger.FormatQuota(relayInfo.UserQuota), topUpLink, topUpLink}
 			}
 
 			err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values))

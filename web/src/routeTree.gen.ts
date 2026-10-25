@@ -50,6 +50,7 @@ import { Route as AuthenticatedInvitationCodesIndexRouteImport } from './routes/
 import { Route as AuthenticatedGroupMonitoringIndexRouteImport } from './routes/_authenticated/group-monitoring/index'
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
+import { Route as AuthenticatedAuditLogsIndexRouteImport } from './routes/_authenticated/audit-logs/index'
 import { Route as AuthenticatedAdminTicketsIndexRouteImport } from './routes/_authenticated/admin-tickets/index'
 import { Route as AuthenticatedUsageLogsSectionRouteImport } from './routes/_authenticated/usage-logs/$section'
 import { Route as AuthenticatedTicketsIdRouteImport } from './routes/_authenticated/tickets/$id'
@@ -296,6 +297,12 @@ const AuthenticatedChannelsIndexRoute =
     path: '/channels/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedAuditLogsIndexRoute =
+  AuthenticatedAuditLogsIndexRouteImport.update({
+    id: '/audit-logs/',
+    path: '/audit-logs/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAdminTicketsIndexRoute =
   AuthenticatedAdminTicketsIndexRouteImport.update({
     id: '/admin-tickets/',
@@ -468,6 +475,7 @@ export interface FileRoutesByFullPath {
   '/tickets/$id': typeof AuthenticatedTicketsIdRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/admin-tickets/': typeof AuthenticatedAdminTicketsIndexRoute
+  '/audit-logs/': typeof AuthenticatedAuditLogsIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/group-monitoring/': typeof AuthenticatedGroupMonitoringIndexRoute
@@ -532,6 +540,7 @@ export interface FileRoutesByTo {
   '/tickets/$id': typeof AuthenticatedTicketsIdRoute
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/admin-tickets': typeof AuthenticatedAdminTicketsIndexRoute
+  '/audit-logs': typeof AuthenticatedAuditLogsIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/group-monitoring': typeof AuthenticatedGroupMonitoringIndexRoute
@@ -600,6 +609,7 @@ export interface FileRoutesById {
   '/_authenticated/tickets/$id': typeof AuthenticatedTicketsIdRoute
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/admin-tickets/': typeof AuthenticatedAdminTicketsIndexRoute
+  '/_authenticated/audit-logs/': typeof AuthenticatedAuditLogsIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/group-monitoring/': typeof AuthenticatedGroupMonitoringIndexRoute
@@ -667,6 +677,7 @@ export interface FileRouteTypes {
     | '/tickets/$id'
     | '/usage-logs/$section'
     | '/admin-tickets/'
+    | '/audit-logs/'
     | '/channels/'
     | '/dashboard/'
     | '/group-monitoring/'
@@ -731,6 +742,7 @@ export interface FileRouteTypes {
     | '/tickets/$id'
     | '/usage-logs/$section'
     | '/admin-tickets'
+    | '/audit-logs'
     | '/channels'
     | '/dashboard'
     | '/group-monitoring'
@@ -798,6 +810,7 @@ export interface FileRouteTypes {
     | '/_authenticated/tickets/$id'
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/admin-tickets/'
+    | '/_authenticated/audit-logs/'
     | '/_authenticated/channels/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/group-monitoring/'
@@ -1140,6 +1153,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedChannelsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/audit-logs/': {
+      id: '/_authenticated/audit-logs/'
+      path: '/audit-logs'
+      fullPath: '/audit-logs/'
+      preLoaderRoute: typeof AuthenticatedAuditLogsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/admin-tickets/': {
       id: '/_authenticated/admin-tickets/'
       path: '/admin-tickets'
@@ -1403,6 +1423,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedTicketsIdRoute: typeof AuthenticatedTicketsIdRoute
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedAdminTicketsIndexRoute: typeof AuthenticatedAdminTicketsIndexRoute
+  AuthenticatedAuditLogsIndexRoute: typeof AuthenticatedAuditLogsIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedGroupMonitoringIndexRoute: typeof AuthenticatedGroupMonitoringIndexRoute
@@ -1436,6 +1457,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedTicketsIdRoute: AuthenticatedTicketsIdRoute,
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedAdminTicketsIndexRoute: AuthenticatedAdminTicketsIndexRoute,
+  AuthenticatedAuditLogsIndexRoute: AuthenticatedAuditLogsIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedGroupMonitoringIndexRoute:

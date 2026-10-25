@@ -8,6 +8,7 @@ import {
   updateLastAssistantMessage,
   processStreamingContent,
   finalizeMessage,
+  updateCurrentVersionContent,
 } from '../lib'
 import type { Message, PlaygroundConfig, ParameterEnabled } from '../types'
 import { useStreamRequest } from './use-stream-request'
@@ -133,15 +134,10 @@ export function useChatHandler({
         onMessageUpdate((prev) =>
           updateLastAssistantMessage(prev, (message) => ({
             ...finalizeMessage(
-              {
-                ...message,
-                versions: [
-                  {
-                    ...message.versions[0],
-                    content: choice.message?.content || '',
-                  },
-                ],
-              },
+              updateCurrentVersionContent(
+                message,
+                choice.message?.content || ''
+              ),
               reasoningContent
             ),
             status: MESSAGE_STATUS.COMPLETE,
@@ -162,13 +158,7 @@ export function useChatHandler({
         )
       }
     },
-    [
-      config,
-      parameterEnabled,
-      systemPrompt,
-      onMessageUpdate,
-      handleStreamError,
-    ]
+    [config, parameterEnabled, systemPrompt, onMessageUpdate, handleStreamError]
   )
 
   // Send chat request (stream or non-stream based on config)

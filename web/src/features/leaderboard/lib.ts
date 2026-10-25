@@ -10,7 +10,10 @@ export function formatTokens(n: number): string {
 
 // Bucket-start unix seconds -> axis label. Day buckets render "May 27" (en, to
 // match the mock); hour buckets render "13:00".
-export function bucketLabel(timeSeconds: number, bucket: 'hour' | 'day'): string {
+export function bucketLabel(
+  timeSeconds: number,
+  bucket: 'hour' | 'day'
+): string {
   const d = new Date(timeSeconds * 1000)
   if (bucket === 'hour') {
     return `${String(d.getHours()).padStart(2, '0')}:00`

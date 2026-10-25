@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/types"
 )
 
 const (

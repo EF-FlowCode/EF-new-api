@@ -2,17 +2,18 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 // ConfigManager 统一管理所有配置
 type ConfigManager struct {
-	configs map[string]interface{}
+	configs map[string]any
 	mutex   sync.RWMutex
 }
 
@@ -20,22 +21,69 @@ var GlobalConfig = NewConfigManager()
 
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{
-		configs: make(map[string]interface{}),
+		configs: make(map[string]any),
 	}
 }
 
-// Register 注册一个配置模块
-func (cm *ConfigManager) Register(name string, config interface{}) {
+// Register registers an owned copy so the caller cannot mutate published state
+// without going through the manager.
+func (cm *ConfigManager) Register(name string, config any) {
+	owned, err := cloneConfig(config)
+	if err != nil {
+		panic(fmt.Sprintf("register config %q: %v", name, err))
+	}
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
-	cm.configs[name] = config
+	cm.configs[name] = owned
 }
 
-// Get 获取指定配置模块
-func (cm *ConfigManager) Get(name string) interface{} {
+func (cm *ConfigManager) Has(name string) bool {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
-	return cm.configs[name]
+	_, ok := cm.configs[name]
+	return ok
+}
+
+// IsBooleanField reports whether key identifies a bool field in a registered
+// config module. It follows the same direct JSON-field mapping used by updates.
+func (cm *ConfigManager) IsBooleanField(name, key string) bool {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	cfg, ok := cm.configs[name]
+	if !ok {
+		return false
+	}
+	typ := reflect.TypeOf(cfg)
+	if typ.Kind() != reflect.Ptr || typ.Elem().Kind() != reflect.Struct {
+		return false
+	}
+	typ = typ.Elem()
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		jsonName := strings.Split(field.Tag.Get("json"), ",")[0]
+		if jsonName == "" {
+			jsonName = field.Name
+		}
+		if jsonName == key {
+			return field.Type.Kind() == reflect.Bool
+		}
+	}
+	return false
+}
+
+// Get returns an isolated copy of a configuration module.
+func (cm *ConfigManager) Get(name string) any {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	cfg, ok := cm.configs[name]
+	if !ok {
+		return nil
+	}
+	clone, err := cloneConfig(cfg)
+	if err != nil {
+		return nil
+	}
+	return clone
 }
 
 // Update parses and publishes a module update while holding the manager lock.
@@ -57,30 +105,56 @@ func (cm *ConfigManager) Validate(name string, values map[string]string) (bool, 
 	if !ok {
 		return false, nil
 	}
-	val := reflect.ValueOf(cfg)
-	if val.Kind() != reflect.Ptr || val.IsNil() {
-		return true, fmt.Errorf("config must be a non-nil pointer, got %T", cfg)
-	}
-	clone := reflect.New(val.Elem().Type()).Interface()
-	serialized, err := common.Marshal(cfg)
+	clone, err := cloneConfig(cfg)
 	if err != nil {
-		return true, err
-	}
-	if err = common.Unmarshal(serialized, clone); err != nil {
 		return true, err
 	}
 	return true, updateConfigFromMap(clone, values)
 }
 
-// Read executes fn while updates to the registered config are excluded.
-func (cm *ConfigManager) Read(name string, fn func(interface{})) bool {
+// Snapshot copies a registered module into destination while updates are
+// excluded. destination must point to the module's concrete struct type.
+func (cm *ConfigManager) Snapshot(name string, destination any) (bool, error) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
 	cfg, ok := cm.configs[name]
-	if ok && fn != nil {
-		fn(cfg)
+	if !ok {
+		return false, nil
 	}
-	return ok
+	return true, cloneConfigInto(cfg, destination)
+}
+
+// MustSnapshot returns an isolated snapshot from the global manager. A missing
+// registration or an incompatible type is a programming error.
+func MustSnapshot[T any](name string) T {
+	var snapshot T
+	ok, err := GlobalConfig.Snapshot(name, &snapshot)
+	if err != nil {
+		panic(fmt.Sprintf("snapshot config %q: %v", name, err))
+	}
+	if !ok {
+		panic(fmt.Sprintf("snapshot config %q: not registered", name))
+	}
+	return snapshot
+}
+
+// Read executes fn with an isolated copy of the registered config.
+func (cm *ConfigManager) Read(name string, fn func(any)) bool {
+	cm.mutex.RLock()
+	cfg, ok := cm.configs[name]
+	if !ok {
+		cm.mutex.RUnlock()
+		return false
+	}
+	clone, err := cloneConfig(cfg)
+	cm.mutex.RUnlock()
+	if err != nil {
+		return false
+	}
+	if fn != nil {
+		fn(clone)
+	}
+	return true
 }
 
 // LoadFromDB 从数据库加载配置
@@ -88,23 +162,34 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
-	for name, config := range cm.configs {
+	candidates := make(map[string]any)
+	for name, current := range cm.configs {
 		prefix := name + "."
 		configMap := make(map[string]string)
 
 		// 收集属于此配置的所有选项
 		for key, value := range options {
-			if strings.HasPrefix(key, prefix) {
-				configKey := strings.TrimPrefix(key, prefix)
+			if after, ok := strings.CutPrefix(key, prefix); ok {
+				configKey := after
 				configMap[configKey] = value
 			}
 		}
 
-		// 如果找到配置项，则更新配置
 		if len(configMap) > 0 {
-			if err := updateConfigFromMap(config, configMap); err != nil {
+			candidate, err := cloneConfig(current)
+			if err != nil {
+				return fmt.Errorf("failed to clone config %s: %w", name, err)
+			}
+			if err = updateConfigFromMap(candidate, configMap); err != nil {
 				return fmt.Errorf("failed to update config %s: %w", name, err)
 			}
+			candidates[name] = candidate
+		}
+	}
+
+	for name, candidate := range candidates {
+		if err := replaceConfig(cm.configs[name], candidate); err != nil {
+			return fmt.Errorf("failed to publish config %s: %w", name, err)
 		}
 	}
 
@@ -134,7 +219,7 @@ func (cm *ConfigManager) SaveToDB(updateFunc func(key, value string) error) erro
 }
 
 // 辅助函数：将配置对象转换为map
-func configToMap(config interface{}) (map[string]string, error) {
+func configToMap(config any) (map[string]string, error) {
 	result := make(map[string]string)
 
 	val := reflect.ValueOf(config)
@@ -205,8 +290,48 @@ func configToMap(config interface{}) (map[string]string, error) {
 	return result, nil
 }
 
+func cloneConfig(config any) (any, error) {
+	val := reflect.ValueOf(config)
+	if val.Kind() != reflect.Ptr || val.IsNil() || val.Elem().Kind() != reflect.Struct {
+		return nil, fmt.Errorf("config must point to a struct, got %T", config)
+	}
+	clone := reflect.New(val.Elem().Type()).Interface()
+	serialized, err := common.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("marshal config: %w", err)
+	}
+	if err = common.Unmarshal(serialized, clone); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+	return clone, nil
+}
+
+func cloneConfigInto(config any, destination any) error {
+	clone, err := cloneConfig(config)
+	if err != nil {
+		return err
+	}
+	return replaceConfig(destination, clone)
+}
+
+func replaceConfig(destination any, source any) error {
+	dst := reflect.ValueOf(destination)
+	src := reflect.ValueOf(source)
+	if dst.Kind() != reflect.Ptr || dst.IsNil() || dst.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("destination must point to a struct, got %T", destination)
+	}
+	if src.Kind() != reflect.Ptr || src.IsNil() || src.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("source must point to a struct, got %T", source)
+	}
+	if dst.Elem().Type() != src.Elem().Type() {
+		return fmt.Errorf("config type mismatch: destination %T, source %T", destination, source)
+	}
+	dst.Elem().Set(src.Elem())
+	return nil
+}
+
 // 辅助函数：从map更新配置对象
-func updateConfigFromMap(config interface{}, configMap map[string]string) error {
+func updateConfigFromMap(config any, configMap map[string]string) error {
 	val := reflect.ValueOf(config)
 	if val.Kind() != reflect.Ptr {
 		return fmt.Errorf("config must be a pointer, got %T", config)
@@ -268,31 +393,24 @@ func applyConfigFromMap(val reflect.Value, configMap map[string]string) error {
 			}
 			field.SetBool(boolValue)
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			intValue, err := strconv.ParseInt(strValue, 10, 64)
+			intValue, err := parseCompatibleInt(strValue, field.Type().Bits())
 			if err != nil {
-				// 兼容 float 格式的字符串（如 "2.000000"）
-				floatValue, fErr := strconv.ParseFloat(strValue, 64)
-				if fErr != nil {
-					return fmt.Errorf("parse %s as int: %w", key, err)
-				}
-				intValue = int64(floatValue)
+				return fmt.Errorf("parse %s as int: %w", key, err)
 			}
 			field.SetInt(intValue)
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			uintValue, err := strconv.ParseUint(strValue, 10, 64)
+			uintValue, err := parseCompatibleUint(strValue, field.Type().Bits())
 			if err != nil {
-				// 兼容 float 格式的字符串
-				floatValue, fErr := strconv.ParseFloat(strValue, 64)
-				if fErr != nil || floatValue < 0 {
-					return fmt.Errorf("parse %s as uint: %q", key, strValue)
-				}
-				uintValue = uint64(floatValue)
+				return fmt.Errorf("parse %s as uint: %w", key, err)
 			}
 			field.SetUint(uintValue)
 		case reflect.Float32, reflect.Float64:
 			floatValue, err := strconv.ParseFloat(strValue, 64)
 			if err != nil {
 				return fmt.Errorf("parse %s as float: %w", key, err)
+			}
+			if math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
+				return fmt.Errorf("parse %s as float: value must be finite", key)
 			}
 			field.SetFloat(floatValue)
 		case reflect.Ptr:
@@ -319,7 +437,16 @@ func applyConfigFromMap(val reflect.Value, configMap map[string]string) error {
 				return fmt.Errorf("parse %s: %w", key, err)
 			}
 			field.Set(fresh.Elem())
-		case reflect.Slice, reflect.Struct:
+		case reflect.Slice:
+			// Decoding into an existing slice reuses its elements, so fields the
+			// stored JSON omits would inherit values from the element that used
+			// to sit at the same index (and element maps would be merged).
+			fresh := reflect.New(field.Type())
+			if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+				return fmt.Errorf("parse %s: %w", key, err)
+			}
+			field.Set(fresh.Elem())
+		case reflect.Struct:
 			err := common.Unmarshal([]byte(strValue), field.Addr().Interface())
 			if err != nil {
 				return fmt.Errorf("parse %s: %w", key, err)
@@ -330,13 +457,37 @@ func applyConfigFromMap(val reflect.Value, configMap map[string]string) error {
 	return nil
 }
 
+func parseCompatibleInt(value string, bitSize int) (int64, error) {
+	parsed, err := strconv.ParseInt(value, 10, bitSize)
+	if err == nil {
+		return parsed, nil
+	}
+	floatValue, floatErr := strconv.ParseFloat(value, 64)
+	if floatErr != nil || math.IsNaN(floatValue) || math.IsInf(floatValue, 0) || math.Trunc(floatValue) != floatValue {
+		return 0, fmt.Errorf("invalid integer %q", value)
+	}
+	return strconv.ParseInt(strconv.FormatFloat(floatValue, 'f', -1, 64), 10, bitSize)
+}
+
+func parseCompatibleUint(value string, bitSize int) (uint64, error) {
+	parsed, err := strconv.ParseUint(value, 10, bitSize)
+	if err == nil {
+		return parsed, nil
+	}
+	floatValue, floatErr := strconv.ParseFloat(value, 64)
+	if floatErr != nil || math.IsNaN(floatValue) || math.IsInf(floatValue, 0) || floatValue < 0 || math.Trunc(floatValue) != floatValue {
+		return 0, fmt.Errorf("invalid unsigned integer %q", value)
+	}
+	return strconv.ParseUint(strconv.FormatFloat(floatValue, 'f', -1, 64), 10, bitSize)
+}
+
 // ConfigToMap 将配置对象转换为map（导出函数）
-func ConfigToMap(config interface{}) (map[string]string, error) {
+func ConfigToMap(config any) (map[string]string, error) {
 	return configToMap(config)
 }
 
 // UpdateConfigFromMap 从map更新配置对象（导出函数）
-func UpdateConfigFromMap(config interface{}, configMap map[string]string) error {
+func UpdateConfigFromMap(config any, configMap map[string]string) error {
 	return updateConfigFromMap(config, configMap)
 }
 

@@ -130,7 +130,7 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
       setIsEnabled(checked)
       toast.success(t('Setting saved'))
     } catch {
-      toast.error(t('Failed to update setting'))
+      // useUpdateOption owns the error notification.
     }
   }
 
@@ -214,7 +214,7 @@ export function UptimeKumaSection({ enabled, data }: UptimeKumaSectionProps) {
       setHasChanges(false)
       toast.success(t('Uptime Kuma groups saved successfully'))
     } catch {
-      toast.error(t('Failed to save Uptime Kuma groups'))
+      // useUpdateOption owns the error notification.
     }
   }
 

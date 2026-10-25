@@ -22,7 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const oauthSchema = z.object({
   GitHubOAuthEnabled: z.boolean(),
@@ -42,6 +42,8 @@ const oauthSchema = z.object({
   TelegramOAuthEnabled: z.boolean(),
   TelegramBotToken: z.string().optional(),
   TelegramBotName: z.string().optional(),
+  TelegramClientId: z.string().optional(),
+  TelegramClientSecret: z.string().optional(),
   LinuxDOOAuthEnabled: z.boolean(),
   LinuxDOClientId: z.string().optional(),
   LinuxDOClientSecret: z.string().optional(),
@@ -60,7 +62,7 @@ type OAuthSectionProps = {
 
 export function OAuthSection({ defaultValues }: OAuthSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const [activeTab, setActiveTab] = useState('github')
 
   // Normalize empty strings for optional fields (only at mount)
@@ -80,6 +82,8 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
     'oidc.user_info_endpoint': defaultValues['oidc.user_info_endpoint'] ?? '',
     TelegramBotToken: defaultValues.TelegramBotToken ?? '',
     TelegramBotName: defaultValues.TelegramBotName ?? '',
+    TelegramClientId: defaultValues.TelegramClientId ?? '',
+    TelegramClientSecret: defaultValues.TelegramClientSecret ?? '',
     LinuxDOClientId: defaultValues.LinuxDOClientId ?? '',
     LinuxDOClientSecret: defaultValues.LinuxDOClientSecret ?? '',
     LinuxDOMinimumTrustLevel: defaultValues.LinuxDOMinimumTrustLevel ?? '',
@@ -171,10 +175,9 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
       return
     }
 
-    // Save all changed fields
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
-    }
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value: value ?? '' }))
+    )
 
     // Reset form dirty state after successful save
     form.reset(finalData)
@@ -602,6 +605,50 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
                     </FormItem>
                   )}
                 />
+
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'Telegram OpenID Connect: register the redirect URI {{uri}} for your bot in BotFather, then fill in its Client ID and Client Secret. Once both are set, sign-in and binding use the new authorization page and the legacy login widget stops working.',
+                    {
+                      uri:
+                        (typeof window !== 'undefined'
+                          ? window.location.origin
+                          : '') + '/oauth/telegram',
+                    }
+                  )}
+                </p>
+
+                <FormField
+                  control={form.control}
+                  name='TelegramClientId'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Client ID')}</FormLabel>
+                      <FormControl>
+                        <Input autoComplete='off' {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='TelegramClientSecret'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Client Secret')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='password'
+                          autoComplete='new-password'
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </TabsContent>
 
               <TabsContent value='linuxdo' className='space-y-4'>
@@ -765,14 +812,14 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
             </Tabs>
 
             <div className='flex gap-2'>
-              <Button type='submit' disabled={updateOption.isPending}>
-                {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+              <Button type='submit' disabled={updateOptions.isPending}>
+                {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
               </Button>
               <Button
                 type='button'
                 variant='outline'
                 onClick={handleReset}
-                disabled={!form.formState.isDirty || updateOption.isPending}
+                disabled={!form.formState.isDirty || updateOptions.isPending}
               >
                 <RotateCcw className='mr-2 h-4 w-4' />
                 {t('Reset')}

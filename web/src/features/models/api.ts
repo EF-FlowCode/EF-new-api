@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import type {
   GetModelsParams,
   GetModelsResponse,
@@ -57,7 +57,11 @@ export async function getModel(id: number): Promise<GetModelResponse> {
 export async function createModel(
   data: Partial<Model>
 ): Promise<{ success: boolean; message?: string; data?: Model }> {
-  const res = await api.post('/api/models/', data)
+  const res = await api.post(
+    '/api/models/',
+    data,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -67,7 +71,7 @@ export async function createModel(
 export async function updateModel(
   data: Partial<Model> & { id: number }
 ): Promise<{ success: boolean; message?: string; data?: Model }> {
-  const res = await api.put('/api/models/', data)
+  const res = await api.put('/api/models/', data, CALLER_HANDLED_REQUEST_CONFIG)
   return res.data
 }
 
@@ -78,7 +82,11 @@ export async function updateModelStatus(
   id: number,
   status: number
 ): Promise<{ success: boolean; message?: string }> {
-  const res = await api.put('/api/models/?status_only=true', { id, status })
+  const res = await api.put(
+    '/api/models/?status_only=true',
+    { id, status },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -88,7 +96,10 @@ export async function updateModelStatus(
 export async function deleteModel(
   id: number
 ): Promise<{ success: boolean; message?: string }> {
-  const res = await api.delete(`/api/models/${id}`)
+  const res = await api.delete(
+    `/api/models/${id}`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -135,7 +146,11 @@ export async function getVendor(id: number): Promise<GetVendorResponse> {
 export async function createVendor(
   data: Partial<Vendor>
 ): Promise<{ success: boolean; message?: string; data?: Vendor }> {
-  const res = await api.post('/api/vendors/', data)
+  const res = await api.post(
+    '/api/vendors/',
+    data,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -145,7 +160,11 @@ export async function createVendor(
 export async function updateVendor(
   data: Partial<Vendor> & { id: number }
 ): Promise<{ success: boolean; message?: string; data?: Vendor }> {
-  const res = await api.put('/api/vendors/', data)
+  const res = await api.put(
+    '/api/vendors/',
+    data,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -155,7 +174,10 @@ export async function updateVendor(
 export async function deleteVendor(
   id: number
 ): Promise<{ success: boolean; message?: string }> {
-  const res = await api.delete(`/api/vendors/${id}`)
+  const res = await api.delete(
+    `/api/vendors/${id}`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -171,7 +193,11 @@ export async function syncUpstream(params?: {
   source?: SyncSource
   overwrite?: SyncOverwritePayload[]
 }): Promise<SyncUpstreamResponse> {
-  const res = await api.post('/api/models/sync_upstream', params)
+  const res = await api.post(
+    '/api/models/sync_upstream',
+    params,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -193,7 +219,7 @@ export async function previewUpstreamDiff(params?: {
   const url = queryString
     ? `/api/models/sync_upstream/preview?${queryString}`
     : '/api/models/sync_upstream/preview'
-  const res = await api.get(url)
+  const res = await api.get(url, CALLER_HANDLED_REQUEST_CONFIG)
   return res.data
 }
 
@@ -241,7 +267,11 @@ export async function createPrefillGroup(data: {
   items: string | string[]
   description?: string
 }): Promise<{ success: boolean; message?: string }> {
-  const res = await api.post('/api/prefill_group', data)
+  const res = await api.post(
+    '/api/prefill_group',
+    data,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -255,7 +285,11 @@ export async function updatePrefillGroup(data: {
   items?: string | string[]
   description?: string
 }): Promise<{ success: boolean; message?: string }> {
-  const res = await api.put('/api/prefill_group', data)
+  const res = await api.put(
+    '/api/prefill_group',
+    data,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -265,7 +299,10 @@ export async function updatePrefillGroup(data: {
 export async function deletePrefillGroup(
   id: number
 ): Promise<{ success: boolean; message?: string }> {
-  const res = await api.delete(`/api/prefill_group/${id}`)
+  const res = await api.delete(
+    `/api/prefill_group/${id}`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -277,7 +314,10 @@ export async function deletePrefillGroup(
  * Get deployment settings (io.net config)
  */
 export async function getDeploymentSettings(): Promise<DeploymentSettingsResponse> {
-  const res = await api.get('/api/deployments/settings')
+  const res = await api.get(
+    '/api/deployments/settings',
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -288,9 +328,10 @@ export async function testDeploymentConnection(): Promise<{
   success: boolean
   message?: string
 }> {
-  const config = { skipErrorHandler: true } as unknown as Parameters<
-    typeof api.post
-  >[2]
+  const config = {
+    ...CALLER_HANDLED_REQUEST_CONFIG,
+    skipErrorHandler: true,
+  }
   const res = await api.post(
     '/api/deployments/settings/test-connection',
     {},
@@ -312,9 +353,10 @@ export async function testDeploymentConnectionWithKey(
     typeof apiKey === 'string' && apiKey.trim()
       ? { api_key: apiKey.trim() }
       : {}
-  const config = { skipErrorHandler: true } as unknown as Parameters<
-    typeof api.post
-  >[2]
+  const config = {
+    ...CALLER_HANDLED_REQUEST_CONFIG,
+    skipErrorHandler: true,
+  }
   const res = await api.post(
     '/api/deployments/settings/test-connection',
     payload,
@@ -403,7 +445,10 @@ export async function getDeploymentContainerDetails(
 export async function deleteDeployment(
   id: string | number
 ): Promise<{ success: boolean; message?: string }> {
-  const res = await api.delete(`/api/deployments/${id}`)
+  const res = await api.delete(
+    `/api/deployments/${id}`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -534,7 +579,11 @@ export async function createDeployment(data: {
   message?: string
   data?: Record<string, unknown>
 }> {
-  const res = await api.post('/api/deployments/', data)
+  const res = await api.post(
+    '/api/deployments/',
+    data,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -563,7 +612,11 @@ export async function updateDeployment(
   if (data.traffic_port === null) {
     delete payload.traffic_port
   }
-  const res = await api.put(`/api/deployments/${id}`, payload)
+  const res = await api.put(
+    `/api/deployments/${id}`,
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -578,7 +631,11 @@ export async function updateDeploymentName(
   message?: string
   data?: Record<string, unknown>
 }> {
-  const res = await api.put(`/api/deployments/${id}/name`, { name })
+  const res = await api.put(
+    `/api/deployments/${id}/name`,
+    { name },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -593,9 +650,13 @@ export async function extendDeployment(
   message?: string
   data?: Record<string, unknown>
 }> {
-  const res = await api.post(`/api/deployments/${id}/extend`, {
-    duration_hours: durationHours,
-  })
+  const res = await api.post(
+    `/api/deployments/${id}/extend`,
+    {
+      duration_hours: durationHours,
+    },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 

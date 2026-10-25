@@ -22,16 +22,17 @@
 
     <meta name="theme-color" content="#efe7d8" />
 
-    <!-- Atelier typography -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Runs before external bundles; recovery must not depend on their download. -->
+    <script>
+      <%= resourceRecoveryScript %>
+    </script>
   </head>
 
   <body>
+    <noscript
+      >请启用 JavaScript 以使用本应用。Please enable JavaScript to use this
+      app.</noscript
+    >
     <div id="root"></div>
   </body>
 </html>

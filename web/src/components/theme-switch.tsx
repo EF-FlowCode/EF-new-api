@@ -37,7 +37,7 @@ export function ThemeSwitch() {
             {theme === meta.value && (
               <span
                 aria-hidden
-                className='ms-auto inline-flex h-[18px] w-[18px] items-center justify-center rounded-[4px] text-[11px] font-bold leading-none'
+                className='ms-auto inline-flex h-[18px] w-[18px] items-center justify-center rounded-[4px] text-[11px] leading-none font-bold'
                 style={{
                   background: 'var(--seal)',
                   color: '#f6efe1',

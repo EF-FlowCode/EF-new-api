@@ -3,15 +3,15 @@ package openai
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/relay/helper"
+	relaydto "eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/samber/lo"
 
@@ -92,13 +92,14 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
-	switch relayMode {
+func processTokenData(info *relaycommon.RelayInfo, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+	switch info.RelayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return err
 		}
+		info.ObserveResponseModel(streamResponse.Model)
 		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse
@@ -205,9 +206,9 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, responseSt
 	}
 }
 
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) {
+func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) error {
 	if data == "" {
-		return
+		return nil
 	}
-	_ = helper.ResponseChunkData(c, streamResponse, data)
+	return helper.ResponseChunkData(c, streamResponse, data)
 }

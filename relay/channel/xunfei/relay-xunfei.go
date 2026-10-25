@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -165,7 +165,7 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
 	}
 	var usage dto.Usage
-	var content string
+	var content strings.Builder
 	var xunfeiResponse XunfeiChatResponse
 	stop := false
 	for !stop {
@@ -174,7 +174,7 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 			if len(xunfeiResponse.Payload.Choices.Text) == 0 {
 				continue
 			}
-			content += xunfeiResponse.Payload.Choices.Text[0].Content
+			content.WriteString(xunfeiResponse.Payload.Choices.Text[0].Content)
 			usage.PromptTokens += xunfeiResponse.Payload.Usage.Text.PromptTokens
 			usage.CompletionTokens += xunfeiResponse.Payload.Usage.Text.CompletionTokens
 			usage.TotalTokens += xunfeiResponse.Payload.Usage.Text.TotalTokens
@@ -188,7 +188,7 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 			},
 		}
 	}
-	xunfeiResponse.Payload.Choices.Text[0].Content = content
+	xunfeiResponse.Payload.Choices.Text[0].Content = content.String()
 
 	response := responseXunfei2OpenAI(&xunfeiResponse)
 	jsonResponse, err := json.Marshal(response)

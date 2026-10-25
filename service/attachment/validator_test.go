@@ -4,34 +4,39 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/setting"
 )
 
 // 测试辅助：临时改 setting 包级变量，测试结束自动回滚。
 func withAttachmentSettings(t *testing.T, enable bool, maxSize int64, exts, mimes string) {
 	t.Helper()
-	prevEnabled := setting.TicketAttachmentEnabled
-	prevSize := setting.TicketAttachmentMaxSize
-	prevExts := setting.TicketAttachmentAllowedExts
-	prevMimes := setting.TicketAttachmentAllowedMimes
-	setting.TicketAttachmentEnabled = enable
+	prev := setting.GetTicketAttachmentSettings()
+	values := map[string]string{
+		"TicketAttachmentEnabled": strconv.FormatBool(enable),
+	}
 	if maxSize > 0 {
-		setting.TicketAttachmentMaxSize = maxSize
+		values["TicketAttachmentMaxSize"] = strconv.FormatInt(maxSize, 10)
 	}
 	if exts != "" {
-		setting.TicketAttachmentAllowedExts = exts
+		values["TicketAttachmentAllowedExts"] = exts
 	}
 	if mimes != "" {
-		setting.TicketAttachmentAllowedMimes = mimes
+		values["TicketAttachmentAllowedMimes"] = mimes
+	}
+	if err := setting.UpdateTicketAttachmentSettings(values); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		setting.TicketAttachmentEnabled = prevEnabled
-		setting.TicketAttachmentMaxSize = prevSize
-		setting.TicketAttachmentAllowedExts = prevExts
-		setting.TicketAttachmentAllowedMimes = prevMimes
+		_ = setting.UpdateTicketAttachmentSettings(map[string]string{
+			"TicketAttachmentEnabled":      strconv.FormatBool(prev.Enabled),
+			"TicketAttachmentMaxSize":      strconv.FormatInt(prev.MaxSize, 10),
+			"TicketAttachmentAllowedExts":  prev.AllowedExts,
+			"TicketAttachmentAllowedMimes": prev.AllowedMimes,
+		})
 	})
 }
 
@@ -247,4 +252,39 @@ func TestSameMimeFamily(t *testing.T) {
 		t.Errorf("DetectMime(nil) returned empty; expected fallback type")
 	}
 	_ = bytes.NewReader // keep import
+}
+
+func TestValidate_RejectsHTMLDisguisedAsText(t *testing.T) {
+	withAttachmentSettings(t, true, 10*1024*1024, "txt,xml", "text/*,application/xml")
+	cases := []struct {
+		name, file, declared string
+		head                 []byte
+	}{
+		{"sniffed-html", "note.txt", "", []byte("<html><body><script>alert(1)</script></body></html>")},
+		{"declared-html", "note.txt", "text/html", []byte("hello")},
+		{"script-in-plain-text", "note.txt", "text/plain", []byte("hi\n<script>fetch('/api/user/self')</script>")},
+		{"xhtml-in-xml", "data.xml", "application/xml", []byte(`<?xml version="1.0"?><a:script xmlns:a="http://www.w3.org/1999/xhtml">alert(1)</a:script>`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Validate(c.file, c.declared, int64(len(c.head)), c.head)
+			if !errors.Is(err, ErrAttachmentActiveContent) {
+				t.Fatalf("want ErrAttachmentActiveContent, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidate_FinalMimeFollowsSniffedContent(t *testing.T) {
+	withAttachmentSettings(t, true, 10*1024*1024, "txt,json,png", "text/*,application/json,image/*")
+	png := []byte("\x89PNG\r\n\x1a\nabcdef")
+	res, err := Validate("a.png", "image/jpeg", int64(len(png)), png)
+	if err != nil || res.DetectedMime != "image/png" {
+		t.Fatalf("png declared as jpeg: res=%+v err=%v", res, err)
+	}
+	js := []byte(`{"a":1}`)
+	res, err = Validate("a.json", "application/json", int64(len(js)), js)
+	if err != nil || res.DetectedMime != "application/json" {
+		t.Fatalf("json keeps specific declared text type: res=%+v err=%v", res, err)
+	}
 }

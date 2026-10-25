@@ -1,4 +1,5 @@
 import { useState, useMemo, memo, useCallback, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   type ColumnDef,
   type PaginationState,
@@ -13,6 +14,7 @@ import {
 } from '@tanstack/react-table'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -28,12 +30,28 @@ import {
   DataTablePagination,
 } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
+import { getPricing } from '@/features/pricing/api'
+import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
 import {
-  combineBillingExpr,
-  splitBillingExprAndRequestRules,
-} from '@/features/pricing/lib/billing-expr'
+  parseFlatTokenPriceExpr,
+  ratioToFlatTokenPrices,
+} from '@/features/pricing/lib/flat-token-price'
+import type { PricingModel } from '@/features/pricing/types'
+import { useSystemOptions } from '../hooks/use-system-options'
+import { useTaskPricingUsage } from '../hooks/use-task-pricing-usage'
+import { useUpdateOption } from '../hooks/use-update-option'
 import { safeJsonParse } from '../utils/json-parser'
+import { updateModelPricingOptions } from './model-pricing-options'
 import { ModelRatioDialog, type ModelRatioData } from './model-ratio-dialog'
+import {
+  applyTaskRuleChange,
+  modelTaskPricingFlags,
+  parseTaskExpressions,
+  pluginTaskPricing,
+  taskPricingOverview,
+  TASK_EXPRESSIONS_OPTION_KEY,
+  type TaskPriceRule,
+} from './task-pricing-sources'
 
 type ModelRatioVisualEditorProps = {
   modelPrice: string
@@ -44,10 +62,16 @@ type ModelRatioVisualEditorProps = {
   imageRatio: string
   audioRatio: string
   audioCompletionRatio: string
+  batchInputRatio: string
   billingMode: string
   billingExpr: string
   candidateModelNames?: string[]
   filterMode?: 'all' | 'unset'
+  /** Unsaved model price edits that an immediate plugin-price save would drop. */
+  hasPendingChanges?: boolean
+  /** Opens this model's dialog once per nonce. */
+  openRequest?: { model: string; nonce: number }
+  onOpenRequestHandled?: () => void
   onChange: (field: string, value: string) => void
 }
 
@@ -61,17 +85,51 @@ type ModelRow = {
   imageRatio?: string
   audioRatio?: string
   audioCompletionRatio?: string
+  knowledgeInput?: string
+  knowledgeImage?: string
+  knowledgeBatchInput?: string
+  knowledge?: PricingModel['knowledge']
   billingMode?: string
   billingExpr?: string
   requestRuleExpr?: string
+  storedBillingMode?: string
+  flatPriceSummary?: string
   hasConflict: boolean
 }
 
-const STORAGE_KEY = 'model-ratio-column-visibility'
+const STORAGE_KEY = 'model-price-column-visibility-v2'
 
 const formatValue = (value?: string) => {
   if (!value || value === '') return '—'
   return value
+}
+
+function toEditData(model: ModelRow): ModelRatioData {
+  return {
+    name: model.name,
+    price: model.price,
+    ratio: model.ratio,
+    cacheRatio: model.cacheRatio,
+    createCacheRatio: model.createCacheRatio,
+    completionRatio: model.completionRatio,
+    imageRatio: model.imageRatio,
+    audioRatio: model.audioRatio,
+    audioCompletionRatio: model.audioCompletionRatio,
+    knowledgeInput: model.knowledgeInput,
+    knowledgeImage: model.knowledgeImage,
+    knowledgeBatchInput: model.knowledgeBatchInput,
+    knowledge: model.knowledge,
+    billingMode:
+      model.billingMode === 'tiered_expr' ||
+      model.billingMode === 'flat_price' ||
+      model.billingMode === 'audio_seconds'
+        ? model.billingMode
+        : model.price && model.price !== ''
+          ? 'per-request'
+          : 'per-token',
+    billingExpr: model.billingExpr,
+    requestRuleExpr: model.requestRuleExpr,
+  }
 }
 
 export const ModelRatioVisualEditor = memo(
@@ -84,13 +142,24 @@ export const ModelRatioVisualEditor = memo(
     imageRatio,
     audioRatio,
     audioCompletionRatio,
+    batchInputRatio,
     billingMode,
     billingExpr,
     candidateModelNames,
     filterMode = 'all',
+    hasPendingChanges = false,
+    openRequest,
+    onOpenRequestHandled,
     onChange,
   }: ModelRatioVisualEditorProps) {
     const { t } = useTranslation()
+    const pricingQuery = useQuery({
+      queryKey: ['pricing'],
+      queryFn: () => getPricing(),
+    })
+    const taskUsageQuery = useTaskPricingUsage()
+    const { mutateAsync: updateOptionAsync, isPending: taskSaving } =
+      useUpdateOption()
     const [dialogOpen, setDialogOpen] = useState(false)
     const [editData, setEditData] = useState<ModelRatioData | null>(null)
     const [sorting, setSorting] = useState<SortingState>([])
@@ -136,7 +205,61 @@ export const ModelRatioVisualEditor = memo(
       localStorage.setItem(STORAGE_KEY, JSON.stringify(columnVisibility))
     }, [columnVisibility])
 
+    const { data: systemOptions } = useSystemOptions()
+    const taskRulesRaw = systemOptions?.data?.find(
+      (option) => option.key === TASK_EXPRESSIONS_OPTION_KEY
+    )?.value
+    const taskRules = useMemo(
+      () => parseTaskExpressions(taskRulesRaw) ?? {},
+      [taskRulesRaw]
+    )
+    const taskModels = useMemo(
+      () =>
+        new Map(
+          (taskUsageQuery.data?.success ? taskUsageQuery.data.data : []).map(
+            (model) => [model.model_name, model]
+          )
+        ),
+      [taskUsageQuery.data]
+    )
+    const taskFlags = useMemo(
+      () =>
+        modelTaskPricingFlags(
+          taskPricingOverview([...taskModels.values()], taskRules)
+        ),
+      [taskModels, taskRules]
+    )
+    // Same write as the former task price page: re-read the stored option,
+    // change one plugin rule and write the whole map back.
+    const saveTaskRule = useCallback(
+      async (
+        model: string,
+        plugin: string,
+        expression: string | TaskPriceRule | null
+      ) => {
+        const current = parseTaskExpressions(taskRulesRaw)
+        if (!current) {
+          toast.error(t('Stored plugin task prices are not valid JSON'))
+          throw new Error('invalid task_expressions')
+        }
+        await updateOptionAsync({
+          key: TASK_EXPRESSIONS_OPTION_KEY,
+          value: JSON.stringify(
+            applyTaskRuleChange(current, model, plugin, expression)
+          ),
+        })
+      },
+      [taskRulesRaw, updateOptionAsync, t]
+    )
+    const completionMeta =
+      systemOptions?.data?.find(
+        (option) => option.key === 'CompletionRatioMeta'
+      )?.value || '{}'
     const models = useMemo(() => {
+      const effectiveCompletions = JSON.parse(completionMeta) as Record<
+        string,
+        { ratio: number }
+      >
       const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
         fallback: {},
         context: 'model prices',
@@ -183,11 +306,18 @@ export const ModelRatioVisualEditor = memo(
           context: 'billing expression',
         }
       )
+      const batchInputMap = safeJsonParse<Record<string, number>>(
+        batchInputRatio,
+        { fallback: {}, context: 'batch input ratios' }
+      )
 
       const modelNames =
         filterMode === 'unset'
           ? new Set(candidateModelNames ?? [])
           : new Set([
+              ...(pricingQuery.data?.data ?? [])
+                .filter((model) => model.knowledge)
+                .map((model) => model.model_name),
               ...Object.keys(priceMap),
               ...Object.keys(ratioMap),
               ...Object.keys(cacheMap),
@@ -198,31 +328,63 @@ export const ModelRatioVisualEditor = memo(
               ...Object.keys(audioCompletionMap),
               ...Object.keys(billingModeMap),
               ...Object.keys(billingExprMap),
+              ...Object.keys(batchInputMap),
             ])
+
+      const knowledgeModels = new Map(
+        (pricingQuery.data?.data ?? [])
+          .filter((model) => model.knowledge)
+          .map((model) => [model.model_name, model.knowledge])
+      )
 
       const modelData: ModelRow[] = Array.from(modelNames).map((name) => {
         const price = priceMap[name]?.toString() || ''
         const ratio = ratioMap[name]?.toString() || ''
         const cache = cacheMap[name]?.toString() || ''
         const createCache = createCacheMap[name]?.toString() || ''
-        const completion = completionMap[name]?.toString() || ''
+        const completion =
+          (ratio !== ''
+            ? effectiveCompletions[name]?.ratio
+            : undefined
+          )?.toString() ||
+          completionMap[name]?.toString() ||
+          ''
         const image = imageMap[name]?.toString() || ''
         const audio = audioMap[name]?.toString() || ''
         const audioCompletion = audioCompletionMap[name]?.toString() || ''
+        const knowledge = knowledgeModels.get(name)
+        const knowledgeInput =
+          ratioMap[name] !== undefined ? ratioMap[name] * 2 : undefined
+        const knowledgeImage =
+          knowledgeInput !== undefined && imageMap[name] !== undefined
+            ? knowledgeInput * imageMap[name]
+            : undefined
+        const knowledgeBatchInput =
+          batchInputMap[name] !== undefined
+            ? batchInputMap[name] * 2
+            : undefined
 
         const modeForModel = billingModeMap[name]
-        if (modeForModel === 'tiered_expr') {
+        if (modeForModel === 'tiered_expr' || modeForModel === 'flat_price') {
           // Tiered_expr models may also retain ratio/price values as fallback
           // during multi-instance sync delays. We preserve them in the row so
           // the edit dialog round-trip and the next save don't drop them.
           const fullExpr = billingExprMap[name] || ''
           const { billingExpr: pureExpr, requestRuleExpr } =
-            splitBillingExprAndRequestRules(fullExpr)
+            modeForModel === 'tiered_expr'
+              ? splitBillingExprAndRequestRules(fullExpr)
+              : { billingExpr: fullExpr, requestRuleExpr: '' }
+          const flatPrices = parseFlatTokenPriceExpr(fullExpr)
+          const effectiveMode = flatPrices ? 'flat_price' : modeForModel
           return {
             name,
-            billingMode: 'tiered_expr',
+            billingMode: effectiveMode,
+            storedBillingMode: modeForModel,
             billingExpr: pureExpr,
             requestRuleExpr,
+            flatPriceSummary: flatPrices
+              ? `$${flatPrices.inputPrice} / $${flatPrices.outputPrice}`
+              : '',
             price,
             ratio,
             cacheRatio: cache,
@@ -231,6 +393,10 @@ export const ModelRatioVisualEditor = memo(
             imageRatio: image,
             audioRatio: audio,
             audioCompletionRatio: audioCompletion,
+            knowledgeInput: knowledgeInput?.toString() || '',
+            knowledgeImage: knowledgeImage?.toString() || '',
+            knowledgeBatchInput: knowledgeBatchInput?.toString() || '',
+            knowledge,
             hasConflict: false,
           }
         }
@@ -245,7 +411,16 @@ export const ModelRatioVisualEditor = memo(
           imageRatio: image,
           audioRatio: audio,
           audioCompletionRatio: audioCompletion,
-          billingMode: price !== '' ? 'per-request' : 'per-token',
+          knowledgeInput: knowledgeInput?.toString() || '',
+          knowledgeImage: knowledgeImage?.toString() || '',
+          knowledgeBatchInput: knowledgeBatchInput?.toString() || '',
+          knowledge,
+          billingMode:
+            modeForModel === 'audio_seconds'
+              ? 'audio_seconds'
+              : price !== ''
+                ? 'per-request'
+                : 'per-token',
           hasConflict:
             price !== '' &&
             (ratio !== '' ||
@@ -263,8 +438,10 @@ export const ModelRatioVisualEditor = memo(
           (model) =>
             filterMode !== 'unset' ||
             (model.billingMode !== 'tiered_expr' &&
+              model.billingMode !== 'flat_price' &&
               !model.price &&
-              !model.ratio)
+              !model.ratio &&
+              !Object.hasOwn(ratioMap, model.name))
         )
         .sort((a, b) => a.name.localeCompare(b.name))
     }, [
@@ -278,32 +455,31 @@ export const ModelRatioVisualEditor = memo(
       audioCompletionRatio,
       billingMode,
       billingExpr,
+      batchInputRatio,
+      pricingQuery.data,
+      completionMeta,
       candidateModelNames,
       filterMode,
     ])
 
     const handleEdit = useCallback((model: ModelRow) => {
-      setEditData({
-        name: model.name,
-        price: model.price,
-        ratio: model.ratio,
-        cacheRatio: model.cacheRatio,
-        createCacheRatio: model.createCacheRatio,
-        completionRatio: model.completionRatio,
-        imageRatio: model.imageRatio,
-        audioRatio: model.audioRatio,
-        audioCompletionRatio: model.audioCompletionRatio,
-        billingMode:
-          model.billingMode === 'tiered_expr'
-            ? 'tiered_expr'
-            : model.price && model.price !== ''
-              ? 'per-request'
-              : 'per-token',
-        billingExpr: model.billingExpr,
-        requestRuleExpr: model.requestRuleExpr,
-      })
+      setEditData(toEditData(model))
       setDialogOpen(true)
     }, [])
+
+    // Requests from the task price overview: a model without a price yet
+    // opens with only its name, so the admin can price it here.
+    const [handledRequest, setHandledRequest] = useState<number>()
+    if (openRequest && openRequest.nonce !== handledRequest) {
+      setHandledRequest(openRequest.nonce)
+      const row = models.find((model) => model.name === openRequest.model)
+      setEditData(row ? toEditData(row) : { name: openRequest.model })
+      setDialogOpen(true)
+    }
+    useEffect(() => {
+      if (openRequest && openRequest.nonce === handledRequest)
+        onOpenRequestHandled?.()
+    }, [openRequest, handledRequest, onOpenRequestHandled])
 
     const handleAdd = useCallback(() => {
       setEditData(null)
@@ -352,6 +528,10 @@ export const ModelRatioVisualEditor = memo(
           billingExpr,
           { fallback: {}, silent: true }
         )
+        const batchInputMap = safeJsonParse<Record<string, number>>(
+          batchInputRatio,
+          { fallback: {}, silent: true }
+        )
 
         delete priceMap[name]
         delete ratioMap[name]
@@ -363,6 +543,7 @@ export const ModelRatioVisualEditor = memo(
         delete audioCompletionMap[name]
         delete billingModeMap[name]
         delete billingExprMap[name]
+        delete batchInputMap[name]
 
         onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
         onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
@@ -370,6 +551,7 @@ export const ModelRatioVisualEditor = memo(
         onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
         onChange('CompletionRatio', JSON.stringify(completionMap, null, 2))
         onChange('ImageRatio', JSON.stringify(imageMap, null, 2))
+        onChange('BatchInputRatio', JSON.stringify(batchInputMap, null, 2))
         onChange('AudioRatio', JSON.stringify(audioMap, null, 2))
         onChange(
           'AudioCompletionRatio',
@@ -395,19 +577,12 @@ export const ModelRatioVisualEditor = memo(
         audioCompletionRatio,
         billingMode,
         billingExpr,
+        batchInputRatio,
         onChange,
       ]
     )
 
     const columns = useMemo<ColumnDef<ModelRow>[]>(() => {
-      // Ratio fields are not the primary pricing when a per-request fixed
-      // price is set, or when the model is in tiered_expr mode (the
-      // expression is primary; ratios are fallback during sync delays).
-      const isFallbackRow = (row: ModelRow) =>
-        row.billingMode === 'tiered_expr' || !!row.price
-      const fallbackClass = (row: ModelRow) =>
-        isFallbackRow(row) ? 'text-muted-foreground' : ''
-
       return [
         {
           accessorKey: 'name',
@@ -424,9 +599,42 @@ export const ModelRatioVisualEditor = memo(
                   copyable={false}
                 />
               )}
+              {(row.original.billingMode === 'flat_price' ||
+                row.original.billingMode === 'per-token') && (
+                <StatusBadge
+                  label={t('Fixed token price')}
+                  variant='success'
+                  copyable={false}
+                />
+              )}
+              {row.original.knowledge && (
+                <StatusBadge
+                  label={t(
+                    row.original.knowledge.kind === 'rerank'
+                      ? 'Rerank'
+                      : 'Embedding'
+                  )}
+                  variant='info'
+                  copyable={false}
+                />
+              )}
               {row.original.hasConflict && (
                 <StatusBadge
                   label={t('Conflict')}
+                  variant='danger'
+                  copyable={false}
+                />
+              )}
+              {taskFlags[row.original.name]?.override && (
+                <StatusBadge
+                  label={t('Plugin-specific pricing')}
+                  variant='info'
+                  copyable={false}
+                />
+              )}
+              {taskFlags[row.original.name]?.needsPrice && (
+                <StatusBadge
+                  label={t('Plugin task needs a price')}
                   variant='danger'
                   copyable={false}
                 />
@@ -448,95 +656,52 @@ export const ModelRatioVisualEditor = memo(
                   : ''
               }
             >
-              {formatValue(row.getValue('price'))}
+              {row.original.billingMode === 'flat_price'
+                ? formatValue(row.original.flatPriceSummary)
+                : formatValue(row.getValue('price'))}
             </span>
           ),
           meta: { label: 'Fixed price' },
         },
-        {
-          accessorKey: 'ratio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Ratio')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('ratio'))}
-            </span>
-          ),
-          meta: { label: 'Ratio' },
-        },
-        {
-          accessorKey: 'completionRatio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Completion')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('completionRatio'))}
-            </span>
-          ),
-          meta: { label: 'Completion' },
-        },
-        {
-          accessorKey: 'cacheRatio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Cache')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('cacheRatio'))}
-            </span>
-          ),
-          meta: { label: 'Cache' },
-        },
-        {
-          accessorKey: 'createCacheRatio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Create cache')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('createCacheRatio'))}
-            </span>
-          ),
-          meta: { label: 'Create cache' },
-        },
-        {
-          accessorKey: 'imageRatio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Image')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('imageRatio'))}
-            </span>
-          ),
-          meta: { label: 'Image' },
-        },
-        {
-          accessorKey: 'audioRatio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Audio')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('audioRatio'))}
-            </span>
-          ),
-          meta: { label: 'Audio' },
-        },
-        {
-          accessorKey: 'audioCompletionRatio',
-          header: ({ column }) => (
-            <DataTableColumnHeader column={column} title={t('Audio comp.')} />
-          ),
-          cell: ({ row }) => (
-            <span className={fallbackClass(row.original)}>
-              {formatValue(row.getValue('audioCompletionRatio'))}
-            </span>
-          ),
-          meta: { label: 'Audio comp.' },
-        },
+        ...(
+          [
+            ['inputPrice', 'Input price'],
+            ['outputPrice', 'Output price'],
+            ['cacheReadPrice', 'Cache read price'],
+            ['cacheCreatePrice', 'Cache write price (5m)'],
+            ['cacheCreate1hPrice', 'Cache write price (1h)'],
+            ['imageInputPrice', 'Image input price'],
+            ['imageOutputPrice', 'Image output price'],
+            ['audioInputPrice', 'Audio input price'],
+            ['audioOutputPrice', 'Audio output price'],
+            ['batchInputPrice', 'Batch input price'],
+          ] as const
+        ).map(
+          ([field, label]): ColumnDef<ModelRow> => ({
+            id: field,
+            header: ({ column }) => (
+              <DataTableColumnHeader column={column} title={t(label)} />
+            ),
+            cell: ({ row }) => {
+              const model = row.original
+              if (
+                model.billingMode === 'per-request' ||
+                model.billingMode === 'tiered_expr'
+              )
+                return '—'
+              const prices =
+                model.billingMode === 'flat_price'
+                  ? parseFlatTokenPriceExpr(model.billingExpr || '')
+                  : ratioToFlatTokenPrices(model)
+              return formatValue(
+                field === 'batchInputPrice'
+                  ? model.knowledgeBatchInput
+                  : prices?.[field]
+              )
+            },
+            meta: { label },
+          })
+        ),
         {
           id: 'actions',
           cell: ({ row }) => (
@@ -561,7 +726,7 @@ export const ModelRatioVisualEditor = memo(
           enableHiding: false,
         },
       ]
-    }, [handleEdit, handleDelete, filterMode, t])
+    }, [handleEdit, handleDelete, filterMode, taskFlags, t])
 
     const table = useReactTable({
       data: models,
@@ -587,129 +752,35 @@ export const ModelRatioVisualEditor = memo(
 
     const handleSave = useCallback(
       (data: ModelRatioData) => {
-        const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
-          fallback: {},
-          silent: true,
-        })
-        const ratioMap = safeJsonParse<Record<string, number>>(modelRatio, {
-          fallback: {},
-          silent: true,
-        })
-        const cacheMap = safeJsonParse<Record<string, number>>(cacheRatio, {
-          fallback: {},
-          silent: true,
-        })
-        const createCacheMap = safeJsonParse<Record<string, number>>(
-          createCacheRatio,
-          { fallback: {}, silent: true }
+        const updates = updateModelPricingOptions(
+          {
+            ModelPrice: modelPrice,
+            ModelRatio: modelRatio,
+            CompletionRatio: completionRatio,
+            CacheRatio: cacheRatio,
+            CreateCacheRatio: createCacheRatio,
+            ImageRatio: imageRatio,
+            AudioRatio: audioRatio,
+            AudioCompletionRatio: audioCompletionRatio,
+            BatchInputRatio: batchInputRatio,
+            'billing_setting.billing_mode': billingMode,
+            'billing_setting.billing_expr': billingExpr,
+          },
+          data.name,
+          data
         )
-        const completionMap = safeJsonParse<Record<string, number>>(
-          completionRatio,
-          { fallback: {}, silent: true }
-        )
-        const imageMap = safeJsonParse<Record<string, number>>(imageRatio, {
-          fallback: {},
-          silent: true,
-        })
-        const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
-          fallback: {},
-          silent: true,
-        })
-        const audioCompletionMap = safeJsonParse<Record<string, number>>(
-          audioCompletionRatio,
-          { fallback: {}, silent: true }
-        )
-        const billingModeMap = safeJsonParse<Record<string, string>>(
-          billingMode,
-          { fallback: {}, silent: true }
-        )
-        const billingExprMap = safeJsonParse<Record<string, string>>(
-          billingExpr,
-          { fallback: {}, silent: true }
-        )
-
-        delete priceMap[data.name]
-        delete ratioMap[data.name]
-        delete cacheMap[data.name]
-        delete createCacheMap[data.name]
-        delete completionMap[data.name]
-        delete imageMap[data.name]
-        delete audioMap[data.name]
-        delete audioCompletionMap[data.name]
-        delete billingModeMap[data.name]
-        delete billingExprMap[data.name]
-
-        const setIfPresent = (
-          target: Record<string, number>,
-          value: string | undefined
-        ) => {
-          if (!value || value === '') return
-          const parsed = parseFloat(value)
-          if (Number.isFinite(parsed)) target[data.name] = parsed
-        }
-
-        if (data.billingMode === 'tiered_expr') {
-          const combined = combineBillingExpr(
-            data.billingExpr || '',
-            data.requestRuleExpr || ''
-          )
-          if (combined) {
-            billingModeMap[data.name] = 'tiered_expr'
-            billingExprMap[data.name] = combined
-          }
-          // Always serialize ratio/price values for tiered_expr models so they
-          // serve as fallback during multi-instance sync delays. The backend's
-          // ModelPriceHelper checks billing_mode first, so these values are
-          // only consulted when billing_setting hasn't propagated yet.
-          setIfPresent(priceMap, data.price)
-          setIfPresent(ratioMap, data.ratio)
-          setIfPresent(cacheMap, data.cacheRatio)
-          setIfPresent(createCacheMap, data.createCacheRatio)
-          setIfPresent(completionMap, data.completionRatio)
-          setIfPresent(imageMap, data.imageRatio)
-          setIfPresent(audioMap, data.audioRatio)
-          setIfPresent(audioCompletionMap, data.audioCompletionRatio)
-        } else if (data.price && data.price !== '') {
-          setIfPresent(priceMap, data.price)
-        } else {
-          setIfPresent(ratioMap, data.ratio)
-          setIfPresent(cacheMap, data.cacheRatio)
-          setIfPresent(createCacheMap, data.createCacheRatio)
-          setIfPresent(completionMap, data.completionRatio)
-          setIfPresent(imageMap, data.imageRatio)
-          setIfPresent(audioMap, data.audioRatio)
-          setIfPresent(audioCompletionMap, data.audioCompletionRatio)
-        }
-
-        onChange('ModelPrice', JSON.stringify(priceMap, null, 2))
-        onChange('ModelRatio', JSON.stringify(ratioMap, null, 2))
-        onChange('CacheRatio', JSON.stringify(cacheMap, null, 2))
-        onChange('CreateCacheRatio', JSON.stringify(createCacheMap, null, 2))
-        onChange('CompletionRatio', JSON.stringify(completionMap, null, 2))
-        onChange('ImageRatio', JSON.stringify(imageMap, null, 2))
-        onChange('AudioRatio', JSON.stringify(audioMap, null, 2))
-        onChange(
-          'AudioCompletionRatio',
-          JSON.stringify(audioCompletionMap, null, 2)
-        )
-        onChange(
-          'billing_setting.billing_mode',
-          JSON.stringify(billingModeMap, null, 2)
-        )
-        onChange(
-          'billing_setting.billing_expr',
-          JSON.stringify(billingExprMap, null, 2)
-        )
+        for (const update of updates) onChange(update.key, update.value)
       },
       [
         modelPrice,
         modelRatio,
+        completionRatio,
         cacheRatio,
         createCacheRatio,
-        completionRatio,
         imageRatio,
         audioRatio,
         audioCompletionRatio,
+        batchInputRatio,
         billingMode,
         billingExpr,
         onChange,
@@ -781,6 +852,31 @@ export const ModelRatioVisualEditor = memo(
         )}
 
         <ModelRatioDialog
+          billingUsageByModel={Object.fromEntries(
+            (pricingQuery.data?.data ?? []).map((model) => [
+              model.model_name,
+              model.billing_usage,
+            ])
+          )}
+          taskPricing={
+            editData
+              ? {
+                  plugins: pluginTaskPricing(
+                    taskModels.get(editData.name),
+                    editData.name,
+                    taskRules
+                  ),
+                  saving: taskSaving,
+                  lockedReason: hasPendingChanges
+                    ? t(
+                        'Save the pending model price changes first: saving a plugin price reloads the settings and would discard them.'
+                      )
+                    : undefined,
+                  onSave: (plugin, expression) =>
+                    saveTaskRule(editData.name, plugin, expression),
+                }
+              : undefined
+          }
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           onSave={handleSave}
@@ -804,6 +900,9 @@ export const ModelRatioVisualEditor = memo(
       prevProps.billingExpr === nextProps.billingExpr &&
       prevProps.candidateModelNames === nextProps.candidateModelNames &&
       prevProps.filterMode === nextProps.filterMode &&
+      prevProps.hasPendingChanges === nextProps.hasPendingChanges &&
+      prevProps.openRequest === nextProps.openRequest &&
+      prevProps.onOpenRequestHandled === nextProps.onOpenRequestHandled &&
       prevProps.onChange === nextProps.onChange
     )
   }

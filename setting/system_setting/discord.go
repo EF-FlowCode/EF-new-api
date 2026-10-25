@@ -1,6 +1,6 @@
 package system_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type DiscordSettings struct {
 	Enabled      bool   `json:"enabled"`
@@ -17,5 +17,6 @@ func init() {
 }
 
 func GetDiscordSettings() *DiscordSettings {
-	return &defaultDiscordSettings
+	setting := config.MustSnapshot[DiscordSettings]("discord")
+	return &setting
 }

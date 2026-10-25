@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/config"
+	"eflow.local/new-api/types"
 )
 
 var defaultGroupRatio = map[string]float64{
@@ -57,11 +57,12 @@ func init() {
 }
 
 func GetGroupRatioSetting() *GroupRatioSetting {
-	if groupRatioSetting.GroupSpecialUsableGroup == nil {
-		groupRatioSetting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
-		groupRatioSetting.GroupSpecialUsableGroup.AddAll(defaultGroupSpecialUsableGroup)
+	setting := config.MustSnapshot[GroupRatioSetting]("group_ratio_setting")
+	if setting.GroupSpecialUsableGroup == nil {
+		setting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
+		setting.GroupSpecialUsableGroup.AddAll(defaultGroupSpecialUsableGroup)
 	}
-	return &groupRatioSetting
+	return &setting
 }
 
 func GetGroupRatioCopy() map[string]float64 {

@@ -147,7 +147,7 @@ export function formatMessageForAPI(message: Message): ChatCompletionMessage {
 export function isValidMessage(message: Message): boolean {
   if (!message || !message.from || !message.versions.length) return false
 
-  const content = message.versions[0]?.content
+  const content = getCurrentVersion(message).content
   if (content === undefined) return false
 
   // Multimodal user message (ContentPart[]): valid as long as it has any part.

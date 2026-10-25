@@ -1,8 +1,10 @@
 import dayjs from '@/lib/dayjs'
 import {
+  displayAmountToQuota,
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyDisplay,
+  getCurrencyFractionDigits,
 } from './currency'
 
 // ============================================================================
@@ -56,21 +58,7 @@ export function formatQuota(quota: number): string {
  * Parse quota from the current display input back to quota units.
  */
 export function parseQuotaFromDollars(amount: number): number {
-  if (!Number.isFinite(amount)) return 0
-
-  const { config, meta } = getCurrencyDisplay()
-
-  // Tokens-only or raw quota mode
-  if (meta.kind === 'tokens') {
-    return Math.round(amount)
-  }
-
-  const exchangeRate =
-    meta.kind === 'currency' || meta.kind === 'custom' ? meta.exchangeRate : 1
-
-  const usdAmount = exchangeRate > 0 ? amount / exchangeRate : amount
-
-  return Math.round(usdAmount * config.quotaPerUnit)
+  return displayAmountToQuota(amount)
 }
 
 /**
@@ -79,16 +67,41 @@ export function parseQuotaFromDollars(amount: number): number {
  */
 export function quotaUnitsToDollars(units: number): number {
   const { config, meta } = getCurrencyDisplay()
+  return quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
+}
 
+function quotaUnitsToDisplayAmount(
+  units: number,
+  quotaPerUnit: number,
+  meta: ReturnType<typeof getCurrencyDisplay>['meta']
+): number {
   if (meta.kind === 'tokens') {
     return units
   }
 
-  const usdAmount = units / config.quotaPerUnit
-  const exchangeRate =
-    meta.kind === 'currency' || meta.kind === 'custom' ? meta.exchangeRate : 1
+  return (units / quotaPerUnit) * meta.exchangeRate
+}
 
-  return usdAmount * exchangeRate
+/** Convert quota units to a stable plain value for an editable input. */
+export function quotaUnitsToEditableAmount(units: number): number {
+  const { config, meta } = getCurrencyDisplay()
+  const amount = quotaUnitsToDisplayAmount(units, config.quotaPerUnit, meta)
+
+  if (meta.kind === 'tokens') {
+    return Math.round(amount)
+  }
+
+  return Number(amount.toFixed(getCurrencyFractionDigits(amount)))
+}
+
+/** Return the input step matching the configured editable quota precision. */
+export function getEditableQuotaStep(): number {
+  const { meta } = getCurrencyDisplay()
+  if (meta.kind === 'tokens') {
+    return 1
+  }
+
+  return 10 ** -getCurrencyFractionDigits(0)
 }
 
 // ============================================================================

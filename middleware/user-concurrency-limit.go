@@ -10,7 +10,6 @@ package middleware
 import (
 	"net/http"
 	"sync"
-	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 )
@@ -23,7 +22,20 @@ func UserConcurrencyLimit(mark string, maxInFlight int32) func(c *gin.Context) {
 		// 0 视为禁用，跟其它限流中间件一致
 		return defNext
 	}
-	var counters sync.Map // key: userId (int) -> *atomic.Int32
+	// 计数归零即删除，内存只与当前 in-flight 用户数相关，不随历史用户数增长。
+	var (
+		mu       sync.Mutex
+		inFlight = map[int]int32{}
+	)
+	release := func(userId int) {
+		mu.Lock()
+		if inFlight[userId] <= 1 {
+			delete(inFlight, userId)
+		} else {
+			inFlight[userId]--
+		}
+		mu.Unlock()
+	}
 	return func(c *gin.Context) {
 		userId := c.GetInt("id")
 		if userId == 0 {
@@ -31,16 +43,17 @@ func UserConcurrencyLimit(mark string, maxInFlight int32) func(c *gin.Context) {
 			c.Abort()
 			return
 		}
-		v, _ := counters.LoadOrStore(userId, new(atomic.Int32))
-		cnt := v.(*atomic.Int32)
-		if cnt.Add(1) > maxInFlight {
-			cnt.Add(-1)
+		mu.Lock()
+		if inFlight[userId] >= maxInFlight {
+			mu.Unlock()
 			c.Header("X-Eflow-Concurrency-Limit", mark)
 			c.Status(http.StatusTooManyRequests)
 			c.Abort()
 			return
 		}
-		defer cnt.Add(-1)
+		inFlight[userId]++
+		mu.Unlock()
+		defer release(userId)
 		c.Next()
 	}
 }

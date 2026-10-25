@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 	"github.com/go-redis/redis/v8"
 )
 
@@ -265,7 +265,7 @@ func (s *redisRiskMetricStore) IncrementRuleHit(scope string, subjectID int, gro
 
 func (s *redisRiskMetricStore) sumRequestBuckets(ctx context.Context, scope, group string, subjectID int, minuteBucket int64, size int) (int, error) {
 	keys := make([]string, 0, size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		keys = append(keys, riskReqBucketKey(scope, group, subjectID, minuteBucket-int64(i)))
 	}
 	values, err := s.rdb.MGet(ctx, keys...).Result()
@@ -307,7 +307,7 @@ func (s *redisRiskMetricStore) countUnion(ctx context.Context, keys []string) (i
 
 func buildScopedMinuteKeys(builder func(string, string, int, int64) string, scope, group string, subjectID int, currentBucket int64, size int) []string {
 	keys := make([]string, 0, size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		keys = append(keys, builder(scope, group, subjectID, currentBucket-int64(i)))
 	}
 	return keys
@@ -315,7 +315,7 @@ func buildScopedMinuteKeys(builder func(string, string, int, int64) string, scop
 
 func buildIPTokenKeys(group, hash string, currentBucket int64, size int) []string {
 	keys := make([]string, 0, size)
-	for i := 0; i < size; i++ {
+	for i := range size {
 		keys = append(keys, riskIPTokenBucketKey(group, hash, currentBucket-int64(i)))
 	}
 	return keys

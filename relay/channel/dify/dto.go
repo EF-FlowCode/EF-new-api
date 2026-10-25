@@ -1,16 +1,16 @@
 package dify
 
 import (
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 type DifyChatRequest struct {
-	Inputs           map[string]interface{} `json:"inputs"`
-	Query            string                 `json:"query"`
-	ResponseMode     string                 `json:"response_mode"`
-	User             string                 `json:"user"`
-	AutoGenerateName bool                   `json:"auto_generate_name"`
-	Files            []DifyFile             `json:"files"`
+	Inputs           map[string]any `json:"inputs"`
+	Query            string         `json:"query"`
+	ResponseMode     string         `json:"response_mode"`
+	User             string         `json:"user"`
+	AutoGenerateName bool           `json:"auto_generate_name"`
+	Files            []DifyFile     `json:"files"`
 }
 
 type DifyFile struct {

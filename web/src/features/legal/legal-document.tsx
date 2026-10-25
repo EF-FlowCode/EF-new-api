@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Markdown } from '@/components/ui/markdown'
 import { Skeleton } from '@/components/ui/skeleton'
+import { HtmlContent } from '@/components/html-content'
 import type { LegalDocumentResponse } from './types'
 
 // eflow: 法务页（隐私政策 / 用户协议）保持独立全宽，不进侧栏壳——
@@ -123,10 +124,7 @@ export function LegalDocument({
         </div>
 
         {isHtml ? (
-          <div
-            className='prose prose-neutral dark:prose-invert max-w-none'
-            dangerouslySetInnerHTML={{ __html: rawContent }}
-          />
+          <HtmlContent content={rawContent} />
         ) : (
           <Markdown className='prose-neutral dark:prose-invert max-w-none'>
             {rawContent}

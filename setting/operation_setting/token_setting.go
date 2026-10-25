@@ -1,6 +1,6 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 // TokenSetting 令牌相关配置
 type TokenSetting struct {
@@ -19,7 +19,8 @@ func init() {
 
 // GetTokenSetting 获取令牌配置
 func GetTokenSetting() *TokenSetting {
-	return &tokenSetting
+	setting := config.MustSnapshot[TokenSetting]("token_setting")
+	return &setting
 }
 
 // GetMaxUserTokens 获取每用户最大令牌数量

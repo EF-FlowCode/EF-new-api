@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/pkg/requestip"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/pkg/requestip"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 )
 
 const (
@@ -18,21 +18,25 @@ const (
 	EmailVerificationDuration      = 30 // 30秒时间窗口
 )
 
+var emailVerificationIncrScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+if redis.call('TTL', KEYS[1]) < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count`)
+
 func redisEmailVerificationRateLimiter(c *gin.Context) {
 	ctx := context.Background()
 	rdb := common.RDB
 	key := "emailVerification:" + EmailVerificationRateLimitMark + ":" + requestip.GetClientIP(c)
 
-	count, err := rdb.Incr(ctx, key).Result()
+	// 计数与过期在同一脚本内完成；缺少过期时间的键（例如早先 Expire 失败）也会补上，
+	// 避免某个 IP 被永久限流。
+	count, err := emailVerificationIncrScript.Run(ctx, rdb, []string{key}, EmailVerificationDuration).Int64()
 	if err != nil {
 		// fallback
 		memoryEmailVerificationRateLimiter(c)
 		return
-	}
-
-	// 第一次设置键时设置过期时间
-	if count == 1 {
-		_ = rdb.Expire(ctx, key, time.Duration(EmailVerificationDuration)*time.Second).Err()
 	}
 
 	// 检查是否超出限制

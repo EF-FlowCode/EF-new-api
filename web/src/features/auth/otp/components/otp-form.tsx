@@ -6,6 +6,10 @@ import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import {
+  buildAssertionResult,
+  prepareCredentialRequestOptions,
+} from '@/lib/passkey'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,13 +28,23 @@ import {
   InputOTPSlot,
   InputOTPSeparator,
 } from '@/components/ui/input-otp'
-import { login2fa } from '@/features/auth/api'
+import {
+  beginLoginPasskey,
+  finishLoginPasskey,
+  login2fa,
+  verifyLogin,
+} from '@/features/auth/api'
 import {
   otpFormSchema,
   OTP_LENGTH,
   BACKUP_CODE_LENGTH,
 } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import {
+  challengeMethods,
+  clearLoginChallenge,
+  readLoginChallenge,
+} from '@/features/auth/lib/login-challenge'
 import { saveUserId } from '@/features/auth/lib/storage'
 import {
   isValidOTP,
@@ -46,6 +60,8 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [useBackupCode, setUseBackupCode] = useState(false)
+  const [challenge] = useState(readLoginChallenge)
+  const offered = challengeMethods(challenge)
 
   const { auth } = useAuthStore()
   const { redirectToLogin } = useAuthRedirect()
@@ -56,6 +72,66 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
   })
 
   const otp = form.watch('otp')
+
+  function completeSignIn(res: {
+    success: boolean
+    message?: string
+    data?: unknown
+  }) {
+    if (!res.success) {
+      toast.error(res.message ? t(res.message) : t('Invalid code'))
+      return
+    }
+    const userData = res.data as User | undefined
+    if (!userData) {
+      throw new Error('No user data received from login')
+    }
+    clearLoginChallenge()
+    auth.setUser(userData)
+    // Store user ID in localStorage for compatibility
+    if (userData.id) {
+      saveUserId(userData.id)
+    }
+    toast.success(t('Signed in'))
+    redirectToLogin() // This will redirect to dashboard via the redirect logic
+  }
+
+  async function handlePasskey() {
+    if (!challenge?.flow_token) return
+    setIsLoading(true)
+    try {
+      const begin = await beginLoginPasskey(challenge.flow_token)
+      if (!begin.success || !begin.data) {
+        toast.error(begin.message ? t(begin.message) : t('Verification failed'))
+        return
+      }
+      const credential = (await navigator.credentials.get({
+        publicKey: prepareCredentialRequestOptions(begin.data.options),
+      })) as PublicKeyCredential | null
+      const assertion = credential ? buildAssertionResult(credential) : null
+      if (!assertion) {
+        toast.error(t('Passkey verification was cancelled'))
+        return
+      }
+      completeSignIn(
+        await finishLoginPasskey(
+          challenge.flow_token,
+          begin.data.flow_token,
+          assertion
+        )
+      )
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'NotAllowedError') {
+        toast.info(t('Passkey verification was cancelled or timed out'))
+        return
+      }
+      toast.error(
+        error instanceof Error ? error.message : t('Verification failed')
+      )
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   async function onSubmit(data: z.infer<typeof otpFormSchema>) {
     // Validate based on mode
@@ -75,29 +151,10 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
     try {
       // Remove all hyphens from backup code before sending to backend
       const code = useBackupCode ? cleanBackupCode(data.otp) : data.otp
-      const res = await login2fa({ code })
-
-      if (!res.success) {
-        toast.error(res.message || t('Invalid code'))
-        return
-      }
-
-      // Handle user data from 2FA login response
-      const userData = res.data
-      if (!userData) {
-        throw new Error('No user data received from login')
-      }
-
-      // Update auth store
-      auth.setUser(userData as User)
-
-      // Store user ID in localStorage for compatibility
-      if (userData.id) {
-        saveUserId(userData.id)
-      }
-
-      toast.success(t('Signed in'))
-      redirectToLogin() // This will redirect to dashboard via the redirect logic
+      const res = challenge?.flow_token
+        ? await verifyLogin(challenge.flow_token, code)
+        : await login2fa({ code })
+      completeSignIn(res)
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('2FA verification error:', error)
@@ -183,10 +240,24 @@ export function OtpForm({ className, ...props }: OtpFormProps) {
           )}
         />
 
-        <Button className='mt-2 w-full' disabled={!isFormValid || isLoading}>
-          {isLoading ? <Loader2 className='h-4 w-4 animate-spin' /> : null}
-          {t('Verify and Sign In')}
-        </Button>
+        {offered.passkey && (
+          <Button
+            type='button'
+            variant={offered.twoFA ? 'outline' : 'default'}
+            className='w-full'
+            disabled={isLoading}
+            onClick={handlePasskey}
+          >
+            {t('Verify with Passkey')}
+          </Button>
+        )}
+
+        {offered.twoFA && (
+          <Button className='mt-2 w-full' disabled={!isFormValid || isLoading}>
+            {isLoading ? <Loader2 className='h-4 w-4 animate-spin' /> : null}
+            {t('Verify and Sign In')}
+          </Button>
+        )}
 
         <div className='flex items-center justify-center gap-2 text-sm'>
           <Button

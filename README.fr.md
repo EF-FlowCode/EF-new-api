@@ -47,7 +47,7 @@
   <a href="#-fonctionnalités-clés">Fonctionnalités clés</a> •
   <a href="#-déploiement">Déploiement</a> •
   <a href="#-documentation">Documentation</a> •
-  <a href="#-aide-support">Aide</a>
+  <a href="#-aide-et-support">Aide</a>
 </p>
 
 </div>
@@ -128,16 +128,18 @@ docker-compose up -d
 # Tirer la dernière image
 docker pull calciumion/new-api:latest
 
-# MySQL 8.0+ (requis)
+# MySQL 8 est obligatoire
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
-> **💡 Astuce:** `-v ./data:/data` sauvegardera les données dans le dossier `data` du répertoire actuel, vous pouvez également le changer en chemin absolu comme `-v /your/custom/path:/data`
+> **MySQL :** remplacez `mysql-host` par un nom d'hôte ou une adresse IP MySQL 8.x joignable depuis le conteneur. N'utilisez pas `localhost`, qui désigne le conteneur New API lui-même.
+>
+> **Fichiers locaux :** `-v ./data:/data` conserve uniquement les fichiers téléversés et les fichiers d'exécution locaux. Les comptes, la configuration et la facturation restent dans MySQL.
 
 </details>
 
@@ -182,7 +184,7 @@ docker run --name new-api -d --restart always \
 |------|------|
 | 🎨 Nouvelle interface utilisateur | Conception d'interface utilisateur moderne |
 | 🌍 Multilingue | Prend en charge le chinois simplifié, le chinois traditionnel, l'anglais, le français et le japonais |
-| 🔄 Compatibilité des données | Complètement compatible avec la base de données originale de One API |
+| 🔄 Compatibilité des données | Prend en charge les schémas One API sous MySQL 8.x ; les autres moteurs exigent une migration externe |
 | 📈 Tableau de bord des données | Console visuelle et analyse statistique |
 | 🔒 Gestion des permissions | Regroupement de jetons, restrictions de modèles, gestion des utilisateurs |
 
@@ -294,7 +296,7 @@ docker run --name new-api -d --restart always \
 
 | Composant | Exigence |
 |------|------|
-| **Base de données** | MySQL 8.0+ (`SQL_DSN` est requis) |
+| **Base de données** | MySQL 8.x |
 | **Moteur de conteneur** | Docker / Docker Compose |
 
 ### ⚙️ Configuration des variables d'environnement
@@ -306,7 +308,7 @@ docker run --name new-api -d --restart always \
 |--------|------|--------|
 | `SESSION_SECRET` | Secret de session (requis pour le déploiement multi-machines) |
 | `CRYPTO_SECRET` | Secret de chiffrement (requis pour Redis) | - |
-| `SQL_DSN` | Chaine de connexion MySQL 8.0+ (requise) | - |
+| `SQL_DSN` | Chaine de connexion MySQL 8 | Obligatoire |
 | `REDIS_CONN_STRING` | Chaine de connexion Redis | - |
 | `STREAMING_TIMEOUT` | Délai d'expiration du streaming (secondes) | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | Taille max du buffer par ligne (Mo) pour le scanner SSE ; à augmenter quand les sorties image/base64 sont très volumineuses (ex. images 4K) | `64` |
@@ -347,18 +349,19 @@ docker-compose up -d
 <details>
 <summary><strong>Méthode 2: Commandes Docker</strong></summary>
 
-**Utilisation de MySQL 8.0+:**
+**Utilisation de MySQL 8:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
 > **💡 Explication du chemin:**
-> - `./data:/data` - Chemin relatif, données sauvegardées dans le dossier data du répertoire actuel
+> - Remplacez `mysql-host` par une adresse MySQL 8.x joignable depuis le conteneur ; `localhost` dans le conteneur n'est pas l'hôte de la base
+> - `./data:/data` - Conserve les téléversements et fichiers d'exécution locaux ; les données de la base restent dans MySQL
 > - Vous pouvez également utiliser un chemin absolu, par exemple : `/your/custom/path:/data`
 
 </details>
@@ -370,7 +373,7 @@ docker run --name new-api -d --restart always \
 2. Recherchez **New-API** dans le magasin d'applications
 3. Installation en un clic
 
-📖 [Tutoriel avec des images](./docs/BT.md)
+📖 [Tutoriel avec des images](docs/operations/bt-installation.md)
 
 </details>
 
@@ -461,3 +464,5 @@ Si ce projet vous est utile, bienvenue à nous donner une ⭐️ Étoile！
 <sub>Construit avec ❤️ par QuantumNous</sub>
 
 </div>
+
+[Documentation de la branche eflow](docs/README.md)

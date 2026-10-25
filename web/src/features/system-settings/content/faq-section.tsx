@@ -121,7 +121,7 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
       setIsEnabled(checked)
       toast.success(t('Setting saved'))
     } catch {
-      toast.error(t('Failed to update setting'))
+      // useUpdateOption owns the error notification.
     }
   }
 
@@ -205,7 +205,7 @@ export function FAQSection({ enabled, data }: FAQSectionProps) {
       setHasChanges(false)
       toast.success(t('FAQ saved successfully'))
     } catch {
-      toast.error(t('Failed to save FAQ'))
+      // useUpdateOption owns the error notification.
     }
   }
 

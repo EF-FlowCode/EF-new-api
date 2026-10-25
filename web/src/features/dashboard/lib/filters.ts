@@ -98,9 +98,7 @@ export function getSavedChartPreferences(): DashboardChartPreferences {
       defaultTimeRangeDays: isTimeRangePresetDays(parsed.defaultTimeRangeDays)
         ? parsed.defaultTimeRangeDays
         : fallbackPreferences.defaultTimeRangeDays,
-      defaultTimeGranularity: isTimeGranularity(
-        parsed.defaultTimeGranularity
-      )
+      defaultTimeGranularity: isTimeGranularity(parsed.defaultTimeGranularity)
         ? parsed.defaultTimeGranularity
         : fallbackPreferences.defaultTimeGranularity,
     }

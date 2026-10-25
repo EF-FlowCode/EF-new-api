@@ -1,37 +1,52 @@
 package oaichat
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 const (
 	chatFinishReasonLength        = "length"
 	chatFinishReasonContentFilter = "content_filter"
 
-	responsesEventCreated                  = "response.created"
-	responsesEventCompleted                = "response.completed"
-	responsesEventIncomplete               = "response.incomplete"
-	responsesEventOutputTextDelta          = "response.output_text.delta"
-	responsesEventOutputItemAdded          = "response.output_item.added"
-	responsesEventOutputItemDone           = "response.output_item.done"
-	responsesEventFunctionArgsDelta        = "response.function_call_arguments.delta"
-	responsesEventFunctionArgsDone         = "response.function_call_arguments.done"
-	responsesEventReasoningSummaryDelta    = "response.reasoning_summary_text.delta"
-	responsesEventReasoningSummaryDone     = "response.reasoning_summary_text.done"
-	responsesOutputTypeFunctionCall        = "function_call"
-	responsesOutputTypeMessage             = "message"
-	responsesOutputTypeReasoning           = "reasoning"
-	responsesIncompleteReasonContentFilter = "content_filter"
-	responsesIncompleteReasonMaxTokens     = "max_output_tokens"
+	responsesEventCreated                   = "response.created"
+	responsesEventCompleted                 = "response.completed"
+	responsesEventIncomplete                = "response.incomplete"
+	responsesEventOutputTextDelta           = "response.output_text.delta"
+	responsesEventOutputItemAdded           = "response.output_item.added"
+	responsesEventOutputItemDone            = "response.output_item.done"
+	responsesEventFunctionArgsDelta         = "response.function_call_arguments.delta"
+	responsesEventFunctionArgsDone          = "response.function_call_arguments.done"
+	responsesEventCustomToolInputDelta      = "response.custom_tool_call_input.delta"
+	responsesEventCustomToolInputDone       = "response.custom_tool_call_input.done"
+	responsesEventReasoningSummaryPartAdded = "response.reasoning_summary_part.added"
+	responsesEventReasoningSummaryDelta     = "response.reasoning_summary_text.delta"
+	responsesEventReasoningSummaryDone      = "response.reasoning_summary_text.done"
+	responsesEventReasoningSummaryPartDone  = "response.reasoning_summary_part.done"
+	responsesEventContentPartAdded          = "response.content_part.added"
+	responsesEventContentPartDone           = "response.content_part.done"
+	responsesOutputTypeFunctionCall         = "function_call"
+	responsesOutputTypeCustomToolCall       = "custom_tool_call"
+	responsesOutputTypeMessage              = "message"
+	responsesOutputTypeReasoning            = "reasoning"
+	responsesIncompleteReasonContentFilter  = "content_filter"
+	responsesIncompleteReasonMaxTokens      = "max_output_tokens"
 )
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return ChatCompletionsResponseToResponsesResponseWithTools(resp, id, nil)
+}
+
+// ChatCompletionsResponseToResponsesResponseWithTools also restores function
+// calls that tools marks as Responses custom tools into custom_tool_call items.
+func ChatCompletionsResponseToResponsesResponseWithTools(resp *dto.OpenAITextResponse, id string, tools *convmeta.ResponsesToolState) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
@@ -57,7 +72,21 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 		out.IncompleteDetails = details
 	}
 
+	if reasoning := choice.Message.GetReasoningContent(); reasoning != "" {
+		out.Output = append(out.Output, dto.ResponsesOutput{
+			Type:   responsesOutputTypeReasoning,
+			ID:     fmt.Sprintf("%s_reasoning_0", id),
+			Status: responseOutputStatus(out),
+			Summary: []dto.ResponsesReasoningSummaryPart{
+				{
+					Type: "summary_text",
+					Text: reasoning,
+				},
+			},
+		})
+	}
 	if text := choice.Message.StringContent(); text != "" {
+		annotations := []any{}
 		out.Output = append(out.Output, dto.ResponsesOutput{
 			Type:   responsesOutputTypeMessage,
 			ID:     fmt.Sprintf("%s_msg_0", id),
@@ -67,27 +96,17 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 				{
 					Type:        "output_text",
 					Text:        text,
-					Annotations: []interface{}{},
-				},
-			},
-		})
-	}
-	if reasoning := choice.Message.GetReasoningContent(); reasoning != "" {
-		out.Output = append(out.Output, dto.ResponsesOutput{
-			Type:   responsesOutputTypeReasoning,
-			ID:     fmt.Sprintf("%s_reasoning_0", id),
-			Status: responseOutputStatus(out),
-			Content: []dto.ResponsesOutputContent{
-				{
-					Type: "summary_text",
-					Text: reasoning,
+					Annotations: annotations,
 				},
 			},
 		})
 	}
 
 	for i, toolCall := range choice.Message.ParseToolCalls() {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out))
+		if (toolCall.Type == "" || toolCall.Type == "function") && strings.TrimSpace(toolCall.Function.Name) == "" {
+			continue
+		}
+		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out), tools)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -170,12 +189,22 @@ func responseStatusString(resp *dto.OpenAIResponsesResponse) string {
 	return strings.TrimSpace(status)
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) (dto.ResponsesOutput, error) {
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, tools *convmeta.ResponsesToolState) (dto.ResponsesOutput, error) {
 	callID := strings.TrimSpace(toolCall.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("%s_call_%d", responseID, index)
 	}
 	if toolCall.Type == "" || toolCall.Type == "function" {
+		if tools.IsCustomTool(toolCall.Function.Name) {
+			return dto.ResponsesOutput{
+				Type:   responsesOutputTypeCustomToolCall,
+				ID:     callID,
+				Status: status,
+				CallId: callID,
+				Name:   toolCall.Function.Name,
+				Input:  chatArgumentsRawMessage(customToolInputFromArguments(toolCall.Function.Arguments)),
+			}, nil
+		}
 		return dto.ResponsesOutput{
 			Type:      responsesOutputTypeFunctionCall,
 			ID:        callID,
@@ -192,6 +221,25 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 		CallId:    callID,
 		Arguments: toolCall.Custom,
 	}, nil
+}
+
+// customToolInputFromArguments unwraps the raw custom tool input from the
+// {"input": ...} arguments a Chat function call carries. Arguments of any other
+// shape are returned unchanged so the model's output is never dropped.
+func customToolInputFromArguments(arguments string) string {
+	var value map[string]json.RawMessage
+	if err := kitutil.UnmarshalJsonStr(arguments, &value); err != nil {
+		return arguments
+	}
+	input, ok := value[convmeta.CustomToolInputArgument]
+	if !ok {
+		return arguments
+	}
+	var text string
+	if len(input) > 0 && input[0] == '"' && json.Unmarshal(input, &text) == nil {
+		return text
+	}
+	return string(input)
 }
 
 func chatArgumentsRawMessage(arguments string) []byte {

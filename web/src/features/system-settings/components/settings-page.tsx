@@ -2,7 +2,7 @@ import { useParams } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { getDomainTabItems } from '@/components/layout/config/admin-domains'
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
-import { SettingsSectionTabs } from './settings-section-tabs'
+import { SettingsWorkbench } from './settings-workbench'
 
 type SettingsPageProps<
   TSettings extends Record<string, string | number | boolean | unknown[]>,
@@ -56,23 +56,18 @@ export function SettingsPage<
     settings,
     ...extraArgs
   )
-  const navItems = area
-    ? getDomainTabItems(t, area, String(activeSection))
-    : []
+  const navItems = area ? getDomainTabItems(t, area, String(activeSection)) : []
 
   return (
     <div className='flex h-full w-full flex-1 flex-col'>
-      <div className='faded-bottom h-full w-full overflow-y-auto scroll-smooth pe-4 pb-12'>
-        <div className='space-y-4'>
-          <SettingsSectionTabs
-            items={navItems}
-            activeSection={
-              area ? `${area}/${activeSection}` : String(activeSection)
-            }
-          />
-          {sectionContent}
-        </div>
-      </div>
+      <SettingsWorkbench
+        items={navItems}
+        activeSection={
+          area ? `${area}/${activeSection}` : String(activeSection)
+        }
+      >
+        {sectionContent}
+      </SettingsWorkbench>
     </div>
   )
 }

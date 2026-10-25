@@ -59,6 +59,397 @@
     }
   ],
   "paths": {
+    "/api/monitoring/admin/refresh": {
+      "post": {
+        "summary": "触发分组监控聚合",
+        "description": "需要 AdminAuth 和 New-Api-User 身份头，受关键操作限流保护。Redis 模式提交共享合并信号，唯一 worker 每秒检查并加载最新配置后聚合；202 仅表示接受请求，完成时间取决于 worker 可用性和聚合耗时。无 Redis 的单实例由本地循环处理。",
+        "parameters": [
+          {
+            "name": "New-Api-User",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "integer" }
+          }
+        ],
+        "responses": {
+          "202": { "description": "刷新已接受，success=true；不是聚合完成通知。" },
+          "401": { "description": "未登录或身份校验失败。" },
+          "403": { "description": "需要管理员权限。" },
+          "429": { "description": "操作限流，或无 Redis 模式的本地聚合正在运行。" },
+          "503": { "description": "共享刷新信号存储不可用，success=false；未报告刷新已触发。" }
+        }
+      }
+    },
+    "/api/user/self/usage-summary": {
+      "get": {
+        "summary": "当前用户账户收支汇总",
+        "description": "UserAuth，只使用当前认证用户。单条 SQL 快照读取余额、消费结算额、已到账消费返还及请求数。net_used_quota=used_quota-refunded_quota；自动任务退款已体现在 used_quota，不重复扣减。金额字段为原始额度，失败不降级为零。",
+        "responses": {
+          "200": {
+            "description": "success/data 响应，data 包含 quota、used_quota、refunded_quota、net_used_quota、request_count"
+          }
+        }
+      }
+    },
+    "/api/user/self/refund-records": {
+      "get": {
+        "summary": "当前用户退款与返还记录",
+        "description": "UserAuth，只查询当前身份。usage 按已到账消费返还批次汇总；task 为自动退款日志，排除批量返还通知；ticket 为退款工单申请额度与状态，不能作为实际外部付款金额。不会返回收款账号或管理员内部信息。",
+        "parameters": [
+          {"name":"kind","in":"query","schema":{"type":"string","enum":["usage","task","ticket"],"default":"usage"}},
+          {"name":"p","in":"query","schema":{"type":"integer","minimum":1,"maximum":10000,"default":1}},
+          {"name":"page_size","in":"query","schema":{"type":"integer","minimum":1,"maximum":100}}
+        ],
+        "responses": {
+          "200": {
+            "description": "success/data 响应，data 为 items 和 has_more。条目含 id、kind、created_at、quota、reason、status 及可选 request_id、ticket_id"
+          }
+        }
+      }
+    },
+    "/api/log/refunds/candidates": {
+      "post": {
+        "summary": "列出单个用户可手动返还的消费记录",
+        "description": "仅超级管理员 root（role=100）。只读，不创建批次。user_id 与 username（精确匹配）二选一，时间范围最多 31 天，仅列出正数消费日志，最多 5000 条。条目 status 与预览一致；已返还项含 refund_batch_id 与 refunded_quota。",
+        "parameters": [
+          {
+            "name": "New-Api-User",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "start_timestamp",
+                  "end_timestamp"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "user_id": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "start_timestamp": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "end_timestamp": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "model_name": {
+                    "type": "string"
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "maxLength": 128
+                  },
+                  "include_client_gone": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "success/data 响应，data 含 user_id、username 与 items（log_id、request_id、created_at、model_name、token_name、group、channel、prompt_tokens、completion_tokens、quota、status 及可选 refund_batch_id、refunded_quota）"
+          },
+          "400": {
+            "description": "参数无效、用户不存在或超过 5000 条"
+          },
+          "403": {
+            "description": "非超级管理员"
+          }
+        }
+      }
+    },
+    "/api/log/refunds/preview": {
+      "post": {
+        "summary": "预览消费余额批量返还",
+        "description": "仅超级管理员 root（role=100）。四种选取方式必须且只能提供一种。默认排除 client_gone，仅计算本地正数消费。最多 5000 条、筛选最多 31 天。预览不改变余额。已返还项为 already_refunded，refund_batch_id 提供原批次号，不计入总额。",
+        "parameters": [
+          {
+            "name": "New-Api-User",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "include_client_gone": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "log_ids": {
+                    "type": "array",
+                    "maxItems": 5000,
+                    "items": {
+                      "type": "integer",
+                      "format": "int64"
+                    }
+                  },
+                  "request_ids": {
+                    "type": "array",
+                    "maxItems": 5000,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "upstream_request_ids": {
+                    "type": "array",
+                    "maxItems": 5000,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "amounts": {
+                    "type": "object",
+                    "description": "仅 log_ids 模式：日志 ID → 本次返还额度（原始整数额度，1 ≤ 额度 ≤ 原扣费）；未列出的日志按原额返还。预览项目 quota 为返还额，original_quota 为原扣费。",
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "filter": {
+                    "type": "object",
+                    "required": [
+                      "start_timestamp",
+                      "end_timestamp"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "start_timestamp": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "end_timestamp": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "group": {
+                        "type": "string"
+                      },
+                      "channel": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "user_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
+                      "username": {
+                        "type": "string"
+                      },
+                      "model_name": {
+                        "type": "string"
+                      },
+                      "token_name": {
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "type": "string"
+                      },
+                      "upstream_request_id": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "integer",
+                        "enum": [
+                          0,
+                          2
+                        ]
+                      },
+                      "max_completion_tokens": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "批次、汇总及执行结果，统一 success/data 响应"
+          },
+          "400": {
+            "description": "参数或确认金额无效、超出单批限制"
+          },
+          "404": {
+            "description": "批次不存在或不属于当前管理员"
+          },
+          "409": {
+            "description": "预览已变更或过期"
+          },
+          "504": {
+            "description": "预览扫描超时，未修改余额；缩小时间范围或导入请求 ID 后重试"
+          }
+        }
+      }
+    },
+    "/api/log/refunds/": {
+      "get": {
+        "summary": "列出本超级管理员最近 50 个返还批次",
+        "description": "仅超级管理员 root（role=100），普通管理员、客服和普通用户均不可调用。",
+        "parameters": [
+          {
+            "name": "New-Api-User",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "success/data 批次数组"
+          }
+        }
+      }
+    },
+    "/api/log/refunds/{id}": {
+      "get": {
+        "summary": "查询固定预览、用户汇总、返还凭证及日志待投递数",
+        "description": "仅创建该批次的超级管理员 root（role=100）可查询。",
+        "parameters": [
+          {
+            "name": "New-Api-User",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "批次、汇总及执行结果，统一 success/data 响应"
+          },
+          "400": {
+            "description": "参数或确认金额无效、超出单批限制"
+          },
+          "404": {
+            "description": "批次不存在或不属于当前管理员"
+          },
+          "409": {
+            "description": "预览已变更或过期"
+          }
+        }
+      }
+    },
+    "/api/log/refunds/{id}/execute": {
+      "post": {
+        "summary": "执行已确认的消费余额返还",
+        "description": "仅创建批次的超级管理员 root（role=100）。额度为原始整数；同批次重试不重复返还。按源日志 ID 永久防重，预览有效期 24 小时，用户日志可靠补写。",
+        "parameters": [
+          {
+            "name": "New-Api-User",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "expected_quota",
+                  "expected_count"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "expected_quota": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "expected_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "批次、汇总及执行结果，统一 success/data 响应"
+          },
+          "400": {
+            "description": "参数或确认金额无效、超出单批限制"
+          },
+          "404": {
+            "description": "批次不存在或不属于当前管理员"
+          },
+          "409": {
+            "description": "预览已变更或过期"
+          }
+        }
+      }
+    },
     "/api/setup": {
       "get": {
         "summary": "获取初始化状态",
@@ -403,7 +794,7 @@
       "get": {
         "summary": "发送邮箱验证码",
         "deprecated": false,
-        "description": "🔓 无需鉴权；验证码有效期内重发时复用当前验证码，避免邮件延迟或乱序导致旧码失效。",
+        "description": "🔓 无需鉴权；验证码有效期内重发时复用当前验证码，避免邮件延迟或乱序导致旧码失效。 配置 Redis 时验证码在实例间共享；有效期内重发不延长 TTL。存储不可用返回 HTTP 503，且不发送邮件。",
         "tags": [
           "用户登陆注册"
         ],
@@ -422,6 +813,9 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "503": {
+            "description": "共享验证码存储不可用；success=false，message 不包含内部依赖错误。"
           }
         },
         "security": [
@@ -438,7 +832,7 @@
       "get": {
         "summary": "发送密码重置邮件",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "🔓 无需鉴权。配置 Redis 时重置令牌存入共享 Redis；存储不可用统一返回 HTTP 503，不通过故障响应暴露账号是否存在。首次从内存存储切换到 Redis 后须重新申请邮件。",
         "tags": [
           "用户登陆注册"
         ],
@@ -457,6 +851,9 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "503": {
+            "description": "共享验证码存储不可用；success=false，message 不包含内部依赖错误。"
           }
         },
         "security": [
@@ -473,7 +870,7 @@
       "post": {
         "summary": "重置密码",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "🔓 无需鉴权。令牌原子校验并消费，配置 Redis 时使用共享存储。存储不可用返回 HTTP 503；消费后若数据库写入或响应传输失败，需重新申请邮件。",
         "tags": [
           "用户登陆注册"
         ],
@@ -502,6 +899,9 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "503": {
+            "description": "共享验证码存储不可用；success=false，message 不包含内部依赖错误。"
           }
         },
         "security": [
@@ -518,7 +918,7 @@
       "post": {
         "summary": "用户注册",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "🔓 无需鉴权。启用邮箱验证且配置 Redis 时使用共享验证码；验证码存储不可用返回 HTTP 503，不继续创建用户。",
         "tags": [
           "用户登陆注册"
         ],
@@ -553,6 +953,9 @@
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "503": {
+            "description": "共享验证码存储不可用；success=false，message 不包含内部依赖错误。"
           }
         },
         "security": [
@@ -942,37 +1345,21 @@
       }
     },
     "/api/oauth/email/bind": {
-      "get": {
+      "post": {
         "summary": "绑定邮箱",
         "deprecated": false,
-        "description": "🔓 无需鉴权",
+        "description": "需要用户登录。使用 JSON 请求体绑定邮箱；验证码存储不可用返回 HTTP 503，不继续绑定邮箱。",
         "tags": [
           "OAuth"
         ],
-        "parameters": [
-          {
-            "name": "email",
-            "in": "query",
-            "description": "",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "code",
-            "in": "query",
-            "description": "",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "responses": {
           "200": {
             "description": "成功",
             "headers": {}
+          },
+          "503": {
+            "description": "共享验证码存储不可用；success=false，message 不包含内部依赖错误。"
           }
         },
         "security": [
@@ -982,7 +1369,30 @@
           {
             "Combination1243": []
           }
-        ]
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "code"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/oauth/telegram/login": {
@@ -2955,7 +3365,7 @@
       "post": {
         "summary": "获取模型列表",
         "deprecated": false,
-        "description": "👨‍💼 需要管理员权限（Admin）。按渠道类型复用对应鉴权方式；Codex 渠道会查询上游模型并在凭据过期时尝试刷新。",
+        "description": "👨‍💼 需要管理员权限（Admin）。按渠道类型复用对应鉴权方式；Codex 渠道会查询上游模型并在凭据过期时尝试刷新。Advanced Custom（本项目使用 Custom 渠道类型）可通过 channel_id 复用已保存配置，或通过 advanced_custom、header_override、proxy 预览未保存的模型列表路由。",
         "tags": [
           "渠道管理"
         ],
@@ -2974,6 +3384,22 @@
                   },
                   "key": {
                     "type": "string"
+                  },
+                  "channel_id": {
+                    "type": "integer",
+                    "description": "已保存渠道 ID；用于以保存的 Custom 渠道配置为基础预览。"
+                  },
+                  "advanced_custom": {
+                    "type": "string",
+                    "description": "Advanced Custom 配置 JSON 字符串。"
+                  },
+                  "header_override": {
+                    "type": "string",
+                    "description": "请求头覆盖 JSON 字符串。"
+                  },
+                  "proxy": {
+                    "type": "string",
+                    "description": "预览请求使用的渠道代理。"
                   }
                 }
               }
@@ -3725,6 +4151,21 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "1=启用且未过期，2=禁用，3=已使用，expired=已过期",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "2",
+                "3",
+                "expired"
+              ]
             }
           }
         ],
@@ -4845,9 +5286,9 @@
     },
     "/api/option/bulk": {
       "put": {
-        "summary": "原子批量更新定价选项",
+        "summary": "原子批量更新系统选项",
         "deprecated": false,
-        "description": "👑 需要超级管理员权限（Root），且仅允许定价相关键。请求体格式：{\"options\":[{\"key\":\"ModelRatio\",\"value\":\"{}\"}]}。任一选项校验或保存失败时整批不生效。",
+        "description": "👑 需要超级管理员权限（Root），且仅允许服务端白名单中的系统设置键（包括定价、支付、认证、通知和运行配置）。请求体格式：{\"options\":[{\"key\":\"ModelRatio\",\"value\":\"{}\"}]}。任一选项校验或保存失败时整批不入库、不发布。",
         "tags": [
           "系统设置"
         ],

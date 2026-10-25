@@ -168,7 +168,7 @@ export function SetupWizard() {
 
   const currentStepComponent = useMemo(() => {
     if (currentStep === 0) {
-      return <DatabaseStep status={setupStatus} />
+      return <DatabaseStep />
     }
     if (currentStep === 1) {
       return (

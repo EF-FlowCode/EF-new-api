@@ -21,7 +21,9 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* 朱印：所有主题共用的签名印泥红（夜阑另调亮一档，见下） */
-:root { --seal: #bb3b2e; }
+:root {
+  --seal: #bb3b2e;
+}
 
 /* ---------- 4 浅色档：共享墨字 / 界栏（纸色与印泥各异） ---------- */
 :root,
@@ -198,14 +200,14 @@
 
 @theme inline {
   --font-sans:
-    'Instrument Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
-    'PingFang SC', 'Microsoft YaHei', sans-serif;
+    'Public Sans Variable', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   --font-inter:
-    'Instrument Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
-    sans-serif;
+    'Public Sans Variable', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
   --font-manrope:
-    'Instrument Sans', 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
-    sans-serif;
+    'Public Sans Variable', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);

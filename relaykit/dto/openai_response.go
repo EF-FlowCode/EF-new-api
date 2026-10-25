@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
 
 const (
@@ -227,13 +227,16 @@ type Usage struct {
 	PromptCacheHitTokens int           `json:"prompt_cache_hit_tokens,omitempty"`
 	UsageSemantic        string        `json:"usage_semantic,omitempty"`
 	UsageSource          string        `json:"usage_source,omitempty"`
-	BillingUsage         *BillingUsage `json:"billing_usage,omitempty"`
+	BillingUsage         *BillingUsage `json:"-"`
 
 	PromptTokensDetails    InputTokenDetails  `json:"prompt_tokens_details"`
 	CompletionTokenDetails OutputTokenDetails `json:"completion_tokens_details"`
 	InputTokens            int                `json:"input_tokens"`
 	OutputTokens           int                `json:"output_tokens"`
 	InputTokensDetails     *InputTokenDetails `json:"input_tokens_details"`
+	// OutputTokensDetails 是 Images API 等 input/output 形态 usage 的输出明细
+	// （output_tokens_details），由各图片路径并入 CompletionTokenDetails。
+	OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details,omitempty"`
 
 	// claude cache 1h
 	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens"`
@@ -274,10 +277,7 @@ type InputTokenDetails struct {
 // value wins so the same tokens are never double-counted. Negative upstream
 // values are clamped to zero so they can never lower a charge.
 func (d InputTokenDetails) CacheCreationTokensTotal() int {
-	total := d.CachedCreationTokens
-	if d.CacheWriteTokens > total {
-		total = d.CacheWriteTokens
-	}
+	total := max(d.CacheWriteTokens, d.CachedCreationTokens)
 	if total < 0 {
 		return 0
 	}
@@ -353,17 +353,69 @@ type IncompleteDetails struct {
 }
 
 type ResponsesOutput struct {
-	Type      string                   `json:"type"`
-	ID        string                   `json:"id"`
-	Status    string                   `json:"status"`
-	Role      string                   `json:"role"`
-	Content   []ResponsesOutputContent `json:"content"`
-	Quality   string                   `json:"quality"`
-	Size      string                   `json:"size"`
-	Result    string                   `json:"result,omitempty"`
-	CallId    string                   `json:"call_id,omitempty"`
-	Name      string                   `json:"name,omitempty"`
-	Arguments json.RawMessage          `json:"arguments,omitempty"`
+	Input     json.RawMessage                 `json:"input,omitempty"`
+	Summary   []ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Type      string                          `json:"type"`
+	ID        string                          `json:"id"`
+	Status    string                          `json:"status"`
+	Role      string                          `json:"role,omitempty"`
+	Content   []ResponsesOutputContent        `json:"content,omitempty"`
+	Quality   string                          `json:"quality,omitempty"`
+	Size      string                          `json:"size,omitempty"`
+	Result    string                          `json:"result,omitempty"`
+	CallId    string                          `json:"call_id,omitempty"`
+	Name      string                          `json:"name,omitempty"`
+	Arguments json.RawMessage                 `json:"arguments,omitempty"`
+}
+
+// responsesOutputJSON mirrors ResponsesOutput field for field (same order and
+// tags) except that Summary and Content are pointers: an explicitly empty slice
+// is serialized as [] while nil stays omitted. Stream output_item.added events
+// must carry "content": [] / "summary": [] because the official SDK stream
+// accumulators append parts to them, yet function_call and other items must
+// not grow a content key.
+type responsesOutputJSON struct {
+	Input     json.RawMessage                  `json:"input,omitempty"`
+	Summary   *[]ResponsesReasoningSummaryPart `json:"summary,omitempty"`
+	Type      string                           `json:"type"`
+	ID        string                           `json:"id"`
+	Status    string                           `json:"status"`
+	Role      string                           `json:"role,omitempty"`
+	Content   *[]ResponsesOutputContent        `json:"content,omitempty"`
+	Quality   string                           `json:"quality,omitempty"`
+	Size      string                           `json:"size,omitempty"`
+	Result    string                           `json:"result,omitempty"`
+	CallId    string                           `json:"call_id,omitempty"`
+	Name      string                           `json:"name,omitempty"`
+	Arguments json.RawMessage                  `json:"arguments,omitempty"`
+}
+
+func (r ResponsesOutput) MarshalJSON() ([]byte, error) {
+	out := responsesOutputJSON{
+		Input:     r.Input,
+		Type:      r.Type,
+		ID:        r.ID,
+		Status:    r.Status,
+		Role:      r.Role,
+		Quality:   r.Quality,
+		Size:      r.Size,
+		Result:    r.Result,
+		CallId:    r.CallId,
+		Name:      r.Name,
+		Arguments: r.Arguments,
+	}
+	if r.Summary != nil {
+		out.Summary = &r.Summary
+	} else if r.Type == "reasoning" {
+		// The Responses schema requires summary on every reasoning item, even
+		// before any summary text exists; strict clients reject the item and
+		// every summary event that follows when it is missing.
+		out.Summary = &[]ResponsesReasoningSummaryPart{}
+	}
+	if r.Content != nil {
+		out.Content = &r.Content
+	}
+	return json.Marshal(out)
 }
 
 // ArgumentsString returns function call arguments in the string form expected by Chat Completions.
@@ -380,14 +432,17 @@ func ResponsesArgumentsString(arguments json.RawMessage) string {
 }
 
 type ResponsesOutputContent struct {
-	Type        string        `json:"type"`
-	Text        string        `json:"text"`
-	Annotations []interface{} `json:"annotations"`
+	Type        string `json:"type"`
+	Text        string `json:"text"`
+	Annotations []any  `json:"annotations"`
 }
 
 type ResponsesReasoningSummaryPart struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+	// Annotations is only set for output_text parts carried by stream
+	// content_part events; nil keeps summary_text parts unchanged.
+	Annotations *[]any `json:"annotations,omitempty"`
 }
 
 const (
@@ -412,10 +467,15 @@ const (
 
 // ResponsesStreamResponse 用于处理 /v1/responses 流式响应
 type ResponsesStreamResponse struct {
-	Type     string                   `json:"type"`
-	Response *OpenAIResponsesResponse `json:"response,omitempty"`
-	Delta    string                   `json:"delta,omitempty"`
-	Item     *ResponsesOutput         `json:"item,omitempty"`
+	SequenceNumber *int                     `json:"sequence_number,omitempty"`
+	Arguments      *string                  `json:"arguments,omitempty"`
+	Input          *string                  `json:"input,omitempty"`
+	Name           string                   `json:"name,omitempty"`
+	Text           *string                  `json:"text,omitempty"`
+	Type           string                   `json:"type"`
+	Response       *OpenAIResponsesResponse `json:"response,omitempty"`
+	Delta          string                   `json:"delta,omitempty"`
+	Item           *ResponsesOutput         `json:"item,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
 	OutputIndex  *int                           `json:"output_index,omitempty"`
@@ -436,7 +496,7 @@ func GetOpenAIError(errorField any) *types.OpenAIError {
 		return &err
 	case *types.OpenAIError:
 		return err
-	case map[string]interface{}:
+	case map[string]any:
 		// 处理从JSON解析来的map结构
 		openaiErr := &types.OpenAIError{}
 		if errType, ok := err["type"].(string); ok {

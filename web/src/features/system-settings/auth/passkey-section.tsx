@@ -25,7 +25,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const passkeySchema = z.object({
   'passkey.enabled': z.boolean(),
@@ -49,7 +49,7 @@ interface PasskeySectionProps {
 
 export function PasskeySection({ defaultValues }: PasskeySectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const formDefaults = useMemo<PasskeyFormValues>(
     () => ({
@@ -131,9 +131,8 @@ export function PasskeySection({ defaultValues }: PasskeySectionProps) {
       }
     })
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(updates)
   }
 
   return (
@@ -207,6 +206,9 @@ export function PasskeySection({ defaultValues }: PasskeySectionProps) {
                 <FormDescription>
                   {t(
                     'The effective domain for Passkey registration. Must match the current domain or be its parent domain.'
+                  )}{' '}
+                  {t(
+                    'Separate several domains with commas; each request uses the one matching its host. A domain that still has Passkeys registered cannot be removed.'
                   )}
                 </FormDescription>
                 <FormMessage />

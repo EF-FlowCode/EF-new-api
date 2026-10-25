@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, type ReactNode } from 'react'
-import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { useQueryClient, useIsFetching } from '@tanstack/react-query'
+import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import {
   ChevronDown,
   Download,
@@ -12,6 +12,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { getRequestErrorMessage } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useIsAdmin } from '@/hooks/use-admin'
 import { Button } from '@/components/ui/button'
@@ -23,9 +26,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { LOG_TYPES } from '../constants'
 import { exportUserLogs, requestOfflineExport } from '../api'
-import { ExportLogsDialog } from './dialogs/export-logs-dialog'
+import { LOG_TYPES } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import {
   buildApiParams,
@@ -34,6 +36,8 @@ import {
 } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
+import { ExportLogsDialog } from './dialogs/export-logs-dialog'
+import { LogGroupFilter } from './log-group-filter'
 import { useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -46,11 +50,13 @@ function isLogTypeValue(value: string): value is LogTypeValue {
 }
 
 interface CommonLogsFilterBarProps {
+  logGroups: string[]
   stats?: ReactNode
   viewOptions?: ReactNode
 }
 
 export function CommonLogsFilterBar({
+  logGroups,
   stats,
   viewOptions,
 }: CommonLogsFilterBarProps) {
@@ -59,6 +65,10 @@ export function CommonLogsFilterBar({
   const queryClient = useQueryClient()
   const searchParams = route.useSearch()
   const isAdmin = useIsAdmin()
+  // eflow: 导出他人日志只开放给超级管理员（后端 /api/log/export 挂 RootAuth）。
+  const isSuperAdmin = useAuthStore(
+    (state) => state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
 
@@ -80,7 +90,6 @@ export function CommonLogsFilterBar({
     if (searchParams.channel) next.channel = String(searchParams.channel)
     if (searchParams.model) next.model = searchParams.model
     if (searchParams.token) next.token = searchParams.token
-    if (searchParams.group) next.group = searchParams.group
     if (searchParams.username) next.username = searchParams.username
     if (searchParams.userId) next.userId = searchParams.userId
     if (searchParams.requestId) next.requestId = searchParams.requestId
@@ -99,12 +108,15 @@ export function CommonLogsFilterBar({
     searchParams.channel,
     searchParams.model,
     searchParams.token,
-    searchParams.group,
     searchParams.username,
     searchParams.userId,
     searchParams.requestId,
     searchParams.type,
   ])
+
+  useEffect(() => {
+    setFilters((prev) => ({ ...prev, group: searchParams.group || '' }))
+  }, [searchParams.group])
 
   const handleChange = useCallback(
     (field: keyof CommonLogFilters, value: Date | string | undefined) => {
@@ -151,7 +163,7 @@ export function CommonLogsFilterBar({
   // ExportLogsDialog），确认后用所选区间 + 筛选栏当前其余筛选（模型/分组/
   // Token/类型）导出，后端回 ZIP（明细 + 汇总）。
   const handleExportConfirm = useCallback(
-    async (start: Date, end: Date) => {
+    async (start: Date, end: Date, userId: number | null) => {
       setExporting(true)
       try {
         const liveSearchParams = {
@@ -169,6 +181,7 @@ export function CommonLogsFilterBar({
         }) as Record<string, unknown>
         delete params.p
         delete params.page_size
+        if (userId) params.user_id = userId
         const { blob, filename } = await exportUserLogs(
           buildQueryParams(params)
         )
@@ -181,8 +194,9 @@ export function CommonLogsFilterBar({
         a.remove()
         URL.revokeObjectURL(url)
         setExportDialogOpen(false)
-      } catch {
-        toast.error(t('Export failed'))
+      } catch (error) {
+        const message = getRequestErrorMessage(error, 'Export failed')
+        toast.error(t(message))
       } finally {
         setExporting(false)
       }
@@ -193,7 +207,7 @@ export function CommonLogsFilterBar({
   // eflow: 离线导出——同款筛选 + 区间，但后端后台异步生成 ZIP 并发到邮箱（email 为空
   // 则发到绑定邮箱）。适合大区间，避免同步导出长时间占请求/卡死。
   const handleOfflineExportConfirm = useCallback(
-    async (start: Date, end: Date, email: string) => {
+    async (start: Date, end: Date, email: string, userId: number | null) => {
       setOfflineExporting(true)
       try {
         const liveSearchParams = {
@@ -211,6 +225,7 @@ export function CommonLogsFilterBar({
         }) as Record<string, unknown>
         delete params.p
         delete params.page_size
+        if (userId) params.user_id = userId
         if (email) params.email = email
         const res = await requestOfflineExport(buildQueryParams(params))
         if (res.success) {
@@ -241,191 +256,203 @@ export function CommonLogsFilterBar({
     !!filters.userId ||
     !!filters.channel ||
     !!filters.requestId
+  const sensitiveInputClass = sensitiveVisible
+    ? undefined
+    : '[-webkit-text-security:disc]'
 
   return (
     <>
-    <div className='space-y-2 sm:space-y-3'>
-      {/* Primary filter row */}
-      <div className='grid grid-cols-2 gap-1.5 sm:grid-cols-4 sm:gap-2 lg:grid-cols-[minmax(280px,2fr)_minmax(140px,1fr)_minmax(120px,1fr)_minmax(120px,0.8fr)_auto]'>
-        <CompactDateTimeRangePicker
-          start={filters.startTime}
-          end={filters.endTime}
-          onChange={({ start, end }) => {
-            handleChange('startTime', start)
-            handleChange('endTime', end)
-          }}
-          className='col-span-2 lg:col-span-1'
-        />
-        <Input
-          placeholder={t('Model Name')}
-          value={filters.model || ''}
-          onChange={(e) => handleChange('model', e.target.value)}
-          onKeyDown={handleKeyDown}
-          className='h-9'
-        />
-        <Input
-          placeholder={t('Group')}
-          type={sensitiveVisible ? 'text' : 'password'}
-          value={filters.group || ''}
-          onChange={(e) => handleChange('group', e.target.value)}
-          onKeyDown={handleKeyDown}
-          className='h-9'
-        />
-        <Select
-          value={logType}
-          onValueChange={(value) => {
-            setLogType(isLogTypeValue(value) ? value : '')
-          }}
-        >
-          <SelectTrigger className='h-9'>
-            <SelectValue placeholder={t('All Types')} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value='all'>{t('All Types')}</SelectItem>
-            {LOG_TYPES.map((type) => (
-              <SelectItem key={type.value} value={String(type.value)}>
-                {t(type.label)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <button
-          type='button'
-          className={cn(
-            'text-muted-foreground hover:text-foreground flex h-9 items-center gap-1 rounded-md px-2 text-xs transition-colors',
-            hasExpandedFilters && !expanded && 'text-primary'
-          )}
-          onClick={() => setExpanded((p) => !p)}
-        >
-          <ChevronDown
-            className={cn(
-              'size-3.5 transition-transform duration-200',
-              expanded && 'rotate-180'
-            )}
+      <div className='space-y-2 sm:space-y-3'>
+        {/* Primary filter row */}
+        <div className='grid grid-cols-2 gap-1.5 sm:grid-cols-4 sm:gap-2 lg:grid-cols-[minmax(280px,2fr)_minmax(140px,1fr)_minmax(120px,1fr)_minmax(120px,0.8fr)_auto]'>
+          <CompactDateTimeRangePicker
+            start={filters.startTime}
+            end={filters.endTime}
+            onChange={({ start, end }) => {
+              handleChange('startTime', start)
+              handleChange('endTime', end)
+            }}
+            className='col-span-2 lg:col-span-1'
           />
-          {expanded ? t('Collapse') : t('Expand')}
-        </button>
-      </div>
+          <Input
+            placeholder={t('Model Name')}
+            value={filters.model || ''}
+            onChange={(e) => handleChange('model', e.target.value)}
+            onKeyDown={handleKeyDown}
+            className='h-9'
+          />
+          <LogGroupFilter
+            value={filters.group || ''}
+            onValueChange={(value) => handleChange('group', value)}
+            logGroups={logGroups}
+            sensitiveVisible={sensitiveVisible}
+          />
+          <Select
+            value={logType}
+            onValueChange={(value) => {
+              setLogType(isLogTypeValue(value) ? value : '')
+            }}
+          >
+            <SelectTrigger className='h-9'>
+              <SelectValue placeholder={t('All Types')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value='all'>{t('All Types')}</SelectItem>
+              {LOG_TYPES.map((type) => (
+                <SelectItem key={type.value} value={String(type.value)}>
+                  {t(type.label)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <button
+            type='button'
+            className={cn(
+              'text-muted-foreground hover:text-foreground flex h-9 items-center gap-1 rounded-md px-2 text-xs transition-colors',
+              hasExpandedFilters && !expanded && 'text-primary'
+            )}
+            onClick={() => setExpanded((p) => !p)}
+          >
+            <ChevronDown
+              className={cn(
+                'size-3.5 transition-transform duration-200',
+                expanded && 'rotate-180'
+              )}
+            />
+            {expanded ? t('Collapse') : t('Expand')}
+          </button>
+        </div>
 
-      {/* Expandable filter row */}
-      <div
-        className={cn(
-          'grid gap-2 overflow-hidden transition-all duration-200',
-          expanded
-            ? 'grid-rows-[1fr] opacity-100'
-            : 'grid-rows-[0fr] opacity-0'
-        )}
-      >
-        <div className='min-h-0 overflow-hidden'>
-          <div className='grid grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 lg:grid-cols-5'>
-            <Input
-              placeholder={t('Token Name')}
-              type={sensitiveVisible ? 'text' : 'password'}
-              value={filters.token || ''}
-              onChange={(e) => handleChange('token', e.target.value)}
-              onKeyDown={handleKeyDown}
-              className='h-9'
-            />
-            {isAdmin && (
+        {/* Expandable filter row */}
+        <div
+          className={cn(
+            'grid gap-2 overflow-hidden transition-all duration-200',
+            expanded
+              ? 'grid-rows-[1fr] opacity-100'
+              : 'grid-rows-[0fr] opacity-0'
+          )}
+        >
+          <div className='min-h-0 overflow-hidden'>
+            <div className='grid grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 lg:grid-cols-5'>
               <Input
-                placeholder={t('Username')}
-                type={sensitiveVisible ? 'text' : 'password'}
-                value={filters.username || ''}
-                onChange={(e) => handleChange('username', e.target.value)}
+                placeholder={t('Token Name')}
+                type='text'
+                autoComplete='off'
+                value={filters.token || ''}
+                onChange={(e) => handleChange('token', e.target.value)}
+                onKeyDown={handleKeyDown}
+                className={cn('h-9', sensitiveInputClass)}
+              />
+              {isAdmin && (
+                <Input
+                  placeholder={t('Username')}
+                  type='text'
+                  autoComplete='off'
+                  value={filters.username || ''}
+                  onChange={(e) => handleChange('username', e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  className={cn('h-9', sensitiveInputClass)}
+                />
+              )}
+              {isAdmin && (
+                <Input
+                  placeholder={t('User ID')}
+                  value={filters.userId || ''}
+                  onChange={(e) => handleChange('userId', e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  className='h-9'
+                />
+              )}
+              {isAdmin && (
+                <Input
+                  placeholder={t('Channel ID')}
+                  value={filters.channel || ''}
+                  onChange={(e) => handleChange('channel', e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  className='h-9'
+                />
+              )}
+              <Input
+                placeholder={t('Request ID')}
+                value={filters.requestId || ''}
+                onChange={(e) => handleChange('requestId', e.target.value)}
                 onKeyDown={handleKeyDown}
                 className='h-9'
               />
-            )}
-            {isAdmin && (
-              <Input
-                placeholder={t('User ID')}
-                value={filters.userId || ''}
-                onChange={(e) => handleChange('userId', e.target.value)}
-                onKeyDown={handleKeyDown}
-                className='h-9'
-              />
-            )}
-            {isAdmin && (
-              <Input
-                placeholder={t('Channel ID')}
-                value={filters.channel || ''}
-                onChange={(e) => handleChange('channel', e.target.value)}
-                onKeyDown={handleKeyDown}
-                className='h-9'
-              />
-            )}
-            <Input
-              placeholder={t('Request ID')}
-              value={filters.requestId || ''}
-              onChange={(e) => handleChange('requestId', e.target.value)}
-              onKeyDown={handleKeyDown}
-              className='h-9'
-            />
+            </div>
+          </div>
+        </div>
+
+        {/* Actions row */}
+        <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex min-w-0 flex-wrap items-center gap-2 sm:gap-3'>
+            {stats && <div className='min-w-0'>{stats}</div>}
+          </div>
+
+          <div className='flex shrink-0 items-center gap-2 self-end sm:self-auto'>
+            <button
+              type='button'
+              className='text-muted-foreground hover:text-foreground inline-flex size-8 items-center justify-center rounded-md border transition-colors'
+              title={sensitiveVisible ? t('Hide') : t('Show')}
+              aria-label={sensitiveVisible ? t('Hide') : t('Show')}
+              onClick={() => setSensitiveVisible(!sensitiveVisible)}
+            >
+              {sensitiveVisible ? (
+                <Eye className='size-3.5' />
+              ) : (
+                <EyeOff className='size-3.5' />
+              )}
+            </button>
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-8'
+              title={t(
+                'Export current filtered logs as CSV (for reimbursement)'
+              )}
+              onClick={() => setExportDialogOpen(true)}
+            >
+              <Download className='size-3.5' />
+              {t('Export')}
+            </Button>
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-8'
+              onClick={handleReset}
+            >
+              <RotateCcw className='size-3.5' />
+              {t('Reset')}
+            </Button>
+            <Button
+              size='sm'
+              className='h-8'
+              onClick={handleApply}
+              disabled={fetchingLogs > 0}
+            >
+              {fetchingLogs > 0 ? (
+                <Loader2 className='size-3.5 animate-spin' />
+              ) : (
+                <Search className='size-3.5' />
+              )}
+              {t('Search')}
+            </Button>
+            {viewOptions}
           </div>
         </div>
       </div>
-
-      {/* Actions row */}
-      <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-        <div className='flex min-w-0 flex-wrap items-center gap-2 sm:gap-3'>
-          {stats && <div className='min-w-0'>{stats}</div>}
-        </div>
-
-        <div className='flex shrink-0 items-center gap-2 self-end sm:self-auto'>
-          <button
-            type='button'
-            className='text-muted-foreground hover:text-foreground inline-flex size-8 items-center justify-center rounded-md border transition-colors'
-            title={sensitiveVisible ? t('Hide') : t('Show')}
-            aria-label={sensitiveVisible ? t('Hide') : t('Show')}
-            onClick={() => setSensitiveVisible(!sensitiveVisible)}
-          >
-            {sensitiveVisible ? (
-              <Eye className='size-3.5' />
-            ) : (
-              <EyeOff className='size-3.5' />
-            )}
-          </button>
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-8'
-            title={t('Export current filtered logs as CSV (for reimbursement)')}
-            onClick={() => setExportDialogOpen(true)}
-          >
-            <Download className='size-3.5' />
-            {t('Export')}
-          </Button>
-          <Button
-            variant='outline'
-            size='sm'
-            className='h-8'
-            onClick={handleReset}
-          >
-            <RotateCcw className='size-3.5' />
-            {t('Reset')}
-          </Button>
-          <Button size='sm' className='h-8' onClick={handleApply} disabled={fetchingLogs > 0}>
-            {fetchingLogs > 0 ? (
-              <Loader2 className='size-3.5 animate-spin' />
-            ) : (
-              <Search className='size-3.5' />
-            )}
-            {t('Search')}
-          </Button>
-          {viewOptions}
-        </div>
-      </div>
-    </div>
-    <ExportLogsDialog
-      open={exportDialogOpen}
-      onOpenChange={setExportDialogOpen}
-      defaultStart={filters.startTime}
-      defaultEnd={filters.endTime}
-      exporting={exporting}
-      onConfirm={handleExportConfirm}
-      offlineExporting={offlineExporting}
-      onConfirmOffline={handleOfflineExportConfirm}
-    />
+      <ExportLogsDialog
+        open={exportDialogOpen}
+        onOpenChange={setExportDialogOpen}
+        defaultStart={filters.startTime}
+        defaultEnd={filters.endTime}
+        exporting={exporting}
+        onConfirm={handleExportConfirm}
+        offlineExporting={offlineExporting}
+        onConfirmOffline={handleOfflineExportConfirm}
+        canExportOthers={isSuperAdmin}
+        defaultUserId={filters.userId}
+      />
     </>
   )
 }

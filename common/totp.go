@@ -49,7 +49,7 @@ func ValidateTOTPCode(secret, code string) bool {
 func GenerateBackupCodes() ([]string, error) {
 	codes := make([]string, BackupCodeCount)
 
-	for i := 0; i < BackupCodeCount; i++ {
+	for i := range BackupCodeCount {
 		code, err := generateRandomBackupCode()
 		if err != nil {
 			return nil, err
@@ -113,7 +113,7 @@ func HashBackupCode(code string) (string, error) {
 
 // Get2FAIssuer 获取2FA发行者名称
 func Get2FAIssuer() string {
-	return SystemName
+	return GetBrandingSettings().SystemName
 }
 
 // getEnvOrDefault 获取环境变量或默认值

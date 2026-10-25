@@ -3,9 +3,9 @@ package claude
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/model_setting"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/internal/testconfig"
+	relaycommon "eflow.local/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -46,15 +46,15 @@ func TestPatchClaudeMessageDeltaUsageDataZeroValueChecks(t *testing.T) {
 }
 
 func TestShouldSkipClaudeMessageDeltaUsagePatch(t *testing.T) {
-	originGlobalPassThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled
-	t.Cleanup(func() {
-		model_setting.GetGlobalSettings().PassThroughRequestEnabled = originGlobalPassThrough
+	testconfig.Set(t, "global", map[string]string{
+		"pass_through_request_enabled": "true",
 	})
 
-	model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
 	assert.True(t, shouldSkipClaudeMessageDeltaUsagePatch(&relaycommon.RelayInfo{}))
 
-	model_setting.GetGlobalSettings().PassThroughRequestEnabled = false
+	testconfig.Update(t, "global", map[string]string{
+		"pass_through_request_enabled": "false",
+	})
 	assert.True(t, shouldSkipClaudeMessageDeltaUsagePatch(&relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelSetting: dto.ChannelSettings{PassThroughBodyEnabled: true}},
 	}))

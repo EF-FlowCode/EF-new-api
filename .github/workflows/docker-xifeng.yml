@@ -22,6 +22,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve build version
+        id: version
+        shell: bash
+        run: |
+          BUILD_VERSION="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          if [ -z "$BUILD_VERSION" ]; then
+            BUILD_VERSION="v0.0.0"
+          fi
+          echo "value=$BUILD_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Derive lowercase image name
         id: image
@@ -62,5 +74,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -7,222 +7,30 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	relaydto "eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
-// Gemini 允许的思考预算范围
-const (
-	pro25MinBudget       = 128
-	pro25MaxBudget       = 32768
-	flash25MaxBudget     = 24576
-	flash25LiteMinBudget = 512
-	flash25LiteMaxBudget = 24576
-)
-
-func isNew25ProModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
-}
-
-func is25FlashLiteModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-flash-lite")
-}
-
-// clampThinkingBudget 根据模型名称将预算限制在允许的范围内
-func clampThinkingBudget(modelName string, budget int) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	if is25FlashLite {
-		if budget < flash25LiteMinBudget {
-			return flash25LiteMinBudget
-		}
-		if budget > flash25LiteMaxBudget {
-			return flash25LiteMaxBudget
-		}
-	} else if isNew25Pro {
-		if budget < pro25MinBudget {
-			return pro25MinBudget
-		}
-		if budget > pro25MaxBudget {
-			return pro25MaxBudget
-		}
-	} else { // 其他模型
-		if budget < 0 {
-			return 0
-		}
-		if budget > flash25MaxBudget {
-			return flash25MaxBudget
-		}
-	}
-	return budget
-}
-
-// "effort": "high" - Allocates a large portion of tokens for reasoning (approximately 80% of max_tokens)
-// "effort": "medium" - Allocates a moderate portion of tokens (approximately 50% of max_tokens)
-// "effort": "low" - Allocates a smaller portion of tokens (approximately 20% of max_tokens)
-// "effort": "minimal" - Allocates a minimal portion of tokens (approximately 5% of max_tokens)
-func clampThinkingBudgetByEffort(modelName string, effort string) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	maxBudget := 0
-	if is25FlashLite {
-		maxBudget = flash25LiteMaxBudget
-	}
-	if isNew25Pro {
-		maxBudget = pro25MaxBudget
-	} else {
-		maxBudget = flash25MaxBudget
-	}
-	switch effort {
-	case "high":
-		maxBudget = maxBudget * 80 / 100
-	case "medium":
-		maxBudget = maxBudget * 50 / 100
-	case "low":
-		maxBudget = maxBudget * 20 / 100
-	case "minimal":
-		maxBudget = maxBudget * 5 / 100
-	}
-	return clampThinkingBudget(modelName, maxBudget)
-}
-
-func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.RelayInfo, oaiRequest ...dto.GeneralOpenAIRequest) {
-	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled {
-		modelName := info.UpstreamModelName
-		isNew25Pro := strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-			!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-			!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
-
-		if strings.Contains(modelName, "-thinking-") {
-			parts := strings.SplitN(modelName, "-thinking-", 2)
-			if len(parts) == 2 && parts[1] != "" {
-				if budgetTokens, err := strconv.Atoi(parts[1]); err == nil {
-					clampedBudget := clampThinkingBudget(modelName, budgetTokens)
-					geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-						ThinkingBudget:  common.GetPointer(clampedBudget),
-						IncludeThoughts: true,
-					}
-				}
-			}
-		} else if strings.HasSuffix(modelName, "-thinking") {
-			unsupportedModels := []string{
-				"gemini-2.5-pro-preview-05-06",
-				"gemini-2.5-pro-preview-03-25",
-			}
-			isUnsupported := false
-			for _, unsupportedModel := range unsupportedModels {
-				if strings.HasPrefix(modelName, unsupportedModel) {
-					isUnsupported = true
-					break
-				}
-			}
-
-			if isUnsupported {
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					IncludeThoughts: true,
-				}
-			} else {
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					IncludeThoughts: true,
-				}
-				if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
-					budgetTokens := model_setting.GetGeminiSettings().ThinkingAdapterBudgetTokensPercentage * float64(*geminiRequest.GenerationConfig.MaxOutputTokens)
-					clampedBudget := clampThinkingBudget(modelName, int(budgetTokens))
-					geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = common.GetPointer(clampedBudget)
-				} else {
-					if len(oaiRequest) > 0 {
-						// 如果有reasoningEffort参数，则根据其值设置思考预算
-						geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = common.GetPointer(clampThinkingBudgetByEffort(modelName, oaiRequest[0].ReasoningEffort))
-					}
-				}
-			}
-		} else if strings.HasSuffix(modelName, "-nothinking") {
-			if !isNew25Pro {
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					ThinkingBudget: common.GetPointer(0),
-				}
-			}
-		} else if _, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
-				ThinkingLevel:   level,
-			}
-			info.ReasoningEffort = level
-		}
-	}
-}
-
-// Setting safety to the lowest possible values since Gemini is already powerless enough
-func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackPromptTokens int) dto.Usage {
-	promptTokens := metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount
-	if promptTokens <= 0 && fallbackPromptTokens > 0 {
-		promptTokens = fallbackPromptTokens
-	}
-
-	usage := dto.Usage{
-		PromptTokens:     promptTokens,
-		CompletionTokens: metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount,
-		TotalTokens:      metadata.TotalTokenCount,
-	}
-	usage.CompletionTokenDetails.ReasoningTokens = metadata.ThoughtsTokenCount
-	usage.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
-
-	for _, detail := range metadata.PromptTokensDetails {
-		if detail.Modality == "AUDIO" {
-			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
-		} else if detail.Modality == "TEXT" {
-			usage.PromptTokensDetails.TextTokens += detail.TokenCount
-		}
-	}
-	for _, detail := range metadata.ToolUsePromptTokensDetails {
-		if detail.Modality == "AUDIO" {
-			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
-		} else if detail.Modality == "TEXT" {
-			usage.PromptTokensDetails.TextTokens += detail.TokenCount
-		}
-	}
-	for _, detail := range metadata.CandidatesTokensDetails {
-		switch detail.Modality {
-		case "IMAGE":
-			usage.CompletionTokenDetails.ImageTokens += detail.TokenCount
-		case "AUDIO":
-			usage.CompletionTokenDetails.AudioTokens += detail.TokenCount
-		case "TEXT":
-			usage.CompletionTokenDetails.TextTokens += detail.TokenCount
-		}
-	}
-
-	if usage.TotalTokens > 0 && usage.CompletionTokens <= 0 {
-		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
-	}
-
-	if usage.PromptTokens > 0 && usage.PromptTokensDetails.TextTokens == 0 && usage.PromptTokensDetails.AudioTokens == 0 {
-		usage.PromptTokensDetails.TextTokens = usage.PromptTokens
-	}
-
-	return usage
+// ThinkingAdaptor uses the same official renderer as cross-protocol requests.
+func ThinkingAdaptor(request *dto.GeminiChatRequest, info *relaycommon.RelayInfo, oaiRequest ...dto.GeneralOpenAIRequest) error {
+	return service.ApplyGeminiThinking(request, info, oaiRequest...)
 }
 
 func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
 	var usage = &dto.Usage{}
+	hasUsageMetadata := false
 	var imageCount int
 	responseText := strings.Builder{}
 
@@ -232,6 +40,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			sr.Stop(fmt.Errorf("unmarshal: %w", err))
 			return
 		}
+		info.ObserveResponseModel(gjson.Get(data, "modelVersion").Str)
 
 		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
@@ -250,9 +59,16 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 
 		// 更新使用量统计
-		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
-			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
-			*usage = mappedUsage
+		if metadata := geminiResponse.GetUsageMetadata(); metadata != nil {
+			mappedUsage, err := service.UsageFromGeminiMetadata(metadata, info.GetEstimatePromptTokens())
+			if err != nil {
+				sr.Stop(fmt.Errorf("map usage: %w", err))
+				return
+			}
+			if mappedUsage != nil {
+				*usage = *mappedUsage
+			}
+			hasUsageMetadata = true
 		}
 
 		if !callback(data, &geminiResponse) {
@@ -260,13 +76,13 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	})
 
-	if imageCount != 0 {
+	if !hasUsageMetadata && imageCount != 0 {
 		if usage.CompletionTokens == 0 {
 			usage.CompletionTokens = imageCount * 1400
 		}
 	}
 
-	if usage.CompletionTokens <= 0 {
+	if !hasUsageMetadata && usage.CompletionTokens <= 0 {
 		if info.ReceivedResponseCount > 0 {
 			usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		} else {
@@ -373,8 +189,12 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	info.ObserveResponseModel(gjson.GetBytes(responseBody, "modelVersion").Str)
 	if len(geminiResponse.Candidates) == 0 {
-		usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+		usage, usageErr := service.UsageFromGeminiMetadata(geminiResponse.GetUsageMetadata(), info.GetEstimatePromptTokens())
+		if usageErr != nil {
+			return nil, types.NewError(usageErr, types.ErrorCodeBadResponseBody)
+		}
 
 		var newAPIError *types.NewAPIError
 		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
@@ -406,16 +226,14 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 				"error": newAPIError.ToOpenAIError(),
 			})
 		}
-		return &usage, nil
+		return usage, nil
 	}
 	fullTextResponse, convErr := service.ConvertGeminiResponseToOpenAI(c, info, &geminiResponse)
 	if convErr != nil {
 		return nil, types.NewError(convErr, types.ErrorCodeBadResponseBody)
 	}
 	fullTextResponse.Model = info.UpstreamModelName
-	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
-
-	fullTextResponse.Usage = usage
+	usage := fullTextResponse.Usage
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
@@ -551,12 +369,14 @@ func FetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("创建HTTP客户端失败: %v", err)
 	}
+	// net/http keeps x-goog-api-key on cross-host redirects; do not follow them.
+	client = service.NewRedirectlessHTTPClient(client)
 
 	allModels := make([]string, 0)
 	nextPageToken := ""
 	maxPages := 100 // Safety limit to prevent infinite loops
 
-	for page := 0; page < maxPages; page++ {
+	for range maxPages {
 		url := fmt.Sprintf("%s/v1beta/models", baseURL)
 		if nextPageToken != "" {
 			url = fmt.Sprintf("%s?pageToken=%s", url, nextPageToken)
@@ -650,7 +470,7 @@ func convertToolChoiceToGeminiConfig(toolChoice any) *dto.ToolConfig {
 	}
 
 	// Handle object value: {"type": "function", "function": {"name": "xxx"}}
-	if toolChoiceMap, ok := toolChoice.(map[string]interface{}); ok {
+	if toolChoiceMap, ok := toolChoice.(map[string]any); ok {
 		if toolChoiceMap["type"] == "function" {
 			config := &dto.ToolConfig{
 				FunctionCallingConfig: &dto.FunctionCallingConfig{
@@ -658,7 +478,7 @@ func convertToolChoiceToGeminiConfig(toolChoice any) *dto.ToolConfig {
 				},
 			}
 			// Extract function name if specified
-			if function, ok := toolChoiceMap["function"].(map[string]interface{}); ok {
+			if function, ok := toolChoiceMap["function"].(map[string]any); ok {
 				if name, ok := function["name"].(string); ok && name != "" {
 					config.FunctionCallingConfig.AllowedFunctionNames = []string{name}
 				}

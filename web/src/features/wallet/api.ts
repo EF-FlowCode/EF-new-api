@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import type {
   RedemptionRequest,
   PaymentRequest,
@@ -45,7 +45,11 @@ export async function getTopupInfo(): Promise<TopupInfoResponse> {
 export async function redeemTopupCode(
   request: RedemptionRequest
 ): Promise<RedemptionResponse> {
-  const res = await api.post('/api/user/topup', request)
+  const res = await api.post(
+    '/api/user/topup',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -55,9 +59,11 @@ export async function redeemTopupCode(
 export async function calculateAmount(
   request: AmountRequest
 ): Promise<AmountResponse> {
-  const res = await api.post('/api/user/amount', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/amount',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -67,9 +73,11 @@ export async function calculateAmount(
 export async function calculateStripeAmount(
   request: AmountRequest
 ): Promise<AmountResponse> {
-  const res = await api.post('/api/user/stripe/amount', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/stripe/amount',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -79,9 +87,11 @@ export async function calculateStripeAmount(
 export async function requestPayment(
   request: PaymentRequest
 ): Promise<PaymentResponse> {
-  const res = await api.post('/api/user/pay', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/pay',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return {
     ...res.data,
     url: res.data.url || (res as unknown as { url?: string }).url,
@@ -94,9 +104,11 @@ export async function requestPayment(
 export async function requestStripePayment(
   request: PaymentRequest
 ): Promise<StripePaymentResponse> {
-  const res = await api.post('/api/user/stripe/pay', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/stripe/pay',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -106,9 +118,11 @@ export async function requestStripePayment(
 export async function requestCreemPayment(
   request: CreemPaymentRequest
 ): Promise<CreemPaymentResponse> {
-  const res = await api.post('/api/user/creem/pay', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/creem/pay',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -118,9 +132,11 @@ export async function requestCreemPayment(
 export async function requestWaffoPayment(
   request: WaffoPaymentRequest
 ): Promise<WaffoPaymentResponse> {
-  const res = await api.post('/api/user/waffo/pay', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/waffo/pay',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -130,9 +146,11 @@ export async function requestWaffoPayment(
 export async function calculateWaffoPancakeAmount(
   request: AmountRequest
 ): Promise<AmountResponse> {
-  const res = await api.post('/api/user/waffo-pancake/amount', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/waffo-pancake/amount',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -142,9 +160,11 @@ export async function calculateWaffoPancakeAmount(
 export async function requestWaffoPancakePayment(
   request: WaffoPancakePaymentRequest
 ): Promise<WaffoPancakePaymentResponse> {
-  const res = await api.post('/api/user/waffo-pancake/pay', request, {
-    skipBusinessError: true,
-  } as Record<string, unknown>)
+  const res = await api.post(
+    '/api/user/waffo-pancake/pay',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -162,6 +182,10 @@ export async function getAffiliateCode(): Promise<AffiliateCodeResponse> {
 export async function transferAffiliateQuota(
   request: AffiliateTransferRequest
 ): Promise<AffiliateTransferResponse> {
-  const res = await api.post('/api/user/aff_transfer', request)
+  const res = await api.post(
+    '/api/user/aff_transfer',
+    request,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }

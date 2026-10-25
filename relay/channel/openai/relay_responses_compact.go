@@ -4,10 +4,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,13 +32,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 
 	usage := dto.Usage{}
 	if compactResp.Usage != nil {
-		usage.PromptTokens = compactResp.Usage.InputTokens
-		usage.CompletionTokens = compactResp.Usage.OutputTokens
-		usage.TotalTokens = compactResp.Usage.TotalTokens
-		if compactResp.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
-			usage.PromptTokensDetails.CacheWriteTokens = compactResp.Usage.InputTokensDetails.CacheWriteTokens
-		}
+		mergeResponsesUsage(&usage, compactResp.Usage)
 	}
 
 	return &usage, nil

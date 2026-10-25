@@ -2,55 +2,48 @@ package relay
 
 import (
 	"strconv"
+	"strings"
 
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/ali"
-	"github.com/QuantumNous/new-api/relay/channel/ali_asr"
-	"github.com/QuantumNous/new-api/relay/channel/ali_asr_realtime"
-	"github.com/QuantumNous/new-api/relay/channel/ali_tts"
-	"github.com/QuantumNous/new-api/relay/channel/aws"
-	"github.com/QuantumNous/new-api/relay/channel/baidu"
-	"github.com/QuantumNous/new-api/relay/channel/baidu_v2"
-	"github.com/QuantumNous/new-api/relay/channel/claude"
-	"github.com/QuantumNous/new-api/relay/channel/cloudflare"
-	"github.com/QuantumNous/new-api/relay/channel/codex"
-	"github.com/QuantumNous/new-api/relay/channel/cohere"
-	"github.com/QuantumNous/new-api/relay/channel/coze"
-	"github.com/QuantumNous/new-api/relay/channel/deepseek"
-	"github.com/QuantumNous/new-api/relay/channel/dify"
-	"github.com/QuantumNous/new-api/relay/channel/gemini"
-	"github.com/QuantumNous/new-api/relay/channel/jimeng"
-	"github.com/QuantumNous/new-api/relay/channel/jina"
-	"github.com/QuantumNous/new-api/relay/channel/minimax"
-	"github.com/QuantumNous/new-api/relay/channel/mistral"
-	"github.com/QuantumNous/new-api/relay/channel/mokaai"
-	"github.com/QuantumNous/new-api/relay/channel/moonshot"
-	"github.com/QuantumNous/new-api/relay/channel/ollama"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	"github.com/QuantumNous/new-api/relay/channel/palm"
-	"github.com/QuantumNous/new-api/relay/channel/perplexity"
-	"github.com/QuantumNous/new-api/relay/channel/replicate"
-	"github.com/QuantumNous/new-api/relay/channel/siliconflow"
-	"github.com/QuantumNous/new-api/relay/channel/submodel"
-	taskali "github.com/QuantumNous/new-api/relay/channel/task/ali"
-	taskhh "github.com/QuantumNous/new-api/relay/channel/task/ali_happyhorse"
-	taskdoubao "github.com/QuantumNous/new-api/relay/channel/task/doubao"
-	taskGemini "github.com/QuantumNous/new-api/relay/channel/task/gemini"
-	"github.com/QuantumNous/new-api/relay/channel/task/hailuo"
-	taskjimeng "github.com/QuantumNous/new-api/relay/channel/task/jimeng"
-	"github.com/QuantumNous/new-api/relay/channel/task/kling"
-	tasksora "github.com/QuantumNous/new-api/relay/channel/task/sora"
-	"github.com/QuantumNous/new-api/relay/channel/task/suno"
-	taskvertex "github.com/QuantumNous/new-api/relay/channel/task/vertex"
-	taskVidu "github.com/QuantumNous/new-api/relay/channel/task/vidu"
-	"github.com/QuantumNous/new-api/relay/channel/tencent"
-	"github.com/QuantumNous/new-api/relay/channel/vertex"
-	"github.com/QuantumNous/new-api/relay/channel/volcengine"
-	"github.com/QuantumNous/new-api/relay/channel/xai"
-	"github.com/QuantumNous/new-api/relay/channel/xunfei"
-	"github.com/QuantumNous/new-api/relay/channel/zhipu"
-	"github.com/QuantumNous/new-api/relay/channel/zhipu_4v"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/advancedcustom"
+	"eflow.local/new-api/relay/channel/ali"
+	"eflow.local/new-api/relay/channel/ali_asr"
+	"eflow.local/new-api/relay/channel/ali_asr_realtime"
+	"eflow.local/new-api/relay/channel/ali_tts"
+	"eflow.local/new-api/relay/channel/aws"
+	"eflow.local/new-api/relay/channel/baidu"
+	"eflow.local/new-api/relay/channel/baidu_v2"
+	"eflow.local/new-api/relay/channel/claude"
+	"eflow.local/new-api/relay/channel/cloudflare"
+	"eflow.local/new-api/relay/channel/codex"
+	"eflow.local/new-api/relay/channel/cohere"
+	"eflow.local/new-api/relay/channel/coze"
+	"eflow.local/new-api/relay/channel/deepseek"
+	"eflow.local/new-api/relay/channel/dify"
+	"eflow.local/new-api/relay/channel/gemini"
+	"eflow.local/new-api/relay/channel/jimeng"
+	"eflow.local/new-api/relay/channel/jina"
+	"eflow.local/new-api/relay/channel/minimax"
+	"eflow.local/new-api/relay/channel/mistral"
+	"eflow.local/new-api/relay/channel/mokaai"
+	"eflow.local/new-api/relay/channel/moonshot"
+	"eflow.local/new-api/relay/channel/ollama"
+	"eflow.local/new-api/relay/channel/openai"
+	"eflow.local/new-api/relay/channel/palm"
+	"eflow.local/new-api/relay/channel/perplexity"
+	"eflow.local/new-api/relay/channel/replicate"
+	"eflow.local/new-api/relay/channel/siliconflow"
+	"eflow.local/new-api/relay/channel/submodel"
+	"eflow.local/new-api/relay/channel/tencent"
+	"eflow.local/new-api/relay/channel/vertex"
+	"eflow.local/new-api/relay/channel/volcengine"
+	"eflow.local/new-api/relay/channel/xai"
+	"eflow.local/new-api/relay/channel/xunfei"
+	"eflow.local/new-api/relay/channel/zhipu"
+	"eflow.local/new-api/relay/channel/zhipu_4v"
+	relaycommon "eflow.local/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -134,44 +127,44 @@ func GetAdaptor(apiType int) channel.Adaptor {
 	return nil
 }
 
+// GetAdaptorForInfo selects the protocol adaptor using both the legacy API
+// type and channel-scoped settings. Advanced Custom is stored as the legacy
+// Custom channel type (8), so it cannot be selected from ApiType alone; vLLM
+// and SGLang always relay through their route preset.
+func GetAdaptorForInfo(info *relaycommon.RelayInfo) channel.Adaptor {
+	if info == nil || info.ChannelMeta == nil {
+		return nil
+	}
+	if constant.SupportsAdvancedCustomRoutes(info.ChannelType) {
+		if config := info.ChannelOtherSettings.AdvancedCustom; config != nil && advancedCustomRelayRouteConfigured(config, info) {
+			return &advancedcustom.Adaptor{}
+		}
+	}
+	return GetAdaptor(info.ApiType)
+}
+
+func advancedCustomRelayRouteConfigured(config *dto.AdvancedCustomConfig, info *relaycommon.RelayInfo) bool {
+	if config == nil {
+		return false
+	}
+	requestPath := ""
+	if info != nil {
+		requestPath = strings.TrimSpace(strings.Split(info.RequestURLPath, "?")[0])
+	}
+	if requestPath != "" && config.SupportsPathForModel(requestPath, info.OriginModelName) {
+		return true
+	}
+	// A configuration with only management routes (/v1/models and balance)
+	// must retain legacy Custom relay behavior. If a relay route exists but the
+	// current path does not match, keep the advanced adaptor so it can return a
+	// clear unsupported-route error instead of silently using the wrong endpoint.
+	return config.HasRelayRoutes()
+}
+
 func GetTaskPlatform(c *gin.Context) constant.TaskPlatform {
 	channelType := c.GetInt("channel_type")
 	if channelType > 0 {
 		return constant.TaskPlatform(strconv.Itoa(channelType))
 	}
 	return constant.TaskPlatform(c.GetString("platform"))
-}
-
-func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
-	switch platform {
-	//case constant.APITypeAIProxyLibrary:
-	//	return &aiproxy.Adaptor{}
-	case constant.TaskPlatformSuno:
-		return &suno.TaskAdaptor{}
-	}
-	if channelType, err := strconv.ParseInt(string(platform), 10, 64); err == nil {
-		switch channelType {
-		case constant.ChannelTypeAli:
-			return &taskali.TaskAdaptor{}
-		case constant.ChannelTypeAliHappyhorse:
-			return &taskhh.TaskAdaptor{}
-		case constant.ChannelTypeKling:
-			return &kling.TaskAdaptor{}
-		case constant.ChannelTypeJimeng:
-			return &taskjimeng.TaskAdaptor{}
-		case constant.ChannelTypeVertexAi:
-			return &taskvertex.TaskAdaptor{}
-		case constant.ChannelTypeVidu:
-			return &taskVidu.TaskAdaptor{}
-		case constant.ChannelTypeDoubaoVideo, constant.ChannelTypeVolcEngine:
-			return &taskdoubao.TaskAdaptor{}
-		case constant.ChannelTypeSora, constant.ChannelTypeOpenAI:
-			return &tasksora.TaskAdaptor{}
-		case constant.ChannelTypeGemini:
-			return &taskGemini.TaskAdaptor{}
-		case constant.ChannelTypeMiniMax:
-			return &hailuo.TaskAdaptor{}
-		}
-	}
-	return nil
 }

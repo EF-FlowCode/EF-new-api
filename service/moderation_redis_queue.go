@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"github.com/go-redis/redis/v8"
 )
 
@@ -96,50 +96,39 @@ func (q *moderationRedisQueue) complete(eventJSON string) error {
 	return q.rdb.LRem(ctx, q.walKey, 1, eventJSON).Err()
 }
 
-// recoverIntoChannel drains the WAL back into the moderation center's
-// in-memory channel at startup. Caller MUST run this before workers are
-// spawned so the channel ordering stays consistent with normal enqueue.
-//
-// Events are read from the tail (RPOP, oldest first), decoded, and sent
-// onto the channel. Each recovered event is also re-LPUSHed back onto
-// the WAL head — symmetric with normal enqueue, so worker complete()
-// LREM still finds the entry. Stops when the WAL is empty, the channel
-// is full, or Redis fails.
+// recoverIntoChannel reads one bounded snapshot, oldest first, before workers
+// start. Entries stay in the WAL until completion; a crash during recovery must
+// not remove them. Entries beyond channel capacity remain for the next restart.
 func (q *moderationRedisQueue) recoverIntoChannel(out chan *moderationEvent, decode func(string) *moderationEvent) int {
 	if q == nil || out == nil || decode == nil {
 		return 0
 	}
+	ctx, cancel := q.ctx()
+	values, err := q.rdb.LRange(ctx, q.walKey, -int64(q.maxSize), -1).Result()
+	cancel()
+	if err != nil {
+		common.SysError("moderation redis recover failed: " + err.Error())
+		return 0
+	}
 	recovered := 0
-	for {
-		ctx, cancel := q.ctx()
-		val, err := q.rdb.RPop(ctx, q.walKey).Result()
-		cancel()
-		if err == redis.Nil {
-			return recovered
-		}
-		if err != nil {
-			common.SysError("moderation redis recover failed: " + err.Error())
-			return recovered
-		}
+	for i := len(values) - 1; i >= 0; i-- {
+		val := values[i]
 		event := decode(val)
 		if event == nil {
-			// Garbage entry — drop it permanently rather than re-pushing.
+			if err := q.complete(val); err != nil {
+				common.SysError("moderation invalid WAL entry cleanup failed: " + err.Error())
+			}
 			continue
 		}
-		// Re-LPUSH so worker complete() can LREM the entry symmetrically.
-		ctx2, cancel2 := q.ctx()
-		_ = q.rdb.LPush(ctx2, q.walKey, val).Err()
-		cancel2()
+		event.walPayload = val
 		select {
 		case out <- event:
 			recovered++
 		default:
-			// Channel full — entry is back in the WAL, will be picked up
-			// next time the worker drains the queue and a fresh enqueue
-			// happens.
 			return recovered
 		}
 	}
+	return recovered
 }
 
 // depth returns the live WAL length for the UI status card. Returns 0

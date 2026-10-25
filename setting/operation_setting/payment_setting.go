@@ -1,6 +1,6 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type PaymentSetting struct {
 	AmountOptions  []int           `json:"amount_options"`
@@ -27,10 +27,12 @@ func init() {
 }
 
 func GetPaymentSetting() *PaymentSetting {
-	return &paymentSetting
+	setting := config.MustSnapshot[PaymentSetting]("payment_setting")
+	return &setting
 }
 
 func IsPaymentComplianceConfirmed() bool {
-	return paymentSetting.ComplianceConfirmed &&
-		paymentSetting.ComplianceTermsVersion == CurrentComplianceTermsVersion
+	setting := GetPaymentSetting()
+	return setting.ComplianceConfirmed &&
+		setting.ComplianceTermsVersion == CurrentComplianceTermsVersion
 }

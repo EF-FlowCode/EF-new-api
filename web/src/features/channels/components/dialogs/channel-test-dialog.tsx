@@ -46,6 +46,7 @@ import {
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { DataTablePagination } from '@/components/data-table/pagination'
 import { StatusBadge } from '@/components/status-badge'
+import { pricingSettingsUrl } from '@/features/system-settings/models/lib/pricing-settings-link'
 import { formatResponseTime, handleTestChannel } from '../../lib'
 import { useChannels } from '../channels-provider'
 
@@ -352,7 +353,7 @@ export function ChannelTestDialog({
                   size='sm'
                   className='w-fit'
                   onClick={() =>
-                    window.open('/console/setting?tab=ratio', '_blank')
+                    window.open(pricingSettingsUrl(model), '_blank', 'noopener')
                   }
                 >
                   <Settings className='mr-1 h-3 w-3' />

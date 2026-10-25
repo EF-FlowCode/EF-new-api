@@ -25,8 +25,12 @@ var (
 // Redemption errors
 var ErrRedeemFailed = errors.New("redeem.failed")
 
+// ErrRedemptionAlreadyUsed rejects edits to a code that has been redeemed.
+var ErrRedemptionAlreadyUsed = errors.New("redemption code has been used")
+
 // 2FA errors
 var ErrTwoFANotEnabled = errors.New("2fa not enabled")
+var ErrTwoFAAlreadyEnabled = errors.New("2fa already enabled")
 
 // Invitation code errors
 var (

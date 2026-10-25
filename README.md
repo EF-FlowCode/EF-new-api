@@ -128,16 +128,18 @@ docker-compose up -d
 # Pull the latest image
 docker pull calciumion/new-api:latest
 
-# MySQL 8.0+ (required)
+# MySQL 8 is required
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
-> **💡 Tip:** `-v ./data:/data` will save data in the `data` folder of the current directory, you can also change it to an absolute path like `-v /your/custom/path:/data`
+> **MySQL:** Replace `mysql-host` with a MySQL 8.x hostname or IP reachable from the container. Do not use `localhost`, which refers to the New API container itself.
+>
+> **Local files:** `-v ./data:/data` persists uploads and other local runtime files only. Account, configuration, and billing data remain in MySQL.
 
 </details>
 
@@ -182,7 +184,7 @@ docker run --name new-api -d --restart always \
 |------|------|
 | 🎨 New UI | Modern user interface design |
 | 🌍 Multi-language | Supports Simplified Chinese, Traditional Chinese, English, French, Japanese |
-| 🔄 Data Compatibility | Fully compatible with the original One API database |
+| 🔄 Data Compatibility | Supports original One API schemas on MySQL 8.x; other database engines require an external migration |
 | 📈 Data Dashboard | Visual console and statistical analysis |
 | 🔒 Permission Management | Token grouping, model restrictions, user management |
 
@@ -200,6 +202,8 @@ docker run --name new-api -d --restart always \
 - 📱 Telegram authorization login
 - 🔑 OIDC unified authentication
 - 🔍 Key quota query usage (with [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool))
+
+Standard OAuth login (GitHub, Discord, OIDC, LinuxDO, and custom providers) does not use `CriticalRateLimit` on `/api/oauth/state` or the unified `/api/oauth/:provider` callback, so visitors sharing a proxy IP do not block each other's OAuth flow. Session state validation and provider verification remain in place. Password login, registration, verification codes, and the separate WeChat/Telegram routes retain their respective limits. Explicitly enabled global API rate limits still apply to OAuth routes.
 
 ### 🚀 Advanced Features
 
@@ -294,7 +298,7 @@ docker run --name new-api -d --restart always \
 
 | Component | Requirement |
 |------|------|
-| **Database** | MySQL 8.0+ (`SQL_DSN` is required) |
+| **Database** | MySQL 8.x |
 | **Container engine** | Docker / Docker Compose |
 
 ### ⚙️ Environment Variable Configuration
@@ -306,12 +310,14 @@ docker run --name new-api -d --restart always \
 |--------|------|--------|
 | `SESSION_SECRET` | Session secret (required for multi-machine deployment) | - |
 | `CRYPTO_SECRET` | Encryption secret (required for Redis) | - |
-| `SQL_DSN` | MySQL 8.0+ connection string (required) | - |
+| `SQL_DSN` | MySQL 8 connection string | Required |
 | `REDIS_CONN_STRING` | Redis connection string | - |
 | `RELAY_IDLE_CONN_TIMEOUT` | Idle keep-alive timeout for relay HTTP clients, seconds. Defaults to Go standard library behavior; set `0` to disable | `90` |
+| `RELAY_RESPONSE_HEADER_TIMEOUT` | 等待上游响应头的秒数，不限制响应体/流式生成；`0` 或负数禁用。未设置时兼容旧 `RESPONSE_HEADER_TIMEOUT`，两者都未设置或配置非法时使用默认值 | `1800` |
 | `STREAMING_TIMEOUT` | Streaming timeout (seconds) | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | Max per-line buffer (MB) for the stream scanner; increase when upstream sends huge image/base64 payloads | `64` |
 | `MAX_REQUEST_BODY_MB` | Max request body size (MB, counted **after decompression**; prevents huge requests/zip bombs from exhausting memory). Exceeding it returns `413` | `32` |
+| `ANONYMOUS_REQUEST_BODY_LIMIT_KB` | Max request body size (KB) for selected public/authentication API endpoints (registration, login, passkey, OAuth binding, and payment webhooks); set `0` to disable | `512` |
 | `AZURE_DEFAULT_API_VERSION` | Azure API version | `2025-04-01-preview` |
 | `ERROR_LOG_ENABLED` | Error log switch | `false` |
 | `PYROSCOPE_URL` | Pyroscope server address | - |
@@ -348,18 +354,19 @@ docker-compose up -d
 <details>
 <summary><strong>Method 2: Docker Commands</strong></summary>
 
-**Using MySQL 8.0+:**
+**Using MySQL 8:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
 > **💡 Path explanation:**
-> - `./data:/data` - Relative path, data saved in the data folder of the current directory
+> - Replace `mysql-host` with a MySQL 8.x address reachable from the container; container-local `localhost` is not the database host
+> - `./data:/data` - Persists local uploads and runtime files; database data remains in MySQL
 > - You can also use absolute path, e.g.: `/your/custom/path:/data`
 
 </details>
@@ -371,7 +378,7 @@ docker run --name new-api -d --restart always \
 2. Search for **New-API** in the application store
 3. One-click installation
 
-📖 [Tutorial with images](./docs/BT.md)
+📖 [Tutorial with images](docs/operations/bt-installation.md)
 
 </details>
 
@@ -470,3 +477,5 @@ If this project is helpful to you, welcome to give us a ⭐️ Star！
 <sub>Built with ❤️ by QuantumNous</sub>
 
 </div>
+
+[eflow 分支文档导航](docs/README.md)

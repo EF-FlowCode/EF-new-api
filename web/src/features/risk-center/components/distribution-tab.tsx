@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
+import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -33,7 +35,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Plus, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  ServerPagination,
+  useLatestRequest,
+  useServerPagination,
+} from '@/components/data-table'
 import {
   deleteRule,
   detectIp,
@@ -57,10 +63,11 @@ import type {
 import { RiskRuleDialog } from './risk-rule-dialog'
 
 const PAGE_SIZE = 10
+const route = getRouteApi('/_authenticated/risk-center/')
 
 export function DistributionTab() {
   const { t } = useTranslation()
-  const [overview, setOverview] = useState<RiskOverview>({})
+  const [overview, setOverview] = useState<Partial<RiskOverview>>({})
   const [groups, setGroups] = useState<RiskGroups>({ items: [] })
   const [rules, setRules] = useState<RiskRule[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,6 +83,8 @@ export function DistributionTab() {
     status: 'all',
     keyword: '',
   })
+  const [appliedSubjectFilters, setAppliedSubjectFilters] =
+    useState(subjectFilters)
   const [subjectsLoading, setSubjectsLoading] = useState(false)
 
   const [incidentsPage, setIncidentsPage] = useState<Paginated<RiskIncident>>({
@@ -89,13 +98,35 @@ export function DistributionTab() {
     action: 'all',
     keyword: '',
   })
+  const [appliedIncidentFilters, setAppliedIncidentFilters] =
+    useState(incidentFilters)
   const [incidentsLoading, setIncidentsLoading] = useState(false)
+
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const subjectsPagination = useServerPagination({
+    search,
+    navigate,
+    total: subjectsPage.total,
+    pageKey: 'subjectsPage',
+    pageSizeKey: 'subjectsPageSize',
+    defaultPageSize: PAGE_SIZE,
+  })
+  const distributionIncidentsPagination = useServerPagination({
+    search,
+    navigate,
+    total: incidentsPage.total,
+    pageKey: 'distributionIncidentsPage',
+    pageSizeKey: 'distributionIncidentsPageSize',
+    defaultPageSize: PAGE_SIZE,
+  })
+  const runSubjectsRequest = useLatestRequest()
+  const runIncidentsRequest = useLatestRequest()
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<RiskRule | null>(null)
   const [pendingDelete, setPendingDelete] = useState<RiskRule | null>(null)
 
-  const [ipInput, setIpInput] = useState('')
   const [detecting, setDetecting] = useState(false)
   const [detectResult, setDetectResult] = useState<unknown>(null)
 
@@ -120,72 +151,106 @@ export function DistributionTab() {
   }
 
   const reloadSubjects = async (
-    page = subjectsPage.page,
-    filters = subjectFilters
+    page = subjectsPagination.page,
+    pageSize = subjectsPagination.pageSize,
+    filters = appliedSubjectFilters
   ) => {
     setSubjectsLoading(true)
-    try {
-      const res = await fetchSubjects({
-        page,
-        pageSize: PAGE_SIZE,
-        scope: filters.scope === 'all' ? '' : filters.scope,
-        status: filters.status === 'all' ? '' : filters.status,
-        keyword: filters.keyword,
-      })
-      setSubjectsPage(res)
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Failed to load subjects'))
-    } finally {
-      setSubjectsLoading(false)
-    }
+    await runSubjectsRequest(
+      (signal) =>
+        fetchSubjects(
+          {
+            page,
+            pageSize,
+            scope: filters.scope === 'all' ? '' : filters.scope,
+            status: filters.status === 'all' ? '' : filters.status,
+            keyword: filters.keyword,
+          },
+          signal
+        ),
+      {
+        onSuccess: setSubjectsPage,
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load subjects')
+          ),
+        onSettled: () => setSubjectsLoading(false),
+      }
+    )
   }
 
   const reloadIncidents = async (
-    page = incidentsPage.page,
-    filters = incidentFilters
+    page = distributionIncidentsPagination.page,
+    pageSize = distributionIncidentsPagination.pageSize,
+    filters = appliedIncidentFilters
   ) => {
     setIncidentsLoading(true)
-    try {
-      const res = await fetchIncidents({
-        page,
-        pageSize: PAGE_SIZE,
-        scope: filters.scope === 'all' ? '' : filters.scope,
-        action: filters.action === 'all' ? '' : filters.action,
-        keyword: filters.keyword,
-      })
-      setIncidentsPage(res)
-    } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to load incidents')
-      )
-    } finally {
-      setIncidentsLoading(false)
-    }
+    await runIncidentsRequest(
+      (signal) =>
+        fetchIncidents(
+          {
+            page,
+            pageSize,
+            scope: filters.scope === 'all' ? '' : filters.scope,
+            action: filters.action === 'all' ? '' : filters.action,
+            keyword: filters.keyword,
+          },
+          signal
+        ),
+      {
+        onSuccess: setIncidentsPage,
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load incidents')
+          ),
+        onSettled: () => setIncidentsLoading(false),
+      }
+    )
   }
 
   useEffect(() => {
     let active = true
     setLoading(true)
-    Promise.all([reloadOverview(), reloadSubjects(1), reloadIncidents(1)])
-      .finally(() => {
-        if (active) setLoading(false)
-      })
+    reloadOverview().finally(() => {
+      if (active) setLoading(false)
+    })
     return () => {
       active = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    reloadSubjects()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    subjectsPagination.page,
+    subjectsPagination.pageSize,
+    appliedSubjectFilters,
+  ])
+
+  useEffect(() => {
+    reloadIncidents()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    distributionIncidentsPagination.page,
+    distributionIncidentsPagination.pageSize,
+    appliedIncidentFilters,
+  ])
+
   const handleToggleRule = async (rule: RiskRule) => {
     try {
-      // Backend expects conditions/groups as JSON strings; rule.conditions
-      // and rule.groups are already-parsed arrays in memory.
+      // 写入合同使用数组，读取时的 JSON 文本已在 API 边界解析。
       const payload = {
         ...rule,
         enabled: !rule.enabled,
-        conditions: JSON.stringify(rule.conditions),
-        groups: JSON.stringify(rule.groups),
-      } as unknown as Partial<RiskRule>
+        conditions: rule.conditions,
+        groups: rule.groups,
+      }
       await updateRule(rule.id, payload)
       toast.success(t('Rule updated'))
       reloadOverview()
@@ -206,11 +271,9 @@ export function DistributionTab() {
   }
 
   const handleDetectIP = async () => {
-    const ip = ipInput.trim()
-    if (!ip) return
     setDetecting(true)
     try {
-      const r = await detectIp(ip)
+      const r = await detectIp()
       setDetectResult(r)
     } catch (e) {
       toast.error(
@@ -221,38 +284,49 @@ export function DistributionTab() {
     }
   }
 
-  const subjectsTotalPages = Math.max(
-    1,
-    Math.ceil(subjectsPage.total / PAGE_SIZE)
-  )
-  const incidentsTotalPages = Math.max(
-    1,
-    Math.ceil(incidentsPage.total / PAGE_SIZE)
-  )
-
   return (
     <div className='space-y-5'>
       {/* Overview cards */}
       <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
         <OverviewCard
-          title={t('Total subjects')}
-          value={loading ? <Skeleton className='h-8 w-16' /> : overview.total_subjects ?? 0}
+          title={t('Rules')}
+          value={
+            loading ? (
+              <Skeleton className='h-8 w-16' />
+            ) : (
+              (overview.rule_count ?? '—')
+            )
+          }
         />
         <OverviewCard
           title={t('Blocked')}
-          value={loading ? <Skeleton className='h-8 w-16' /> : overview.blocked_subjects ?? 0}
+          value={
+            loading ? (
+              <Skeleton className='h-8 w-16' />
+            ) : (
+              (overview.blocked_subjects ?? '—')
+            )
+          }
         />
         <OverviewCard
           title={t('Observing')}
-          value={loading ? <Skeleton className='h-8 w-16' /> : overview.observed_subjects ?? 0}
+          value={
+            loading ? (
+              <Skeleton className='h-8 w-16' />
+            ) : (
+              (overview.observed_subjects ?? '—')
+            )
+          }
         />
         <OverviewCard
-          title={t('Incidents (24h)')}
-          value={loading ? <Skeleton className='h-8 w-16' /> : overview.total_incidents_24h ?? 0}
-          hint={t('Block: {{a}} · Observe: {{b}}', {
-            a: overview.blocked_incidents_24h ?? 0,
-            b: overview.observed_incidents_24h ?? 0,
-          })}
+          title={t('High-risk subjects')}
+          value={
+            loading ? (
+              <Skeleton className='h-8 w-16' />
+            ) : (
+              (overview.high_risk_subjects ?? '—')
+            )
+          }
         />
       </div>
 
@@ -396,7 +470,6 @@ export function DistributionTab() {
                   <SelectItem value='all'>{t('All scopes')}</SelectItem>
                   <SelectItem value='token'>{t('Token')}</SelectItem>
                   <SelectItem value='user'>{t('User')}</SelectItem>
-                  <SelectItem value='ip'>{t('IP')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -432,21 +505,21 @@ export function DistributionTab() {
             <Button
               size='sm'
               onClick={() => {
-                setSubjectsPage((p) => ({ ...p, page: 1 }))
-                reloadSubjects(1)
+                setAppliedSubjectFilters({
+                  ...subjectFilters,
+                  keyword: subjectFilters.keyword.trim(),
+                })
+                subjectsPagination.resetPage()
               }}
             >
               {t('Search')}
             </Button>
           </div>
-          <SubjectsTable
-            data={subjectsPage}
+          <SubjectsTable data={subjectsPage} loading={subjectsLoading} />
+          <ServerPagination
+            table={subjectsPagination.table}
+            total={subjectsPage.total}
             loading={subjectsLoading}
-            totalPages={subjectsTotalPages}
-            onPage={(p) => {
-              setSubjectsPage((prev) => ({ ...prev, page: p }))
-              reloadSubjects(p)
-            }}
           />
         </TabsContent>
 
@@ -470,7 +543,6 @@ export function DistributionTab() {
                   <SelectItem value='all'>{t('All scopes')}</SelectItem>
                   <SelectItem value='token'>{t('Token')}</SelectItem>
                   <SelectItem value='user'>{t('User')}</SelectItem>
-                  <SelectItem value='ip'>{t('IP')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -506,21 +578,21 @@ export function DistributionTab() {
             <Button
               size='sm'
               onClick={() => {
-                setIncidentsPage((p) => ({ ...p, page: 1 }))
-                reloadIncidents(1)
+                setAppliedIncidentFilters({
+                  ...incidentFilters,
+                  keyword: incidentFilters.keyword.trim(),
+                })
+                distributionIncidentsPagination.resetPage()
               }}
             >
               {t('Search')}
             </Button>
           </div>
-          <IncidentsTable
-            data={incidentsPage}
+          <IncidentsTable data={incidentsPage} loading={incidentsLoading} />
+          <ServerPagination
+            table={distributionIncidentsPagination.table}
+            total={incidentsPage.total}
             loading={incidentsLoading}
-            totalPages={incidentsTotalPages}
-            onPage={(p) => {
-              setIncidentsPage((prev) => ({ ...prev, page: p }))
-              reloadIncidents(p)
-            }}
           />
         </TabsContent>
 
@@ -528,24 +600,16 @@ export function DistributionTab() {
         <TabsContent value='detect' className='space-y-3'>
           <div className='bg-card rounded-xl border p-4'>
             <div className='space-y-2'>
-              <Label>{t('IP address')}</Label>
-              <div className='flex gap-2'>
-                <Input
-                  value={ipInput}
-                  onChange={(e) => setIpInput(e.target.value)}
-                  placeholder='1.2.3.4'
-                />
-                <Button onClick={handleDetectIP} disabled={detecting || !ipInput.trim()}>
-                  {t('Detect')}
-                </Button>
-              </div>
+              <Button onClick={handleDetectIP} disabled={detecting}>
+                {t('Detect current request IP')}
+              </Button>
               <p className='text-muted-foreground text-xs'>
-                {t('Probe the configured upstream risk service for the given IP.')}
+                {t('Show how the server resolves this request IP.')}
               </p>
             </div>
             {detectResult != null && (
               <div className='bg-muted/40 mt-3 rounded-md p-3'>
-                <pre className='overflow-x-auto whitespace-pre-wrap text-xs'>
+                <pre className='overflow-x-auto text-xs whitespace-pre-wrap'>
                   {JSON.stringify(detectResult, null, 2)}
                 </pre>
               </div>
@@ -595,215 +659,149 @@ export function DistributionTab() {
 function SubjectsTable({
   data,
   loading,
-  totalPages,
-  onPage,
 }: {
   data: Paginated<RiskSubject>
   loading: boolean
-  totalPages: number
-  onPage: (page: number) => void
 }) {
   const { t } = useTranslation()
   return (
-    <>
-      <div className='overflow-x-auto rounded-md border'>
-        <Table>
-          <TableHeader>
+    <div className='overflow-x-auto rounded-md border'>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className='w-20'>{t('Scope')}</TableHead>
+            <TableHead>{t('Identifier')}</TableHead>
+            <TableHead>{t('User')}</TableHead>
+            <TableHead className='w-24'>{t('Status')}</TableHead>
+            <TableHead className='w-20'>{t('Score')}</TableHead>
+            <TableHead className='w-20'>{t('Hits 24h')}</TableHead>
+            <TableHead className='w-40'>{t('Last hit')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {loading && data.items.length === 0 ? (
+            [0, 1, 2].map((i) => (
+              <TableRow key={i}>
+                {Array.from({ length: 7 }).map((_, j) => (
+                  <TableCell key={j}>
+                    <Skeleton className='h-4 w-full' />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          ) : data.items.length === 0 ? (
             <TableRow>
-              <TableHead className='w-20'>{t('Scope')}</TableHead>
-              <TableHead>{t('Identifier')}</TableHead>
-              <TableHead>{t('User')}</TableHead>
-              <TableHead className='w-24'>{t('Status')}</TableHead>
-              <TableHead className='w-20'>{t('Score')}</TableHead>
-              <TableHead className='w-20'>{t('Hits 24h')}</TableHead>
-              <TableHead className='w-40'>{t('Last hit')}</TableHead>
+              <TableCell
+                colSpan={7}
+                className='text-muted-foreground py-8 text-center text-sm'
+              >
+                {t('No subjects')}
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading && data.items.length === 0 ? (
-              [0, 1, 2].map((i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 7 }).map((_, j) => (
-                    <TableCell key={j}>
-                      <Skeleton className='h-4 w-full' />
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : data.items.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className='text-muted-foreground py-8 text-center text-sm'
-                >
-                  {t('No subjects')}
+          ) : (
+            data.items.map((s) => (
+              <TableRow key={s.id}>
+                <TableCell className='font-mono text-xs uppercase'>
+                  {s.subject_type}
+                </TableCell>
+                <TableCell className='font-mono text-xs break-all'>
+                  {s.subject_id}
+                </TableCell>
+                <TableCell>{s.username || '—'}</TableCell>
+                <TableCell>
+                  <StatusBadge status={s.status} />
+                </TableCell>
+                <TableCell className='font-mono text-xs'>
+                  {s.risk_score}
+                </TableCell>
+                <TableCell className='font-mono text-xs'>
+                  {s.rule_hit_count_24h}
+                </TableCell>
+                <TableCell className='text-muted-foreground text-xs'>
+                  {formatRiskTime(s.last_incident_at)}
                 </TableCell>
               </TableRow>
-            ) : (
-              data.items.map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell className='font-mono text-xs uppercase'>
-                    {s.scope}
-                  </TableCell>
-                  <TableCell className='font-mono text-xs break-all'>
-                    {s.identifier}
-                  </TableCell>
-                  <TableCell>{s.username || '—'}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={s.status} />
-                  </TableCell>
-                  <TableCell className='font-mono text-xs'>
-                    {s.risk_score}
-                  </TableCell>
-                  <TableCell className='font-mono text-xs'>
-                    {s.hit_count_24h}
-                  </TableCell>
-                  <TableCell className='text-muted-foreground text-xs'>
-                    {formatRiskTime(s.last_hit_time)}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-      <PaginationFooter
-        total={data.total}
-        page={data.page}
-        totalPages={totalPages}
-        onPage={onPage}
-      />
-    </>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
 function IncidentsTable({
   data,
   loading,
-  totalPages,
-  onPage,
 }: {
   data: Paginated<RiskIncident>
   loading: boolean
-  totalPages: number
-  onPage: (page: number) => void
 }) {
   const { t } = useTranslation()
   return (
-    <>
-      <div className='overflow-x-auto rounded-md border'>
-        <Table>
-          <TableHeader>
+    <div className='overflow-x-auto rounded-md border'>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className='w-40'>{t('Time')}</TableHead>
+            <TableHead className='w-20'>{t('Scope')}</TableHead>
+            <TableHead>{t('Identifier')}</TableHead>
+            <TableHead>{t('Rule')}</TableHead>
+            <TableHead className='w-20'>{t('Decision')}</TableHead>
+            <TableHead>{t('Reason')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {loading && data.items.length === 0 ? (
+            [0, 1, 2].map((i) => (
+              <TableRow key={i}>
+                {Array.from({ length: 6 }).map((_, j) => (
+                  <TableCell key={j}>
+                    <Skeleton className='h-4 w-full' />
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          ) : data.items.length === 0 ? (
             <TableRow>
-              <TableHead className='w-40'>{t('Time')}</TableHead>
-              <TableHead className='w-20'>{t('Scope')}</TableHead>
-              <TableHead>{t('Identifier')}</TableHead>
-              <TableHead>{t('Rule')}</TableHead>
-              <TableHead className='w-20'>{t('Decision')}</TableHead>
-              <TableHead>{t('Reason')}</TableHead>
+              <TableCell
+                colSpan={6}
+                className='text-muted-foreground py-8 text-center text-sm'
+              >
+                {t('No incidents')}
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {loading && data.items.length === 0 ? (
-              [0, 1, 2].map((i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 6 }).map((_, j) => (
-                    <TableCell key={j}>
-                      <Skeleton className='h-4 w-full' />
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : data.items.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className='text-muted-foreground py-8 text-center text-sm'
-                >
-                  {t('No incidents')}
+          ) : (
+            data.items.map((it) => (
+              <TableRow key={it.id}>
+                <TableCell className='text-muted-foreground text-xs'>
+                  {formatRiskTime(it.created_at)}
+                </TableCell>
+                <TableCell className='font-mono text-xs uppercase'>
+                  {it.subject_type}
+                </TableCell>
+                <TableCell className='font-mono text-xs break-all'>
+                  {it.subject_id}
+                </TableCell>
+                <TableCell>
+                  {it.rule_name ? (
+                    <span className='text-sm'>{it.rule_name}</span>
+                  ) : (
+                    <Badge variant='outline' className='font-normal'>
+                      {t('Manual')}
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <DecisionBadge decision={it.decision} />
+                </TableCell>
+                <TableCell className='text-muted-foreground text-xs'>
+                  {it.reason || '—'}
                 </TableCell>
               </TableRow>
-            ) : (
-              data.items.map((it) => (
-                <TableRow key={it.id}>
-                  <TableCell className='text-muted-foreground text-xs'>
-                    {formatRiskTime(it.created_time)}
-                  </TableCell>
-                  <TableCell className='font-mono text-xs uppercase'>
-                    {it.scope}
-                  </TableCell>
-                  <TableCell className='font-mono text-xs break-all'>
-                    {it.identifier}
-                  </TableCell>
-                  <TableCell>
-                    {it.rule_name ? (
-                      <span className='text-sm'>{it.rule_name}</span>
-                    ) : (
-                      <Badge variant='outline' className='font-normal'>
-                        {t('Manual')}
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <DecisionBadge decision={it.decision} />
-                  </TableCell>
-                  <TableCell className='text-muted-foreground text-xs'>
-                    {it.reason || '—'}
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
-      <PaginationFooter
-        total={data.total}
-        page={data.page}
-        totalPages={totalPages}
-        onPage={onPage}
-      />
-    </>
-  )
-}
-
-export function PaginationFooter({
-  total,
-  page,
-  totalPages,
-  onPage,
-}: {
-  total: number
-  page: number
-  totalPages: number
-  onPage: (page: number) => void
-}) {
-  const { t } = useTranslation()
-  return (
-    <div className='flex flex-wrap items-center justify-between gap-3'>
-      <div className='text-muted-foreground text-xs'>
-        {t('Total {{n}} records', { n: total })}
-      </div>
-      <div className='flex items-center gap-2'>
-        <Button
-          size='sm'
-          variant='outline'
-          disabled={page <= 1}
-          onClick={() => onPage(Math.max(1, page - 1))}
-        >
-          {t('Previous')}
-        </Button>
-        <span className='text-muted-foreground text-xs'>
-          {t('Page {{p}} / {{total}}', { p: page, total: totalPages })}
-        </span>
-        <Button
-          size='sm'
-          variant='outline'
-          disabled={page >= totalPages}
-          onClick={() => onPage(Math.min(totalPages, page + 1))}
-        >
-          {t('Next')}
-        </Button>
-      </div>
+            ))
+          )}
+        </TableBody>
+      </Table>
     </div>
   )
 }

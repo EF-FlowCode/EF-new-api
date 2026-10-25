@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
-	"github.com/QuantumNous/new-api/relay/constant"
+	"eflow.local/new-api/relay/constant"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -64,8 +65,8 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	if strings.HasSuffix(info.UpstreamModelName, "-search") {
-		info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-search")
+	if before, ok := strings.CutSuffix(info.UpstreamModelName, "-search"); ok {
+		info.UpstreamModelName = before
 		request.Model = info.UpstreamModelName
 		toMap := request.ToMap()
 		toMap["search_parameters"] = map[string]any{
@@ -78,10 +79,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
-		if strings.HasSuffix(request.Model, "-high") {
+		// eflow: 命中"保留思考后缀"名单时不拆 -high/-low（上游 6b659fd61）。
+		preserveSuffix := model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) || model_setting.ShouldPreserveThinkingSuffix(request.Model)
+		if !preserveSuffix && strings.HasSuffix(request.Model, "-high") {
 			request.ReasoningEffort = "high"
 			request.Model = strings.TrimSuffix(request.Model, "-high")
-		} else if strings.HasSuffix(request.Model, "-low") {
+		} else if !preserveSuffix && strings.HasSuffix(request.Model, "-low") {
 			request.ReasoningEffort = "low"
 			request.Model = strings.TrimSuffix(request.Model, "-low")
 		}

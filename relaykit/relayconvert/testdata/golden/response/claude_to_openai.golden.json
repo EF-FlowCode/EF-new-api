@@ -29,18 +29,6 @@
     "total_tokens": 20,
     "usage_semantic": "openai",
     "usage_source": "anthropic",
-    "billing_usage": {
-      "source": "claude_messages",
-      "semantic": "anthropic",
-      "claude_usage": {
-        "input_tokens": 10,
-        "cache_creation_input_tokens": 2,
-        "cache_read_input_tokens": 3,
-        "output_tokens": 5,
-        "claude_cache_creation_5_m_tokens": 0,
-        "claude_cache_creation_1_h_tokens": 0
-      }
-    },
     "prompt_tokens_details": {
       "cached_tokens": 3,
       "cached_creation_tokens": 2,

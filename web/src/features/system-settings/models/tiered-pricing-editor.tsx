@@ -50,6 +50,7 @@ import {
   createEmptyTimeCondition,
   createEmptyTimeRuleGroup,
   getRequestRuleMatchOptions,
+  hasNonCanonicalTimeRange,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
   type ParamHeaderCondition,
@@ -58,6 +59,7 @@ import {
   type TimeCondition,
   type TimeFunc,
 } from '@/features/pricing/lib/billing-expr'
+import { toAmountExpression } from '@/features/pricing/lib/expression-units'
 import {
   CACHE_MODE_GENERIC,
   CACHE_MODE_TIMED,
@@ -75,6 +77,12 @@ import {
   normalizeVisualTier,
   tryParseVisualConfig,
 } from '@/features/pricing/lib/tier-expr'
+import type { BillingUsageInfo } from '@/features/pricing/types'
+import {
+  classifyEditorPropUpdate,
+  type EditorPropSnapshot,
+  type LastEmittedEditorValues,
+} from './tiered-pricing-editor-state'
 
 const PRICE_SUFFIX = '$/1M tokens'
 
@@ -368,7 +376,10 @@ function DraftNumberInput({
     const normalized = parseNumberDraft(event.currentTarget.value)
     setFocused(false)
     setDraft(String(normalized))
-    onValueChange(normalized)
+    // Focus/blur alone is not an edit, especially for a stored time contract.
+    if (normalized !== parseNumberDraft(String(value))) {
+      onValueChange(normalized)
+    }
     onBlur?.(event)
   }
 
@@ -443,6 +454,7 @@ function ConditionRow({ condition, onChange, onRemove }: ConditionRowProps) {
         {formatTokenHint(condition.value)}
       </span>
       <Button
+        type='button'
         variant='ghost'
         size='icon'
         onClick={onRemove}
@@ -480,7 +492,7 @@ function PriceField({
       <div className='flex items-center gap-2'>
         <DraftNumberInput
           min={0}
-          step={0.01}
+          step='any'
           value={Number.isFinite(value) ? value : 0}
           onValueChange={onChange}
           className='w-32'
@@ -567,6 +579,7 @@ function VisualTierCard({
           />
         </div>
         <Button
+          type='button'
           variant='ghost'
           size='icon'
           onClick={onRemove}
@@ -581,6 +594,7 @@ function VisualTierCard({
         <div className='flex items-center justify-between'>
           <Label className='text-xs'>{t('Conditions (AND)')}</Label>
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             onClick={onAddCondition}
@@ -768,7 +782,7 @@ function VisualEditor({ visualConfig, onChange }: VisualEditorProps) {
           onAddCondition={() => handleAddCondition(index)}
         />
       ))}
-      <Button variant='outline' size='sm' onClick={handleAddTier}>
+      <Button type='button' variant='outline' size='sm' onClick={handleAddTier}>
         <Plus className='mr-2 h-4 w-4' />
         {t('Add tier')}
       </Button>
@@ -808,11 +822,16 @@ function RawExprEditor({ exprString, onChange }: RawExprEditorProps) {
       <Textarea
         value={exprString}
         onChange={(event) => onChange(event.target.value)}
-        placeholder='tier("base", p * 3 + c * 15)'
+        placeholder='v2:tier("base", (p * 3 + c * 15) / 1000000)'
         rows={6}
         className='font-mono text-xs'
         spellCheck={false}
       />
+      <p className='text-muted-foreground text-xs'>
+        {t(
+          'Use v2: expressions to return the USD amount before group multipliers. Token prices per million must be divided by 1000000. Untagged expressions are imported in legacy units.'
+        )}
+      </p>
     </div>
   )
 }
@@ -980,6 +999,7 @@ function RuleConditionRow({
         ? renderTimeCondition(condition as TimeCondition)
         : renderParamHeaderCondition(condition as ParamHeaderCondition)}
       <Button
+        type='button'
         variant='ghost'
         size='icon'
         onClick={onRemove}
@@ -988,6 +1008,11 @@ function RuleConditionRow({
       >
         <Trash2 className='text-destructive h-4 w-4' />
       </Button>
+      {condition.source === SOURCE_TIME && condition.mode === MATCH_RANGE && (
+        <p className='text-muted-foreground w-full text-xs'>
+          {t('Start ≤ end: within the day; start > end: across midnight')}
+        </p>
+      )}
     </div>
   )
 }
@@ -1016,7 +1041,10 @@ function RuleGroupCard({
     next: RequestCondition
   ) => {
     const conditions = [...group.conditions]
-    conditions[conditionIndex] = next
+    // Editing this condition opts into rebuilding its range. Other conditions
+    // (including legacy AND/OR combinations) keep their stored operators.
+    conditions[conditionIndex] =
+      next.source === 'time' ? { ...next, rangeOperator: undefined } : next
     onChange({ ...group, conditions })
   }
 
@@ -1037,6 +1065,7 @@ function RuleGroupCard({
           {t('Rule group')} #{index + 1}
         </Badge>
         <Button
+          type='button'
           variant='ghost'
           size='icon'
           onClick={onRemove}
@@ -1064,6 +1093,7 @@ function RuleGroupCard({
         ))}
         <div className='flex flex-wrap gap-2'>
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             onClick={() => handleAddCondition(false)}
@@ -1072,6 +1102,7 @@ function RuleGroupCard({
             {t('Add param/header')}
           </Button>
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             onClick={() => handleAddCondition(true)}
@@ -1086,7 +1117,7 @@ function RuleGroupCard({
         <Label className='text-xs'>{t('Multiplier')}</Label>
         <DraftNumberInput
           min={0}
-          step={0.01}
+          step='any'
           value={group.multiplier}
           onValueChange={(value) =>
             onChange({ ...group, multiplier: String(value) })
@@ -1124,6 +1155,7 @@ function PresetSection({ applyPreset }: PresetSectionProps) {
         </span>
         {hasMore && (
           <Button
+            type='button'
             variant='ghost'
             size='sm'
             className='h-6 px-2 text-xs'
@@ -1144,6 +1176,7 @@ function PresetSection({ applyPreset }: PresetSectionProps) {
             </Badge>
             {presetGroup.presets.map((preset) => (
               <Button
+                type='button'
                 key={preset.key}
                 variant='outline'
                 size='sm'
@@ -1267,7 +1300,11 @@ function CostEstimator({ effectiveExpr }: EstimatorProps) {
         ) : (
           <div className='flex items-center gap-2'>
             <span className='font-medium'>
-              {t('Estimated quota cost')}: {result.cost.toLocaleString()}
+              {t('Estimated amount (before group multiplier)')}:{' '}
+              {result.cost.toLocaleString(undefined, {
+                maximumFractionDigits: 10,
+              })}{' '}
+              USD
             </span>
             {result.matchedTier && (
               <Badge variant='outline' className='text-xs'>
@@ -1362,7 +1399,9 @@ len <= 128000
 5. Price coefficients are the provider's official $/1M tokens prices
 6. If cache/image/audio don't need separate pricing, omit those variables; their tokens are included in p/c automatically
 
-Please generate a billing expression based on the model information and pricing requirements provided.`
+All examples above are legacy coefficient bodies. Output a v2 amount expression: wrap the complete body as v2:(BODY) / 1000000. The final result is the base-currency amount, before group multipliers. Do not divide token counts used in conditions, change rounding inside BODY, or apply the conversion twice.
+
+Please generate a v2 amount expression based on the model information and pricing requirements provided.`
 
 type LlmPromptHelperProps = {
   modelName?: string
@@ -1391,7 +1430,12 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger asChild>
-        <Button variant='ghost' size='sm' className='h-7 px-2 text-xs'>
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          className='h-7 px-2 text-xs'
+        >
           <Copy className='mr-1.5 h-3 w-3' />
           {t('LLM prompt helper')}
         </Button>
@@ -1405,6 +1449,7 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
               )}
             </p>
             <Button
+              type='button'
               variant='outline'
               size='sm'
               className='ml-3 shrink-0'
@@ -1432,6 +1477,7 @@ function LlmPromptHelper({ modelName }: LlmPromptHelperProps) {
 // ---------------------------------------------------------------------------
 
 export type TieredPricingEditorProps = {
+  billingUsage?: BillingUsageInfo
   modelName?: string
   billingExpr: string
   requestRuleExpr: string
@@ -1441,7 +1487,31 @@ export type TieredPricingEditorProps = {
 
 type EditorMode = 'visual' | 'raw'
 
+type EditorState = {
+  editorMode: EditorMode
+  visualConfig: VisualConfig | null
+  rawExpr: string
+  requestRuleGroups: RequestRuleGroup[]
+}
+
+function createEditorState(
+  billingExpr: string,
+  requestRuleExpr: string
+): EditorState {
+  const parsedConfig = tryParseVisualConfig(billingExpr)
+  const useVisualEditor = Boolean(parsedConfig) || !billingExpr
+
+  return {
+    editorMode: useVisualEditor ? 'visual' : 'raw',
+    visualConfig:
+      parsedConfig || (useVisualEditor ? createDefaultVisualConfig() : null),
+    rawExpr: combineBillingExpr(billingExpr || '', requestRuleExpr || ''),
+    requestRuleGroups: tryParseRequestRuleExpr(requestRuleExpr) || [],
+  }
+}
+
 export const TieredPricingEditor = memo(function TieredPricingEditor({
+  billingUsage,
   modelName,
   billingExpr: currentExpr,
   requestRuleExpr: currentRequestRuleExpr,
@@ -1449,119 +1519,190 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
   onRequestRuleExprChange,
 }: TieredPricingEditorProps) {
   const { t } = useTranslation()
-  const [editorMode, setEditorMode] = useState<EditorMode>('visual')
-  const [visualConfig, setVisualConfig] = useState<VisualConfig | null>(() =>
-    tryParseVisualConfig(currentExpr)
+  const [initialState] = useState(() =>
+    createEditorState(currentExpr, currentRequestRuleExpr)
   )
-  const [rawExpr, setRawExpr] = useState(() =>
-    combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
+  const [editorMode, setEditorMode] = useState<EditorMode>(
+    initialState.editorMode
   )
+  const [visualConfig, setVisualConfig] = useState<VisualConfig | null>(
+    initialState.visualConfig
+  )
+  const [rawExpr, setRawExpr] = useState(initialState.rawExpr)
   const [requestRuleGroups, setRequestRuleGroups] = useState<
     RequestRuleGroup[]
-  >(() => tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
-  const initRef = useRef(false)
+  >(initialState.requestRuleGroups)
+  const requestRulesEditedRef = useRef(false)
+  const previousPropsRef = useRef<EditorPropSnapshot>({
+    modelName,
+    billingExpr: currentExpr,
+    requestRuleExpr: currentRequestRuleExpr,
+  })
+  const lastEmittedRef = useRef<LastEmittedEditorValues>({})
+  const pendingExternalStateRef = useRef<EditorState | null>(null)
+
+  const emitRequestRuleExpr = useCallback(
+    (next: string) => {
+      lastEmittedRef.current.requestRuleExpr = next
+      onRequestRuleExprChange(next)
+    },
+    [onRequestRuleExprChange]
+  )
+
+  const emitBillingExpr = useCallback(
+    (next: string) => {
+      lastEmittedRef.current.billingExpr = next
+      onBillingExprChange(next)
+    },
+    [onBillingExprChange]
+  )
 
   useEffect(() => {
-    if (initRef.current) return
-    initRef.current = true
-    const parsedConfig = tryParseVisualConfig(currentExpr)
-    if (parsedConfig) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setVisualConfig(parsedConfig)
-      setEditorMode('visual')
-    } else if (currentExpr) {
-      setVisualConfig(null)
-      setEditorMode('raw')
-    } else {
-      setVisualConfig(createDefaultVisualConfig())
+    const nextProps: EditorPropSnapshot = {
+      modelName,
+      billingExpr: currentExpr,
+      requestRuleExpr: currentRequestRuleExpr,
     }
-    setRawExpr(
-      combineBillingExpr(currentExpr || '', currentRequestRuleExpr || '')
+    const update = classifyEditorPropUpdate(
+      previousPropsRef.current,
+      nextProps,
+      lastEmittedRef.current
     )
-    setRequestRuleGroups(tryParseRequestRuleExpr(currentRequestRuleExpr) || [])
-  }, [currentExpr, currentRequestRuleExpr])
+    previousPropsRef.current = nextProps
+    if (!update.changed) return
 
-  useEffect(() => {
-    initRef.current = false
-  }, [modelName])
+    if (update.billingEcho) {
+      lastEmittedRef.current.billingExpr = undefined
+    }
+    if (update.requestRuleEcho) {
+      lastEmittedRef.current.requestRuleExpr = undefined
+      requestRulesEditedRef.current = false
+    }
+    if (!update.shouldReset) return
+
+    lastEmittedRef.current = {}
+    const nextState = createEditorState(currentExpr, currentRequestRuleExpr)
+    pendingExternalStateRef.current = nextState
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setEditorMode(nextState.editorMode)
+    setVisualConfig(nextState.visualConfig)
+    setRawExpr(nextState.rawExpr)
+    setRequestRuleGroups(nextState.requestRuleGroups)
+    requestRulesEditedRef.current = false
+  }, [modelName, currentExpr, currentRequestRuleExpr])
 
   const canUseVisualRules = useMemo(() => {
     if (!currentRequestRuleExpr) return true
     return tryParseRequestRuleExpr(currentRequestRuleExpr) !== null
   }, [currentRequestRuleExpr])
 
+  const hasNonCanonicalRange = useMemo(
+    () => hasNonCanonicalTimeRange(currentRequestRuleExpr),
+    [currentRequestRuleExpr]
+  )
+
   const effectiveExpr = useMemo(() => {
     if (editorMode === 'visual') {
       return generateExprFromVisualConfig(visualConfig)
     }
-    const { billingExpr } = splitBillingExprAndRequestRules(rawExpr)
-    return billingExpr
-  }, [editorMode, visualConfig, rawExpr])
+    return currentExpr
+  }, [editorMode, visualConfig, currentExpr])
 
   useEffect(() => {
-    if (effectiveExpr !== currentExpr) {
-      onBillingExprChange(effectiveExpr)
-    }
-  }, [effectiveExpr, currentExpr, onBillingExprChange])
-
-  useEffect(() => {
-    if (editorMode !== 'visual') return
+    if (
+      pendingExternalStateRef.current ||
+      editorMode !== 'visual' ||
+      !requestRulesEditedRef.current
+    )
+      return
     const ruleExpr = buildRequestRuleExpr(requestRuleGroups)
     if (ruleExpr !== currentRequestRuleExpr) {
-      onRequestRuleExprChange(ruleExpr)
+      emitRequestRuleExpr(ruleExpr)
     }
   }, [
     editorMode,
     requestRuleGroups,
     currentRequestRuleExpr,
-    onRequestRuleExprChange,
+    emitRequestRuleExpr,
   ])
 
-  const handleVisualChange = useCallback((next: VisualConfig) => {
-    setVisualConfig(next)
-  }, [])
+  useEffect(() => {
+    const pending = pendingExternalStateRef.current
+    if (
+      pending &&
+      editorMode === pending.editorMode &&
+      visualConfig === pending.visualConfig &&
+      rawExpr === pending.rawExpr &&
+      requestRuleGroups === pending.requestRuleGroups
+    ) {
+      pendingExternalStateRef.current = null
+    }
+  }, [editorMode, visualConfig, rawExpr, requestRuleGroups])
+
+  // A model without a stored expression (new model, or switched from another
+  // billing mode) starts from the visual default; persist it so the saved rule
+  // matches what the editor shows. Only fires while the form value is empty.
+  useEffect(() => {
+    if (pendingExternalStateRef.current || editorMode !== 'visual') return
+    if (currentExpr) return
+    const next = generateExprFromVisualConfig(visualConfig)
+    if (next) emitBillingExpr(next)
+  }, [editorMode, visualConfig, currentExpr, emitBillingExpr])
+
+  // An expression the visual editor cannot parse would be shown as default
+  // tiers and replaced wholesale on the first edit, so keep it in raw mode.
+  const canUseVisualEditor = useMemo(
+    () => !currentExpr || tryParseVisualConfig(currentExpr) !== null,
+    [currentExpr]
+  )
+
+  const handleVisualChange = useCallback(
+    (next: VisualConfig) => {
+      setVisualConfig(next)
+      emitBillingExpr(generateExprFromVisualConfig(next))
+    },
+    [emitBillingExpr]
+  )
 
   const handleRawChange = useCallback(
     (value: string) => {
       setRawExpr(value)
-      const { requestRuleExpr: ruleStr } =
+      const { billingExpr, requestRuleExpr: ruleStr } =
         splitBillingExprAndRequestRules(value)
-      onRequestRuleExprChange(ruleStr)
+      emitBillingExpr(billingExpr)
+      emitRequestRuleExpr(ruleStr)
     },
-    [onRequestRuleExprChange]
+    [emitBillingExpr, emitRequestRuleExpr]
   )
 
   const handleModeChange = useCallback(
     (next: EditorMode) => {
       if (next === 'visual') {
-        const { billingExpr, requestRuleExpr: ruleStr } =
-          splitBillingExprAndRequestRules(rawExpr)
-        const parsed = tryParseVisualConfig(billingExpr)
-        if (parsed) {
-          setVisualConfig(parsed)
-        } else {
-          setVisualConfig(createDefaultVisualConfig())
-        }
-        const parsedGroups = tryParseRequestRuleExpr(ruleStr)
+        const parsed = tryParseVisualConfig(currentExpr)
+        if (!parsed && currentExpr) return
+        setVisualConfig(parsed || createDefaultVisualConfig())
+        const parsedGroups = tryParseRequestRuleExpr(currentRequestRuleExpr)
         setRequestRuleGroups(parsedGroups || [])
-        onRequestRuleExprChange(ruleStr)
+        requestRulesEditedRef.current = false
       } else {
-        const expr = generateExprFromVisualConfig(visualConfig)
-        const ruleExpr = buildRequestRuleExpr(requestRuleGroups)
-        setRawExpr(combineBillingExpr(expr, ruleExpr) || expr)
+        // Switching views is not a pricing edit. In particular, unparseable
+        // rules must not be dropped and legacy ranges must not be normalized.
+        setRawExpr(combineBillingExpr(currentExpr, currentRequestRuleExpr))
       }
       setEditorMode(next)
     },
-    [rawExpr, visualConfig, requestRuleGroups, onRequestRuleExprChange]
+    [currentExpr, currentRequestRuleExpr]
   )
 
   const applyPreset = useCallback(
     (preset: Preset) => {
+      requestRulesEditedRef.current = false
+      const expression = toAmountExpression(preset.expr)
       const presetGroups = preset.requestRules || []
       const ruleExpr = buildRequestRuleExpr(presetGroups)
-      const combined = combineBillingExpr(preset.expr, ruleExpr) || preset.expr
+      const combined = combineBillingExpr(expression, ruleExpr) || expression
       setRawExpr(combined)
-      const parsed = tryParseVisualConfig(preset.expr)
+      const parsed = tryParseVisualConfig(expression)
       if (parsed) {
         setVisualConfig(parsed)
         setEditorMode('visual')
@@ -1570,12 +1711,14 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         setVisualConfig(null)
       }
       setRequestRuleGroups(presetGroups)
-      onRequestRuleExprChange(ruleExpr)
+      emitBillingExpr(expression)
+      emitRequestRuleExpr(ruleExpr)
     },
-    [onRequestRuleExprChange]
+    [emitBillingExpr, emitRequestRuleExpr]
   )
 
   const handleRuleGroupsChange = useCallback((next: RequestRuleGroup[]) => {
+    requestRulesEditedRef.current = true
     setRequestRuleGroups(next)
   }, [])
 
@@ -1588,14 +1731,30 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
           onValueChange={(value) => handleModeChange(value as EditorMode)}
         >
           <SelectTrigger className='w-44' size='sm'>
-            <SelectValue />
+            <SelectValue>
+              {editorMode === 'visual'
+                ? t('Visual editor')
+                : t('Expression editor')}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value='visual'>{t('Visual editor')}</SelectItem>
+            <SelectItem
+              value='visual'
+              disabled={editorMode !== 'visual' && !canUseVisualEditor}
+            >
+              {t('Visual editor')}
+            </SelectItem>
             <SelectItem value='raw'>{t('Expression editor')}</SelectItem>
           </SelectContent>
         </Select>
       </div>
+      {editorMode === 'raw' && !canUseVisualEditor && (
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'The visual editor cannot represent the current billing expression. Keep editing it here so the existing rule is not replaced.'
+          )}
+        </p>
+      )}
 
       <div className='flex flex-wrap items-start gap-x-4 gap-y-1'>
         <div className='flex-1'>
@@ -1637,6 +1796,15 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
               </Alert>
             ) : (
               <>
+                {hasNonCanonicalRange && (
+                  <Alert>
+                    <AlertDescription className='text-xs'>
+                      {t(
+                        'This stored time range uses a non-canonical AND/OR combination. Its billing contract will not be changed automatically.'
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                )}
                 {requestRuleGroups.map((group, groupIndex) => (
                   <RuleGroupCard
                     key={groupIndex}
@@ -1656,6 +1824,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
                 ))}
                 <div className='flex flex-wrap gap-2'>
                   <Button
+                    type='button'
                     variant='outline'
                     size='sm'
                     onClick={() =>
@@ -1669,6 +1838,7 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
                     {t('Add rule group')}
                   </Button>
                   <Button
+                    type='button'
                     variant='ghost'
                     size='sm'
                     onClick={() =>
@@ -1688,7 +1858,87 @@ export const TieredPricingEditor = memo(function TieredPricingEditor({
         )}
       </div>
 
-      <CostEstimator effectiveExpr={effectiveExpr} />
+      <PluginUsageFields
+        usage={billingUsage}
+        required={/\bu\s*\(/.test(effectiveExpr)}
+      />
+      {/\bu\s*\(/.test(effectiveExpr) ? (
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'Usage expressions are evaluated from validated plugin facts at submission; token estimates do not apply.'
+          )}
+        </p>
+      ) : (
+        <CostEstimator effectiveExpr={effectiveExpr} />
+      )}
     </div>
   )
 })
+
+export function PluginUsageFields({
+  usage,
+  required,
+}: {
+  usage?: BillingUsageInfo
+  required: boolean
+}) {
+  const { t, i18n } = useTranslation()
+  if (!usage && !required) return null
+  if (usage?.status !== 'ready') {
+    return (
+      <Alert>
+        <AlertDescription>
+          {usage?.status === 'conflict'
+            ? t(
+                'Enabled channels have conflicting usage schemas. Resolve the bindings before saving u() rules.'
+              )
+            : t(
+                'No enabled plugin usage schema is available for this model. New u() rules cannot be saved.'
+              )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  return (
+    <Alert>
+      <AlertDescription className='flex flex-col gap-2'>
+        <p>{t('Plugin usage fields')}</p>
+        <p>
+          {t(
+            'Use u("field") to read validated plugin facts. The v2 expression returns USD before group multipliers.'
+          )}
+        </p>
+        <dl className='flex flex-col gap-2'>
+          {Object.entries(usage.schema ?? {}).map(([key, field]) => (
+            <div key={key}>
+              <dt>
+                <code>{`u(${JSON.stringify(key)})`}</code>
+              </dt>
+              <dd>
+                {field.enum?.join(' | ') ??
+                  [field.type, field.unit].filter(Boolean).join(' / ')}
+              </dd>
+              {field.description && (
+                <dd>
+                  {field.description[i18n.language] ??
+                    field.description[i18n.language.split('-')[0]] ??
+                    field.description.en}
+                </dd>
+              )}
+            </div>
+          ))}
+        </dl>
+        {usage.sources?.map((source) => (
+          <p key={`${source.source_hash}/${source.model}`} className='text-xs'>
+            {source.plugin} {source.version} · {source.model}
+          </p>
+        ))}
+        {usage.examples?.map((example) => (
+          <p key={example.label} className='text-xs break-all'>
+            {example.label}: <code>{JSON.stringify(example.facts)}</code>
+          </p>
+        ))}
+      </AlertDescription>
+    </Alert>
+  )
+}

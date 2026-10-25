@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/glebarez/sqlite"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/internal/testdb"
 	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,11 +39,10 @@ func TestGormLoggerParameterizedOutput(t *testing.T) {
 	t.Cleanup(func() { common.DebugEnabled = previousDebug })
 
 	var buf bytes.Buffer
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: newGormLogger(&buf)})
-	require.NoError(t, err)
+	db := testdb.OpenMySQL8(t).Session(&gorm.Session{Logger: newGormLogger(&buf)})
 	db.Exec("SELECT * FROM missing_table WHERE k = ?", "secret-value")
 
 	assert.Contains(t, buf.String(), "k = ?")
 	assert.NotContains(t, buf.String(), "secret-value")
-	assert.Contains(t, buf.String(), "SQL logic error")
+	assert.Contains(t, buf.String(), "mysql error 1146")
 }

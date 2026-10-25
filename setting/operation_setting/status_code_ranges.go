@@ -6,26 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/types"
 )
 
 type StatusCodeRange struct {
 	Start int
 	End   int
-}
-
-var AutomaticDisableStatusCodeRanges = []StatusCodeRange{{Start: 401, End: 401}}
-
-// Default behavior matches legacy hardcoded retry rules in controller/relay.go shouldRetry:
-// retry for 1xx, 3xx, 4xx(except 400/408), 5xx(except 504/524), and no retry for 2xx.
-var AutomaticRetryStatusCodeRanges = []StatusCodeRange{
-	{Start: 100, End: 199},
-	{Start: 300, End: 399},
-	{Start: 401, End: 407},
-	{Start: 409, End: 499},
-	{Start: 500, End: 503},
-	{Start: 505, End: 523},
-	{Start: 525, End: 599},
 }
 
 var alwaysSkipRetryStatusCodes = map[int]struct{}{
@@ -38,33 +24,23 @@ var alwaysSkipRetryCodes = map[types.ErrorCode]struct{}{
 }
 
 func AutomaticDisableStatusCodesToString() string {
-	return statusCodeRangesToString(AutomaticDisableStatusCodeRanges)
+	return GetChannelFailurePolicy().AutomaticDisableStatusCodesString()
 }
 
 func AutomaticDisableStatusCodesFromString(s string) error {
-	ranges, err := ParseHTTPStatusCodeRanges(s)
-	if err != nil {
-		return err
-	}
-	AutomaticDisableStatusCodeRanges = ranges
-	return nil
+	return UpdateChannelFailurePolicy(map[string]string{"AutomaticDisableStatusCodes": s})
 }
 
 func ShouldDisableByStatusCode(code int) bool {
-	return shouldMatchStatusCodeRanges(AutomaticDisableStatusCodeRanges, code)
+	return GetChannelFailurePolicy().ShouldDisableByStatusCode(code)
 }
 
 func AutomaticRetryStatusCodesToString() string {
-	return statusCodeRangesToString(AutomaticRetryStatusCodeRanges)
+	return GetChannelFailurePolicy().AutomaticRetryStatusCodesString()
 }
 
 func AutomaticRetryStatusCodesFromString(s string) error {
-	ranges, err := ParseHTTPStatusCodeRanges(s)
-	if err != nil {
-		return err
-	}
-	AutomaticRetryStatusCodeRanges = ranges
-	return nil
+	return UpdateChannelFailurePolicy(map[string]string{"AutomaticRetryStatusCodes": s})
 }
 
 func IsAlwaysSkipRetryStatusCode(code int) bool {
@@ -78,10 +54,7 @@ func IsAlwaysSkipRetryCode(errorCode types.ErrorCode) bool {
 }
 
 func ShouldRetryByStatusCode(code int) bool {
-	if IsAlwaysSkipRetryStatusCode(code) {
-		return false
-	}
-	return shouldMatchStatusCodeRanges(AutomaticRetryStatusCodeRanges, code)
+	return GetChannelFailurePolicy().ShouldRetryByStatusCode(code)
 }
 
 func statusCodeRangesToString(ranges []StatusCodeRange) string {

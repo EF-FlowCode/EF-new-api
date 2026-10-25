@@ -1,8 +1,10 @@
 import path from 'path'
-import { fileURLToPath } from 'url'
 import { defineConfig, loadEnv } from '@rsbuild/core'
 import { pluginReact } from '@rsbuild/plugin-react'
 import { tanstackRouter } from '@tanstack/router-plugin/rspack'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'url'
+import { ResourceRecoveryPlugin } from './resource-recovery-plugin'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -14,11 +16,41 @@ export default defineConfig(({ envMode }) => {
     'http://localhost:3000'
 
   const isProd = envMode === 'production'
+  const resourceRecoveryMessages = Object.fromEntries(
+    ['en', 'zh', 'fr', 'ja', 'ru', 'vi'].map((locale) => {
+      const { translation } = JSON.parse(
+        readFileSync(
+          path.join(__dirname, `src/i18n/locales/${locale}.json`),
+          'utf8'
+        )
+      )
+      const keys = [
+        'Resource connection offline',
+        'Page loading is taking longer than expected',
+        'Page resources could not be loaded',
+        'Loading will resume when your connection returns.',
+        'Check your connection and try again. Refreshing may discard unsaved changes.',
+        'Retry loading',
+        'Refresh page',
+      ]
+      return [
+        locale,
+        Object.fromEntries(keys.map((key) => [key, translation[key] || key])),
+      ]
+    })
+  )
+  const resourceRecoveryScript = readFileSync(
+    path.join(__dirname, 'bootstrap/resource-recovery.js'),
+    'utf8'
+  ).replace(
+    '__RESOURCE_RECOVERY_MESSAGES__',
+    JSON.stringify(resourceRecoveryMessages).replaceAll('<', '\\u003c')
+  )
   const devProxy = Object.fromEntries(
-    (['/api', '/mj', '/pg'] as const).map((key) => [
+    (['/api', '/v1', '/mj', '/pg'] as const).map((key) => [
       key,
       { target: serverUrl, changeOrigin: true },
-    ]),
+    ])
   ) as Record<string, { target: string; changeOrigin: boolean }>
 
   return {
@@ -62,6 +94,7 @@ export default defineConfig(({ envMode }) => {
     },
     html: {
       template: './index.html',
+      templateParameters: { resourceRecoveryScript },
     },
     server: {
       host: '0.0.0.0',
@@ -90,6 +123,7 @@ export default defineConfig(({ envMode }) => {
     tools: {
       rspack: {
         plugins: [
+          new ResourceRecoveryPlugin(),
           tanstackRouter({
             target: 'react',
             // Dev: avoid per-route async chunks (reduces white flash on navigation + faster HMR feedback).

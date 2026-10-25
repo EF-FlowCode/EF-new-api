@@ -34,7 +34,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { MODEL_FETCHABLE_TYPES } from '../constants'
+import { isModelFetchableChannel } from '../constants'
 import {
   channelsQueryKeys,
   handleDeleteChannel,
@@ -230,7 +230,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
-          {MODEL_FETCHABLE_TYPES.has(channel.type) && (
+          {isModelFetchableChannel(channel.type, channel.settings) && (
             <DropdownMenuItem
               onClick={() => {
                 const meta = parseUpstreamUpdateMeta(channel.settings)

@@ -1,9 +1,10 @@
 package service
 
 import (
+	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 // MatchErrorFilter 遍历规则，返回第一条匹配的规则。
@@ -59,12 +60,7 @@ func hasErrorFilterCondition(rule *dto.ErrorFilterRule) bool {
 }
 
 func containsStatusCode(statusCodes []int, target int) bool {
-	for _, code := range statusCodes {
-		if code == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(statusCodes, target)
 }
 
 func containsMessage(keywords []string, message string) bool {

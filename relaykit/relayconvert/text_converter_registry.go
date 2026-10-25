@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/types"
 )
 
 type TextConverterQuality string

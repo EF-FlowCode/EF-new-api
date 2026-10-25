@@ -12,24 +12,24 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/ai360"
-	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/ai360"
+	"eflow.local/new-api/relay/channel/lingyiwanwu"
 
-	//"github.com/QuantumNous/new-api/relay/channel/minimax"
-	"github.com/QuantumNous/new-api/relay/channel/openrouter"
-	"github.com/QuantumNous/new-api/relay/channel/xinference"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/common_handler"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
+	//"eflow.local/new-api/relay/channel/minimax"
+	"eflow.local/new-api/relay/channel/openrouter"
+	"eflow.local/new-api/relay/channel/xinference"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/common_handler"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/setting/reasoning"
+	"eflow.local/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +45,11 @@ func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayIn
 	openaiRequest, err := service.ConvertGeminiRequestToOpenAI(c, info, request)
 	if err != nil {
 		return nil, err
+	}
+	if info.SupportStreamOptions && info.IsStream {
+		openaiRequest.StreamOptions = &dto.StreamOptions{
+			IncludeUsage: true,
+		}
 	}
 	return a.ConvertOpenAIRequest(c, info, openaiRequest)
 }
@@ -96,12 +101,12 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if info.RelayMode == relayconstant.RelayModeRealtime {
-		if strings.HasPrefix(info.ChannelBaseUrl, "https://") {
-			baseUrl := strings.TrimPrefix(info.ChannelBaseUrl, "https://")
+		if after, ok := strings.CutPrefix(info.ChannelBaseUrl, "https://"); ok {
+			baseUrl := after
 			baseUrl = "wss://" + baseUrl
 			info.ChannelBaseUrl = baseUrl
-		} else if strings.HasPrefix(info.ChannelBaseUrl, "http://") {
-			baseUrl := strings.TrimPrefix(info.ChannelBaseUrl, "http://")
+		} else if after, ok := strings.CutPrefix(info.ChannelBaseUrl, "http://"); ok {
+			baseUrl := after
 			baseUrl = "ws://" + baseUrl
 			info.ChannelBaseUrl = baseUrl
 		}
@@ -315,40 +320,33 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 
 	}
-	if strings.HasPrefix(info.UpstreamModelName, "o") || strings.HasPrefix(info.UpstreamModelName, "gpt-5") {
+	// Resolve the existing suffix before applying mapped-model capabilities.
+	effort, baseModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
+	if dto.GetOpenAIChatCapabilities(baseModel, effort).UseMaxCompletionTokens && effort != "" && !model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+		request.ReasoningEffort = effort
+		info.UpstreamModelName = baseModel
+		request.Model = baseModel
+	}
+	info.ReasoningEffort = request.ReasoningEffort
+	capabilities := dto.GetOpenAIChatCapabilities(info.UpstreamModelName, request.ReasoningEffort)
+	if capabilities.UseMaxCompletionTokens {
 		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
 		}
-
-		if strings.HasPrefix(info.UpstreamModelName, "o") {
-			request.Temperature = nil
-		}
-
-		// gpt-5系列模型适配 归零不再支持的参数
-		if strings.HasPrefix(info.UpstreamModelName, "gpt-5") {
-			request.Temperature = nil
-			request.TopP = nil
-			request.LogProbs = nil
-		}
-
-		// 转换模型推理力度后缀
-		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
-		if effort != "" {
-			request.ReasoningEffort = effort
-			info.UpstreamModelName = originModel
-			request.Model = originModel
-		}
-
-		info.ReasoningEffort = request.ReasoningEffort
-
-		// o系列模型developer适配（o1-mini除外）
-		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
-			//修改第一个Message的内容，将system改为developer
-			if len(request.Messages) > 0 && request.Messages[0].Role == "system" {
-				request.Messages[0].Role = "developer"
-			}
-		}
+	}
+	if !capabilities.SupportsTemperature {
+		request.Temperature = nil
+	}
+	if !capabilities.SupportsTopP {
+		request.TopP = nil
+	}
+	if !capabilities.SupportsLogProbs {
+		request.LogProbs = nil
+		request.TopLogProbs = nil
+	}
+	if capabilities.UseDeveloperRole && len(request.Messages) > 0 && request.Messages[0].Role == "system" {
+		request.Messages[0].Role = "developer"
 	}
 
 	return request, nil
@@ -589,6 +587,11 @@ func detectImageMimeType(filename string) string {
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
 	//  转换模型推理力度后缀
 	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
+	// eflow: 与 Chat 路径一致，命中"保留思考后缀"名单的模型不拆后缀（上游 6b659fd61）。
+	if model_setting.ShouldPreserveThinkingSuffix(request.Model) ||
+		info != nil && model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+		effort = ""
+	}
 	if effort != "" {
 		if request.Reasoning == nil {
 			request.Reasoning = &dto.Reasoning{

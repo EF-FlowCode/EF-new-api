@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/setting"
 )
 
 // 附件校验层的定义。
@@ -24,14 +24,15 @@ import (
 // 这一层只关心"是否放行"，具体的存储路径由上层生成（UUID+ext），绝不使用原始文件名。
 
 var (
-	ErrAttachmentDisabled      = errors.New("ticket attachment feature is disabled")
-	ErrAttachmentSizeExceeded  = errors.New("attachment size exceeded")
-	ErrAttachmentExtNotAllowed = errors.New("attachment extension not allowed")
+	ErrAttachmentDisabled       = errors.New("ticket attachment feature is disabled")
+	ErrAttachmentSizeExceeded   = errors.New("attachment size exceeded")
+	ErrAttachmentExtNotAllowed  = errors.New("attachment extension not allowed")
 	ErrAttachmentMimeNotAllowed = errors.New("attachment mime type not allowed")
-	ErrAttachmentMimeMismatch  = errors.New("attachment declared type does not match content")
-	ErrAttachmentSVGForbidden  = errors.New("svg attachments are forbidden")
-	ErrAttachmentEmpty         = errors.New("attachment is empty")
-	ErrAttachmentFileName      = errors.New("invalid attachment filename")
+	ErrAttachmentMimeMismatch   = errors.New("attachment declared type does not match content")
+	ErrAttachmentSVGForbidden   = errors.New("svg attachments are forbidden")
+	ErrAttachmentActiveContent  = errors.New("html or script attachments are forbidden")
+	ErrAttachmentEmpty          = errors.New("attachment is empty")
+	ErrAttachmentFileName       = errors.New("invalid attachment filename")
 )
 
 // sniffSize 取文件开头 512 字节用于魔数嗅探（net/http 规范）。
@@ -88,9 +89,13 @@ func NormalizeExt(name string) string {
 	return strings.TrimPrefix(ext, ".")
 }
 
-// ValidateSize 根据设置判定文件大小。size <= 0 视为未知，允许通过（后续 io.LimitReader 兜底）。
+// ValidateSize 根据当前设置判定文件大小。size <= 0 视为未知，允许通过。
 func ValidateSize(size int64) error {
-	if size > 0 && size > setting.TicketAttachmentMaxSize {
+	return ValidateSizeWithSettings(setting.GetTicketAttachmentSettings(), size)
+}
+
+func ValidateSizeWithSettings(settings setting.TicketAttachmentSettings, size int64) error {
+	if size > 0 && size > settings.MaxSize {
 		return ErrAttachmentSizeExceeded
 	}
 	return nil
@@ -111,6 +116,28 @@ func IsSVGContent(head []byte) bool {
 	return false
 }
 
+// activeMimes 是浏览器会当作可执行文档渲染的类型，上传一律拒绝。
+var activeMimes = map[string]bool{
+	"text/html":             true,
+	"application/xhtml+xml": true,
+	"image/svg+xml":         true,
+}
+
+// IsActiveContent 判断文本类内容里是否含浏览器可执行的标记（HTML/XHTML/脚本）。
+// 附件只供下载和位图/纯文本预览，没有任何合法场景需要这些标记。
+func IsActiveContent(head []byte) bool {
+	lower := bytes.ToLower(head)
+	for _, marker := range [][]byte{
+		[]byte("<html"), []byte("<!doctype html"), []byte("<script"), []byte("<svg"),
+		[]byte("<iframe"), []byte("<object"), []byte("<embed"), []byte("http://www.w3.org/1999/xhtml"),
+	} {
+		if bytes.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // DetectMime 嗅探前 512 字节得到实际 MIME。
 // 对于纯文本类（text/plain）再补一层 UTF-8 校验，避免把二进制塞进 txt。
 func DetectMime(head []byte) string {
@@ -122,8 +149,8 @@ func DetectMime(head []byte) string {
 
 // CheckResult 返回真实可信的 MIME 与扩展名，供存储/DB 写入使用。
 type CheckResult struct {
-	SafeName   string // 清洗后的展示文件名
-	Ext        string // 小写扩展名（无点）
+	SafeName     string // 清洗后的展示文件名
+	Ext          string // 小写扩展名（无点）
 	DetectedMime string // http.DetectContentType 嗅探值，不是客户端声明值
 }
 
@@ -134,13 +161,19 @@ type CheckResult struct {
 // 对 text/* 类型放宽一层：只要声明 MIME 与扩展名匹配、且嗅探结果属于 text/* 就放行，
 // 因为 txt/json/md 三者嗅探结果可能都是 "text/plain"。
 func Validate(fileName string, declaredMime string, size int64, head []byte) (*CheckResult, error) {
-	if !setting.TicketAttachmentEnabled {
+	return ValidateWithSettings(setting.GetTicketAttachmentSettings(), fileName, declaredMime, size, head)
+}
+
+// ValidateWithSettings validates against one caller-captured configuration
+// version, preventing a concurrent update from mixing limits and allow lists.
+func ValidateWithSettings(settings setting.TicketAttachmentSettings, fileName string, declaredMime string, size int64, head []byte) (*CheckResult, error) {
+	if !settings.Enabled {
 		return nil, ErrAttachmentDisabled
 	}
 	if size == 0 && len(head) == 0 {
 		return nil, ErrAttachmentEmpty
 	}
-	if err := ValidateSize(size); err != nil {
+	if err := ValidateSizeWithSettings(settings, size); err != nil {
 		return nil, err
 	}
 
@@ -153,7 +186,7 @@ func Validate(fileName string, declaredMime string, size int64, head []byte) (*C
 		return nil, ErrAttachmentExtNotAllowed
 	}
 	// 第一重：扩展名白名单。
-	if !setting.IsTicketAttachmentExtAllowed(ext) {
+	if !settings.IsExtAllowed(ext) {
 		return nil, ErrAttachmentExtNotAllowed
 	}
 	// 硬性拒绝 svg，即使管理员误加到白名单里。
@@ -166,8 +199,11 @@ func Validate(fileName string, declaredMime string, size int64, head []byte) (*C
 	if idx := strings.Index(declaredMime, ";"); idx >= 0 {
 		declaredMime = strings.TrimSpace(declaredMime[:idx])
 	}
-	if declaredMime != "" && !setting.IsTicketAttachmentMimeAllowed(declaredMime) {
+	if declaredMime != "" && !settings.IsMimeAllowed(declaredMime) {
 		return nil, ErrAttachmentMimeNotAllowed
+	}
+	if activeMimes[declaredMime] {
+		return nil, ErrAttachmentActiveContent
 	}
 
 	// 第三重：内容魔数。
@@ -181,7 +217,10 @@ func Validate(fileName string, declaredMime string, size int64, head []byte) (*C
 	detected := DetectMime(truncated)
 	// 嗅探结果也必须命中白名单，除非它是 text/* 且扩展名落在文本类里。
 	detectedPrefix := strings.Split(detected, ";")[0]
-	if !setting.IsTicketAttachmentMimeAllowed(detectedPrefix) {
+	if activeMimes[detectedPrefix] || (isTextLikeMime(detectedPrefix) && IsActiveContent(truncated)) {
+		return nil, ErrAttachmentActiveContent
+	}
+	if !settings.IsMimeAllowed(detectedPrefix) {
 		// 对 text/plain 放宽：若扩展名属于已知文本类，则以白名单里的同类 MIME 作为最终 MIME。
 		if !strings.HasPrefix(detectedPrefix, "text/") {
 			return nil, ErrAttachmentMimeMismatch
@@ -193,9 +232,11 @@ func Validate(fileName string, declaredMime string, size int64, head []byte) (*C
 		return nil, ErrAttachmentMimeMismatch
 	}
 
-	finalMime := declaredMime
-	if finalMime == "" {
-		finalMime = detectedPrefix
+	// 最终 MIME 以嗅探结果为准：客户端声明只在嗅探只能给出 text/plain 时补充
+	// 更具体的文本类型（如 application/json、text/csv）。
+	finalMime := detectedPrefix
+	if detectedPrefix == "text/plain" && declaredMime != "" && isTextLikeMime(declaredMime) {
+		finalMime = declaredMime
 	}
 
 	return &CheckResult{
@@ -230,14 +271,7 @@ func sameMimeFamily(a, b string) bool {
 			return true
 		}
 	}
-	textLike := func(m string) bool {
-		switch m {
-		case "application/json", "application/xml", "application/javascript", "application/x-yaml":
-			return true
-		}
-		return strings.HasPrefix(m, "text/")
-	}
-	if textLike(a) && textLike(b) {
+	if isTextLikeMime(a) && isTextLikeMime(b) {
 		return true
 	}
 	return false
@@ -255,4 +289,12 @@ func ReadSniff(r io.Reader) (head []byte, combined io.Reader, err error) {
 	head = buf[:n]
 	combined = io.MultiReader(bytes.NewReader(head), r)
 	return head, combined, nil
+}
+
+func isTextLikeMime(m string) bool {
+	switch m {
+	case "application/json", "application/xml", "application/javascript", "application/x-yaml":
+		return true
+	}
+	return strings.HasPrefix(m, "text/")
 }

@@ -1,20 +1,20 @@
 package controller
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/internal/testdb"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/config"
+	"eflow.local/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -29,21 +29,15 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
+	db := testdb.OpenMySQL8(t, &model.User{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{})
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	model.DB = db
-	model.LOG_DB = db
-
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
-
 	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.RedisEnabled = oldRedisEnabled
 	})
 
 	return db
@@ -79,10 +73,13 @@ func withTieredBillingConfig(t *testing.T, modes map[string]string, exprs map[st
 func withSelfUseModeDisabled(t *testing.T) {
 	t.Helper()
 
-	original := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
+	original := operation_setting.GetSiteModeSettings()
+	require.NoError(t, operation_setting.UpdateSiteModeSettings(map[string]string{"SelfUseModeEnabled": "false"}))
 	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = original
+		require.NoError(t, operation_setting.UpdateSiteModeSettings(map[string]string{
+			"DemoSiteEnabled":    strconv.FormatBool(original.DemoSiteEnabled),
+			"SelfUseModeEnabled": strconv.FormatBool(original.SelfUseModeEnabled),
+		}))
 	})
 }
 
@@ -114,10 +111,14 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	withSelfUseModeDisabled(t)
 	withTieredBillingConfig(t, map[string]string{
 		"zz-tiered-visible-model":      "tiered_expr",
+		"zz-dynamic-visible-model":     "tiered_expr",
+		"zz-flat-visible-model":        "flat_price",
 		"zz-tiered-empty-expr-model":   "tiered_expr",
 		"zz-tiered-missing-expr-model": "tiered_expr",
 	}, map[string]string{
 		"zz-tiered-visible-model":    `tier("base", p * 1 + c * 2)`,
+		"zz-dynamic-visible-model":   `tier("base", p * 1 + c * 2) * (hour("UTC") >= 8 ? 2 : 1)`,
+		"zz-flat-visible-model":      `tier("default", p * 3 + c * 15 + cr * 1 + cc * 3.75 + cc1h * 6)`,
 		"zz-tiered-empty-expr-model": "   ",
 	})
 
@@ -131,6 +132,8 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	}).Error)
 	require.NoError(t, db.Create(&[]model.Ability{
 		{Group: "default", Model: "zz-tiered-visible-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-dynamic-visible-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-flat-visible-model", ChannelId: 1, Enabled: true},
 		{Group: "default", Model: "zz-tiered-empty-expr-model", ChannelId: 1, Enabled: true},
 		{Group: "default", Model: "zz-tiered-missing-expr-model", ChannelId: 1, Enabled: true},
 		{Group: "default", Model: "zz-unpriced-model", ChannelId: 1, Enabled: true},
@@ -145,6 +148,8 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 
 	ids := decodeListModelsResponse(t, recorder)
 	require.Contains(t, ids, "zz-tiered-visible-model")
+	require.Contains(t, ids, "zz-dynamic-visible-model")
+	require.Contains(t, ids, "zz-flat-visible-model")
 	require.NotContains(t, ids, "zz-tiered-empty-expr-model")
 	require.NotContains(t, ids, "zz-tiered-missing-expr-model")
 	require.NotContains(t, ids, "zz-unpriced-model")
@@ -152,8 +157,15 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	pricingByName := pricingByModelName(model.GetPricing())
 	visiblePricing, ok := pricingByName["zz-tiered-visible-model"]
 	require.True(t, ok)
-	require.Equal(t, "tiered_expr", visiblePricing.BillingMode)
+	require.Equal(t, "flat_price", visiblePricing.BillingMode)
 	require.NotEmpty(t, visiblePricing.BillingExpr)
+	dynamicPricing, ok := pricingByName["zz-dynamic-visible-model"]
+	require.True(t, ok)
+	require.Equal(t, "tiered_expr", dynamicPricing.BillingMode)
+	flatPricing, ok := pricingByName["zz-flat-visible-model"]
+	require.True(t, ok)
+	require.Equal(t, "flat_price", flatPricing.BillingMode)
+	require.Contains(t, flatPricing.BillingExpr, "cc1h * 6")
 
 	emptyExprPricing, ok := pricingByName["zz-tiered-empty-expr-model"]
 	require.True(t, ok)

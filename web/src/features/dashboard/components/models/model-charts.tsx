@@ -62,7 +62,9 @@ export function ModelCharts(props: ModelChartsProps) {
 
       const ThemeManager = await themeManagerPromise
       themeManagerRef.current = ThemeManager
-      ThemeManager.setCurrentTheme(resolvedTheme === 'midnight' ? 'dark' : 'light')
+      ThemeManager.setCurrentTheme(
+        resolvedTheme === 'midnight' ? 'dark' : 'light'
+      )
       setThemeReady(true)
     }
 

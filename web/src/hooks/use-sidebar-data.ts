@@ -14,6 +14,7 @@ import {
   ListTodo,
   Mail,
   Receipt,
+  ScrollText,
   Shield,
   Store,
   Trophy,
@@ -154,6 +155,11 @@ export function useSidebarData(): SidebarData {
             title: t('Topup History'),
             url: '/topup-history',
             icon: Receipt,
+          },
+          {
+            title: t('Audit Logs'),
+            url: '/audit-logs',
+            icon: ScrollText,
           },
           {
             title: t('Support tickets'),

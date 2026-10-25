@@ -3,12 +3,12 @@ package setting
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 type InvitationCodePolicy struct {
-	MinAccountAgeDays    int     `json:"min_account_age_days"`
-	DefaultGenerateQuota int     `json:"default_generate_quota"`
+	MinAccountAgeDays    int `json:"min_account_age_days"`
+	DefaultGenerateQuota int `json:"default_generate_quota"`
 	// MonthlyGenerateQuota 限制单个用户最近 30 天内生成的邀请码数量（滑动窗口）。
 	// 0 = 不限制，>0 = 上限，-1 = 显式标记不限制（与 0 等价，仅做语义清晰）。
 	// 这条配额跟 DefaultGenerateQuota（终身）叠加生效，先撞哪条都拦下。

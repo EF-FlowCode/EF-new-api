@@ -1,6 +1,6 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type ChannelAffinityKeySource struct {
 	Type string `json:"type"` // context_int, context_string, request_header, gjson
@@ -18,7 +18,7 @@ type ChannelAffinityRule struct {
 	ValueRegex string `json:"value_regex"`
 	TTLSeconds int    `json:"ttl_seconds"`
 
-	ParamOverrideTemplate map[string]interface{} `json:"param_override_template,omitempty"`
+	ParamOverrideTemplate map[string]any `json:"param_override_template,omitempty"`
 
 	SkipRetryOnFailure bool `json:"skip_retry_on_failure"`
 
@@ -66,11 +66,11 @@ var claudeCliPassThroughHeaders = []string{
 	"Anthropic-Version",
 }
 
-func buildPassHeaderTemplate(headers []string) map[string]interface{} {
+func buildPassHeaderTemplate(headers []string) map[string]any {
 	clonedHeaders := make([]string, 0, len(headers))
 	clonedHeaders = append(clonedHeaders, headers...)
-	return map[string]interface{}{
-		"operations": []map[string]interface{}{
+	return map[string]any{
+		"operations": []map[string]any{
 			{
 				"mode":        "pass_headers",
 				"value":       clonedHeaders,
@@ -125,5 +125,6 @@ func init() {
 }
 
 func GetChannelAffinitySetting() *ChannelAffinitySetting {
-	return &channelAffinitySetting
+	setting := config.MustSnapshot[ChannelAffinitySetting]("channel_affinity_setting")
+	return &setting
 }

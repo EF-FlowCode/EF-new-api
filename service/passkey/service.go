@@ -1,6 +1,7 @@
 package passkey
 
 import (
+	"eflow.local/new-api/model"
 	"errors"
 	"fmt"
 	"net"
@@ -9,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/system_setting"
 
 	"github.com/go-webauthn/webauthn/protocol"
 	webauthn "github.com/go-webauthn/webauthn/webauthn"
@@ -25,13 +26,14 @@ const (
 // BuildWebAuthn constructs a WebAuthn instance using the current passkey settings and request context.
 func BuildWebAuthn(r *http.Request) (*webauthn.WebAuthn, error) {
 	settings := system_setting.GetPasskeySettings()
+	branding := common.GetBrandingSettings()
 	if settings == nil {
 		return nil, errors.New("未找到 Passkey 设置")
 	}
 
 	displayName := strings.TrimSpace(settings.RPDisplayName)
 	if displayName == "" {
-		displayName = common.SystemName
+		displayName = branding.SystemName
 	}
 
 	origins, err := resolveOrigins(r, settings)
@@ -110,8 +112,9 @@ autoDetect:
 	host := r.Host
 
 	// 如果无法从请求获取Host，尝试从ServerAddress获取
-	if host == "" && system_setting.ServerAddress != "" {
-		if parsed, err := url.Parse(system_setting.ServerAddress); err == nil && parsed.Host != "" {
+	serverAddress := system_setting.GetServerAddress()
+	if host == "" && serverAddress != "" {
+		if parsed, err := url.Parse(serverAddress); err == nil && parsed.Host != "" {
 			host = parsed.Host
 			if scheme == "" && parsed.Scheme != "" {
 				scheme = parsed.Scheme
@@ -119,7 +122,7 @@ autoDetect:
 		}
 	}
 	if host == "" {
-		return nil, fmt.Errorf("无法确定 Passkey 的 Origin，请在系统设置或 Passkey 设置中指定。当前 Host: '%s', ServerAddress: '%s'", r.Host, system_setting.ServerAddress)
+		return nil, fmt.Errorf("无法确定 Passkey 的 Origin，请在系统设置或 Passkey 设置中指定。当前 Host: '%s', ServerAddress: '%s'", r.Host, serverAddress)
 	}
 	if scheme == "" {
 		scheme = "https"
@@ -129,9 +132,8 @@ autoDetect:
 }
 
 func resolveRPID(r *http.Request, settings *system_setting.PasskeySettings, origins []string) (string, error) {
-	rpID := strings.TrimSpace(settings.RPID)
-	if rpID != "" {
-		return hostWithoutPort(rpID), nil
+	if ids := settings.RPIDs(); len(ids) > 0 {
+		return selectRPID(ids, hostWithoutPort(r.Host)), nil
 	}
 	if len(origins) == 0 {
 		return "", errors.New("Passkey 未配置 Origin，无法推导 RPID")
@@ -174,4 +176,38 @@ func detectScheme(r *http.Request) string {
 		return strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Protocol")))
 	}
 	return "http"
+}
+
+// selectRPID returns the allowed RP ID the request host belongs to (the host
+// itself or a parent domain), falling back to the primary one.
+func selectRPID(allowed []string, host string) string {
+	host = strings.ToLower(host)
+	for _, id := range allowed {
+		id = hostWithoutPort(id)
+		if host == id || strings.HasSuffix(host, "."+id) {
+			return id
+		}
+	}
+	return hostWithoutPort(allowed[0])
+}
+
+// RPID returns the relying party ID a WebAuthn instance was built for.
+func RPID(wa *webauthn.WebAuthn) string {
+	if wa == nil || wa.Config == nil {
+		return ""
+	}
+	return wa.Config.RPID
+}
+
+// CheckCredentialRPID rejects asserting a credential under another domain and
+// records the domain on credentials registered before it was tracked.
+func CheckCredentialRPID(credential *model.PasskeyCredential, rpID string) error {
+	if credential == nil || rpID == "" {
+		return nil
+	}
+	if credential.RPID != nil && *credential.RPID != "" && *credential.RPID != rpID {
+		return errors.New("该 Passkey 绑定在其他域名，请在原域名使用或改用其他验证方式")
+	}
+	credential.RPID = &rpID
+	return nil
 }

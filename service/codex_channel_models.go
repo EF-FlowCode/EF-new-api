@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/ratio_setting"
 )
 
 func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {
@@ -31,7 +31,7 @@ func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {
 	}
 	baseURL := channel.GetBaseURL()
 	if baseURL == "" {
-		baseURL = constant.ChannelBaseURLs[constant.ChannelTypeCodex]
+		baseURL = constant.GetChannelBaseURL(constant.ChannelTypeCodex)
 	}
 	return fetchCodexChannelModels(ctx, channel, baseURL, client, clientVersion)
 }
@@ -49,7 +49,7 @@ func fetchCodexChannelModels(ctx context.Context, channel *model.Channel, baseUR
 		if channel.Id <= 0 {
 			return nil, fmt.Errorf("codex channel credential expired; save the channel before retrying model fetch")
 		}
-		refreshedKey, _, refreshErr := RefreshCodexChannelCredential(ctx, channel.Id, CodexCredentialRefreshOptions{ResetCaches: true})
+		refreshedKey, _, refreshErr := RefreshCodexChannelCredential(ctx, channel.Id, CodexCredentialRefreshOptions{ResetCaches: true, StaleAccessToken: oauthKey.AccessToken})
 		if refreshErr != nil {
 			return nil, fmt.Errorf("failed to refresh Codex channel credential: %w", refreshErr)
 		}

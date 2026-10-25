@@ -154,7 +154,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       pagination,
       sorting,
     },
-    enableRowSelection: false,
+    getRowId: (row) => String(row.id),
     onPaginationChange,
     onColumnFiltersChange,
     onSortingChange: setSorting,
@@ -210,6 +210,11 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         {logCategory === 'common' ? (
           <div className='bg-card/50 rounded-md border p-2 shadow-xs sm:p-3'>
             <CommonLogsFilterBar
+              logGroups={logs.flatMap((log) =>
+                'group' in log && typeof log.group === 'string'
+                  ? [log.group]
+                  : []
+              )}
               stats={<CommonLogsStats />}
               viewOptions={<DataTableViewOptions table={table} />}
             />

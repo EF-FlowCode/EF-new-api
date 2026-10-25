@@ -7,7 +7,7 @@ import { useIsAdmin } from '@/hooks/use-admin'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getLogStats, getUserLogStats } from '../api'
 import { DEFAULT_LOG_STATS } from '../constants'
-import { buildApiParams } from '../lib/utils'
+import { buildApiParams, getStatsSearchParams } from '../lib/utils'
 import { useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
@@ -18,10 +18,10 @@ function StatBadge(props: {
   accent: string
 }) {
   return (
-    <span className='inline-flex h-7 items-center gap-2 rounded-md border border-border/60 bg-muted/25 px-2.5 text-xs shadow-xs'>
+    <span className='border-border/60 bg-muted/25 inline-flex h-7 items-center gap-2 rounded-md border px-2.5 text-xs shadow-xs'>
       <span className={cn('h-3.5 w-0.5 rounded-full', props.accent)} />
       <span className='text-muted-foreground'>{props.label}</span>
-      <span className='font-mono font-semibold tabular-nums text-foreground/85'>
+      <span className='text-foreground/85 font-mono font-semibold tabular-nums'>
         {props.value}
       </span>
     </span>
@@ -36,7 +36,7 @@ export function CommonLogsStats() {
 
   // eflow: 用于 query key 的搜索参数——剔除翻页维度（page/pageSize），
   // 让翻页不再触发 stat 重新请求。
-  const { page: _page, pageSize: _pageSize, ...statsSearchParams } = searchParams
+  const statsSearchParams = getStatsSearchParams(searchParams)
 
   const { data: stats, isLoading } = useQuery({
     // eflow: 统计与页码无关（请求里固定 page:1）。从 query key 里剔除 page/pageSize，
@@ -46,7 +46,7 @@ export function CommonLogsStats() {
       const params = buildApiParams({
         page: 1,
         pageSize: 1,
-        searchParams,
+        searchParams: statsSearchParams,
         columnFilters: [],
         isAdmin,
       })

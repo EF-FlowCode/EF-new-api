@@ -1,4 +1,4 @@
-module github.com/QuantumNous/new-api/relaykit
+module eflow.local/new-api/relaykit
 
 go 1.25.1
 

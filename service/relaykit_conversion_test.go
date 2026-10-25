@@ -4,19 +4,37 @@ import (
 	"context"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
-	hosttypes "github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	relaydto "eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	relaytypes "eflow.local/new-api/relaykit/types"
+	hosttypes "eflow.local/new-api/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestBridgeRelayDTOPreservesExplicitZeroValuesAndVideoTokens(t *testing.T) {
+func TestRelayKitGeminiLevelUsesSourceModel(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gemini-3-pro-preview",
+		RelayFormat:     hosttypes.RelayFormatGemini,
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-target"},
+	}
+	req := &dto.GeminiChatRequest{GenerationConfig: dto.GeminiChatGenerationConfig{ThinkingConfig: &dto.GeminiThinkingConfig{ThinkingLevel: " MEDIUM "}}}
+	_, err := ConvertGeminiRequestToOpenAI(context.Background(), info, req)
+	require.ErrorContains(t, err, "not supported by model")
+	info.OriginModelName = "gemini-3.7-flash"
+	out, err := ConvertGeminiRequestToOpenAI(context.Background(), info, req)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-target", out.Model)
+	require.Equal(t, "medium", out.ReasoningEffort)
+	require.Equal(t, "medium", info.ReasoningEffort)
+	require.Equal(t, " MEDIUM ", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+}
+
+func TestRelayDTOAliasesPreserveExplicitZeroValuesAndVideoTokens(t *testing.T) {
 	zeroFloat := 0.0
 	zeroInt := 0
 	falseValue := false
@@ -32,8 +50,8 @@ func TestBridgeRelayDTOPreservesExplicitZeroValuesAndVideoTokens(t *testing.T) {
 		PresencePenalty:  &zeroFloat,
 	}
 
-	relayRequest, err := bridgeRelayDTO[relaydto.GeneralOpenAIRequest](host)
-	require.NoError(t, err)
+	relayRequest := (*relaydto.GeneralOpenAIRequest)(host)
+	assert.Same(t, host, relayRequest)
 	require.NotNil(t, relayRequest.Stream)
 	assert.False(t, *relayRequest.Stream)
 	require.NotNil(t, relayRequest.Temperature)
@@ -46,8 +64,8 @@ func TestBridgeRelayDTOPreservesExplicitZeroValuesAndVideoTokens(t *testing.T) {
 	relayResponse := &relaydto.OpenAITextResponse{
 		Usage: relaydto.Usage{PromptTokensDetails: relaydto.InputTokenDetails{VideoTokens: 7}},
 	}
-	hostResponse, err := bridgeRelayDTO[dto.OpenAITextResponse](relayResponse)
-	require.NoError(t, err)
+	hostResponse := (*dto.OpenAITextResponse)(relayResponse)
+	assert.Same(t, relayResponse, hostResponse)
 	assert.Equal(t, 7, hostResponse.Usage.PromptTokensDetails.VideoTokens)
 }
 
@@ -164,8 +182,7 @@ func TestConvertOpenAIRequestToGeminiAppliesHostSettings(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{}
 	require.NoError(t, common.Unmarshal([]byte(`{
 		"model":"gemini-2.5-flash-image",
-		"messages":[{"role":"user","content":"draw a cat"}],
-		"extra_body":{"google":{"thinking_config":{"thinking_budget":0,"include_thoughts":false}}}
+		"messages":[{"role":"user","content":"draw a cat"}]
 	}`), request))
 
 	converted, err := ConvertOpenAIRequestToGemini(context.Background(), &relaycommon.RelayInfo{
@@ -175,10 +192,16 @@ func TestConvertOpenAIRequestToGeminiAppliesHostSettings(t *testing.T) {
 	assert.Equal(t, []string{"TEXT", "IMAGE"}, converted.GenerationConfig.ResponseModalities)
 	require.NotEmpty(t, converted.SafetySettings)
 	assert.Equal(t, "OFF", converted.SafetySettings[0].Threshold)
-	require.NotNil(t, converted.GenerationConfig.ThinkingConfig)
-	require.NotNil(t, converted.GenerationConfig.ThinkingConfig.ThinkingBudget)
-	assert.Zero(t, *converted.GenerationConfig.ThinkingConfig.ThinkingBudget)
-	assert.False(t, converted.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	require.Nil(t, converted.GenerationConfig.ThinkingConfig)
+	request.ExtraBody = []byte(`{"google":{"thinking_config":{"thinking_budget":0,"include_thoughts":false}}}`)
+	_, err = ConvertOpenAIRequestToGemini(context.Background(), &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gemini-2.5-flash-image"}}, request)
+	require.ErrorContains(t, err, "does not support configurable thinking")
+	request.Model = "gemini-2.5-flash"
+	converted, err = ConvertOpenAIRequestToGemini(context.Background(), &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: request.Model}}, request)
+	require.NoError(t, err)
+	require.Zero(t, *converted.GenerationConfig.ThinkingConfig.ThinkingBudget)
+	require.NotNil(t, converted.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	assert.False(t, *converted.GenerationConfig.ThinkingConfig.IncludeThoughts)
 }
 
 func TestConvertClaudeRequestToOpenAIUsesOpenRouterDialect(t *testing.T) {
@@ -234,4 +257,21 @@ func TestConvertClaudeResponseToOpenAIPreservesCacheUsage(t *testing.T) {
 	assert.Equal(t, 4, converted.Usage.PromptTokensDetails.CacheWriteTokens)
 	assert.Equal(t, 1, converted.Usage.ClaudeCacheCreation5mTokens)
 	assert.Equal(t, 3, converted.Usage.ClaudeCacheCreation1hTokens)
+	require.NotNil(t, converted.Usage.BillingUsage)
+	require.NotNil(t, converted.Usage.BillingUsage.ClaudeUsage)
+	assert.Equal(t, 10, converted.Usage.BillingUsage.ClaudeUsage.InputTokens)
+}
+
+func TestUsageFromGeminiMetadataExposesCanonicalBillingUsage(t *testing.T) {
+	usage, err := UsageFromGeminiMetadata(&dto.GeminiUsageMetadata{
+		PromptTokenCount:     7,
+		CandidatesTokenCount: 3,
+		TotalTokenCount:      10,
+	}, 0)
+
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	require.NotNil(t, usage.BillingUsage)
+	require.NotNil(t, usage.BillingUsage.GeminiUsageMetadata)
+	assert.Equal(t, 7, usage.BillingUsage.GeminiUsageMetadata.PromptTokenCount)
 }

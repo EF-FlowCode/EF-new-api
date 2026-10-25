@@ -49,9 +49,13 @@ export const useAuthStore = create<AuthState>()((set) => {
         return saved ? JSON.parse(saved) : null
       }
     } catch {
-      // Clear dirty data when parsing fails
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('user')
+      // Clear dirty data when parsing fails; storage itself may be unavailable.
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem('user')
+        }
+      } catch {
+        /* empty */
       }
     }
     return null
@@ -62,20 +66,29 @@ export const useAuthStore = create<AuthState>()((set) => {
       user: initUser,
       setUser: (user) =>
         set((state) => {
-          // Persist user to localStorage
-          if (typeof window !== 'undefined') {
-            if (user) {
-              window.localStorage.setItem('user', JSON.stringify(user))
-            } else {
-              window.localStorage.removeItem('user')
+          // Persist user to localStorage; a disabled or full storage must not
+          // stop the in-memory session from updating.
+          try {
+            if (typeof window !== 'undefined') {
+              if (user) {
+                window.localStorage.setItem('user', JSON.stringify(user))
+              } else {
+                window.localStorage.removeItem('user')
+              }
             }
+          } catch {
+            /* empty */
           }
           return { ...state, auth: { ...state.auth, user } }
         }),
       reset: () =>
         set((state) => {
-          if (typeof window !== 'undefined') {
-            window.localStorage.removeItem('user')
+          try {
+            if (typeof window !== 'undefined') {
+              window.localStorage.removeItem('user')
+            }
+          } catch {
+            /* empty */
           }
           return {
             ...state,

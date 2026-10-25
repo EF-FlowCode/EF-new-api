@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -141,6 +141,7 @@ func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
 }
 
 func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjourneyTask dto.MidjourneyDto) {
+	midjourneySettings := setting.GetMidjourneySettings()
 	midjourneyTask.MjId = originTask.MjId
 	midjourneyTask.Progress = originTask.Progress
 	midjourneyTask.PromptEn = originTask.PromptEn
@@ -149,8 +150,8 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	midjourneyTask.StartTime = originTask.StartTime
 	midjourneyTask.FinishTime = originTask.FinishTime
 	midjourneyTask.ImageUrl = ""
-	if originTask.ImageUrl != "" && setting.MjForwardUrlEnabled {
-		midjourneyTask.ImageUrl = system_setting.ServerAddress + "/mj/image/" + originTask.MjId
+	if originTask.ImageUrl != "" && midjourneySettings.ForwardURLEnabled {
+		midjourneyTask.ImageUrl = system_setting.GetServerAddress() + "/mj/image/" + originTask.MjId
 		if originTask.Status != "SUCCESS" {
 			midjourneyTask.ImageUrl += "?rand=" + strconv.FormatInt(time.Now().UnixNano(), 10)
 		}
@@ -258,23 +259,25 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	}()
 	midjResponse := &mjResp.Response
 	midjourneyTask := &model.Midjourney{
-		UserId:      info.UserId,
-		Code:        midjResponse.Code,
-		Action:      constant.MjActionSwapFace,
-		MjId:        midjResponse.Result,
-		Prompt:      "InsightFace",
-		PromptEn:    "",
-		Description: midjResponse.Description,
-		State:       "",
-		SubmitTime:  info.StartTime.UnixNano() / int64(time.Millisecond),
-		StartTime:   time.Now().UnixNano() / int64(time.Millisecond),
-		FinishTime:  0,
-		ImageUrl:    "",
-		Status:      "",
-		Progress:    "0%",
-		FailReason:  "",
-		ChannelId:   c.GetInt("channel_id"),
-		Quota:       priceData.Quota,
+		UserId:           info.UserId,
+		Code:             midjResponse.Code,
+		Action:           constant.MjActionSwapFace,
+		MjId:             midjResponse.Result,
+		Prompt:           "InsightFace",
+		PromptEn:         "",
+		Description:      midjResponse.Description,
+		State:            "",
+		SubmitTime:       info.StartTime.UnixNano() / int64(time.Millisecond),
+		StartTime:        time.Now().UnixNano() / int64(time.Millisecond),
+		FinishTime:       0,
+		ImageUrl:         "",
+		Status:           "",
+		Progress:         "0%",
+		FailReason:       "",
+		ChannelId:        c.GetInt("channel_id"),
+		Quota:            priceData.Quota,
+		TokenId:          info.TokenId,
+		BillingChannelId: info.ChannelId,
 	}
 	err = midjourneyTask.Insert()
 	if err != nil {
@@ -391,6 +394,8 @@ func RelayMidjourneyTask(c *gin.Context, relayMode int) *dto.MidjourneyResponse 
 }
 
 func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dto.MidjourneyResponse {
+	midjourneySettings := setting.GetMidjourneySettings()
+	relayRuntimePolicy := service.GetOrCreateRelayRuntimePolicy(c)
 	consumeQuota := true
 	var midjRequest dto.MidjourneyRequest
 	err := common.UnmarshalBodyReusable(c, &midjRequest)
@@ -468,7 +473,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		if originTask == nil {
 			return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_not_found")
 		} else { //原任务的Status=SUCCESS，则可以做放大UPSCALE、变换VARIATION等动作，此时必须使用原来的请求地址才能正确处理
-			if setting.MjActionCheckSuccessEnabled {
+			if midjourneySettings.ActionCheckSuccessEnabled {
 				if originTask.Status != "SUCCESS" && relayInfo.RelayMode != relayconstant.RelayModeMidjourneyModal {
 					return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_status_not_success")
 				}
@@ -571,23 +576,25 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	// 24-prompt包含敏感词 {"code":24,"description":"可能包含敏感词","properties":{"promptEn":"nude body","bannedWord":"nude"}}
 	// other: 提交错误，description为错误描述
 	midjourneyTask := &model.Midjourney{
-		UserId:      relayInfo.UserId,
-		Code:        midjResponse.Code,
-		Action:      midjRequest.Action,
-		MjId:        midjResponse.Result,
-		Prompt:      midjRequest.Prompt,
-		PromptEn:    "",
-		Description: midjResponse.Description,
-		State:       "",
-		SubmitTime:  time.Now().UnixNano() / int64(time.Millisecond),
-		StartTime:   0,
-		FinishTime:  0,
-		ImageUrl:    "",
-		Status:      "",
-		Progress:    "0%",
-		FailReason:  "",
-		ChannelId:   c.GetInt("channel_id"),
-		Quota:       priceData.Quota,
+		UserId:           relayInfo.UserId,
+		Code:             midjResponse.Code,
+		Action:           midjRequest.Action,
+		MjId:             midjResponse.Result,
+		Prompt:           midjRequest.Prompt,
+		PromptEn:         "",
+		Description:      midjResponse.Description,
+		State:            "",
+		SubmitTime:       time.Now().UnixNano() / int64(time.Millisecond),
+		StartTime:        0,
+		FinishTime:       0,
+		ImageUrl:         "",
+		Status:           "",
+		Progress:         "0%",
+		FailReason:       "",
+		ChannelId:        c.GetInt("channel_id"),
+		Quota:            priceData.Quota,
+		TokenId:          relayInfo.TokenId,
+		BillingChannelId: relayInfo.ChannelId,
 	}
 	if midjResponse.Code == 3 {
 		//无实例账号自动禁用渠道（No available account instance）
@@ -595,7 +602,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		if err != nil {
 			common.SysLog("get_channel_null: " + err.Error())
 		}
-		if channel.GetAutoBan() && common.AutomaticDisableChannelEnabled {
+		if channel.GetAutoBan() && relayRuntimePolicy.ChannelFailurePolicy.AutomaticDisableChannelEnabled {
 			model.UpdateChannelStatus(midjourneyTask.ChannelId, "", 2, "No available account instance")
 		}
 	}
@@ -607,7 +614,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 
 	if midjResponse.Code == 21 { //21-任务已存在（处理中或者有结果了）
 		// 将 properties 转换为一个 map
-		properties, ok := midjResponse.Properties.(map[string]interface{})
+		properties, ok := midjResponse.Properties.(map[string]any)
 		if ok {
 			imageUrl, ok1 := properties["imageUrl"].(string)
 			status, ok2 := properties["status"].(string)

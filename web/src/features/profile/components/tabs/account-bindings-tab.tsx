@@ -1,14 +1,23 @@
-import { useEffect, useMemo, useState, useCallback } from 'react'
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { Mail, Shield, Send, Link2, Unlink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { SiGithub, SiWechat, SiLinux } from 'react-icons/si'
 import { toast } from 'sonner'
-import { IconDiscord } from '@/assets/brand-icons'
+import {
+  IconDiscord,
+  IconGithub,
+  IconLinuxDo,
+  IconWeChat,
+} from '@/assets/brand-icons'
 import {
   handleGitHubOAuth,
   handleOIDCOAuth,
   handleDiscordOAuth,
   handleLinuxDOOAuth,
+  handleCustomOAuthBinding,
+  setOAuthBindProofProvider,
+  handleTelegramOAuthBinding,
+  indexCustomOAuthBindings,
+  type CustomOAuthBinding,
 } from '@/lib/oauth'
 import { useDialogs } from '@/hooks/use-dialog'
 import { useStatus } from '@/hooks/use-status'
@@ -18,10 +27,12 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
 import {
-  getSelfOAuthBindings,
-  unbindCustomOAuth,
-  type CustomOAuthBinding,
-} from '../../api'
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
+import type { CustomOAuthProviderInfo } from '@/features/auth/types'
+import { getSelfOAuthBindings, unbindCustomOAuth } from '../../api'
 import type { UserProfile, BindingItem } from '../../types'
 import { EmailBindDialog } from '../dialogs/email-bind-dialog'
 import { TelegramBindDialog } from '../dialogs/telegram-bind-dialog'
@@ -52,8 +63,12 @@ export function AccountBindingsTab({
   const [unbinding, setUnbinding] = useState(false)
 
   const customProviders = status?.custom_oauth_providers as
-    | Array<{ id: string; name: string }>
+    | CustomOAuthProviderInfo[]
     | undefined
+  const customBindingsByProviderId = useMemo(
+    () => indexCustomOAuthBindings(customBindings),
+    [customBindings]
+  )
 
   const fetchCustomBindings = useCallback(async () => {
     if (!customProviders || customProviders.length === 0) return
@@ -71,15 +86,54 @@ export function AccountBindingsTab({
     fetchCustomBindings()
   }, [fetchCustomBindings])
 
+  const verification = useSecureVerification()
+  const { startVerification, cancel: cancelVerification } = verification
+  const pendingBindProof = useRef<((proof: string | null) => void) | null>(null)
+
+  // Third-party bindings need a proof bound to the provider; the OAuth helper
+  // asks for it through this provider before requesting the bind state.
+  useEffect(() => {
+    setOAuthBindProofProvider(
+      (provider) =>
+        new Promise<string | null>((resolve) => {
+          pendingBindProof.current = resolve
+          void startVerification(
+            async (proof?: SecurityProof) => {
+              pendingBindProof.current = null
+              resolve(proof?.proof_token ?? null)
+            },
+            {
+              operation: {
+                scope: 'account.binding.bind',
+                context: { provider },
+              },
+              description: t(
+                'Confirm your identity before linking this account.'
+              ),
+            }
+          ).then((started) => {
+            if (!started) {
+              pendingBindProof.current = null
+              resolve(null)
+            }
+          })
+        })
+    )
+    return () => setOAuthBindProofProvider(null)
+  }, [startVerification, t])
+
   const handleUnbindCustom = async () => {
     if (!unbindTarget) return
-    setUnbinding(true)
-    try {
-      const res = await unbindCustomOAuth(unbindTarget.provider_id)
+    const target = unbindTarget
+    const submit = async (proof?: SecurityProof) => {
+      const res = await unbindCustomOAuth(
+        target.provider_id,
+        proof?.proof_token
+      )
       if (res.success) {
         toast.success(
           t('Unbound {{provider}}', {
-            provider: unbindTarget.provider_name,
+            provider: target.provider_name,
           })
         )
         await fetchCustomBindings()
@@ -87,6 +141,17 @@ export function AccountBindingsTab({
       } else {
         toast.error(res.message || t('Unbind failed'))
       }
+    }
+
+    setUnbinding(true)
+    try {
+      await verification.startVerification(submit, {
+        operation: {
+          scope: 'account.binding.unbind',
+          context: { provider_id: target.provider_id },
+        },
+        description: t('Confirm your identity before unlinking this account.'),
+      })
     } catch {
       toast.error(t('Unbind failed'))
     } finally {
@@ -95,9 +160,8 @@ export function AccountBindingsTab({
     }
   }
 
-  const handleBindCustomOAuth = (provider: { id: string; name: string }) => {
-    const redirectUrl = `${window.location.origin}/oauth/${provider.id}?bind=true`
-    window.location.href = `/api/oauth/${provider.id}?redirect=${encodeURIComponent(redirectUrl)}`
+  const handleBindCustomOAuth = (provider: CustomOAuthProviderInfo) => {
+    void handleCustomOAuthBinding(provider)
   }
 
   useEffect(() => {
@@ -145,7 +209,7 @@ export function AccountBindingsTab({
       {
         id: 'wechat',
         label: t('WeChat'),
-        icon: SiWechat as React.ComponentType<{ className?: string }>,
+        icon: IconWeChat,
         value: undefined,
         isBound: Boolean(
           (profile as unknown as Record<string, unknown>).wechat_id
@@ -156,7 +220,7 @@ export function AccountBindingsTab({
       {
         id: 'github',
         label: t('GitHub'),
-        icon: SiGithub,
+        icon: IconGithub,
         value: (profile as unknown as Record<string, unknown>).github_id as
           | string
           | undefined,
@@ -218,12 +282,15 @@ export function AccountBindingsTab({
           (profile as unknown as Record<string, unknown>).telegram_id
         ),
         isEnabled: status?.telegram_oauth || false,
-        onBind: () => dialogs.open('telegram'),
+        onBind: () =>
+          status?.telegram_oidc
+            ? void handleTelegramOAuthBinding()
+            : dialogs.open('telegram'),
       },
       {
         id: 'linuxdo',
         label: t('LinuxDO'),
-        icon: SiLinux as React.ComponentType<{ className?: string }>,
+        icon: IconLinuxDo,
         value: (profile as unknown as Record<string, unknown>).linux_do_id as
           | string
           | undefined,
@@ -297,9 +364,7 @@ export function AccountBindingsTab({
           </p>
           <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3'>
             {customProviders.map((provider) => {
-              const binding = customBindings.find(
-                (b) => b.provider_id === provider.id
-              )
+              const binding = customBindingsByProviderId.get(provider.id)
               const isBound = !!binding
               return (
                 <div
@@ -323,7 +388,7 @@ export function AccountBindingsTab({
                       </div>
                       <p className='text-muted-foreground truncate text-xs'>
                         {isBound
-                          ? binding?.external_id || t('Bound')
+                          ? binding?.provider_user_id || t('Bound')
                           : t('Not bound')}
                       </p>
                     </div>
@@ -388,11 +453,12 @@ export function AccountBindingsTab({
         onOpenChange={(open) =>
           open ? dialogs.open('wechat') : dialogs.close('wechat')
         }
+        qrCodeUrl={status?.wechat_qrcode as string | undefined}
         onSuccess={onUpdate}
       />
 
       {/* Telegram Bind Dialog */}
-      {status?.telegram_bot_name && (
+      {status?.telegram_bot_name && !status?.telegram_oidc && (
         <TelegramBindDialog
           open={dialogs.isOpen('telegram')}
           onOpenChange={(open) =>
@@ -402,6 +468,22 @@ export function AccountBindingsTab({
           onSuccess={onUpdate}
         />
       )}
+
+      <SecureVerificationDialog
+        {...verification.dialogProps}
+        onOpenChange={(next) => {
+          if (!next) {
+            pendingBindProof.current?.(null)
+            pendingBindProof.current = null
+          }
+          verification.dialogProps.onOpenChange(next)
+        }}
+        onCancel={() => {
+          pendingBindProof.current?.(null)
+          pendingBindProof.current = null
+          cancelVerification()
+        }}
+      />
     </>
   )
 }

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -51,10 +51,8 @@ func (p *DiscordProvider) ExchangeToken(ctx context.Context, code string, c *gin
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-Discord] ExchangeToken: code=%s...", code[:min(len(code), 10)])
-
 	settings := system_setting.GetDiscordSettings()
-	redirectUri := fmt.Sprintf("%s/oauth/discord", system_setting.ServerAddress)
+	redirectUri := fmt.Sprintf("%s/oauth/discord", system_setting.GetServerAddress())
 	values := url.Values{}
 	values.Set("client_id", settings.ClientId)
 	values.Set("client_secret", settings.ClientSecret)
@@ -169,4 +167,8 @@ func (p *DiscordProvider) SetProviderUserID(user *model.User, providerUserID str
 
 func (p *DiscordProvider) GetProviderPrefix() string {
 	return "discord_"
+}
+
+func (p *DiscordProvider) ProviderUserIDColumn() string {
+	return "discord_id"
 }

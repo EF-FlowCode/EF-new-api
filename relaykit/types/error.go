@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 type OpenAIError struct {

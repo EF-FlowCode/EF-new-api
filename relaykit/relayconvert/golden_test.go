@@ -17,9 +17,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	"eflow.local/new-api/relaykit/types"
 	"github.com/stretchr/testify/require"
 )
 

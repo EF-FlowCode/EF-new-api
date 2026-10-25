@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 
 	"gorm.io/gorm"
 )
@@ -147,7 +147,7 @@ func (t *TwoFA) IncrementFailedAttempts() error {
 
 		result := DB.Model(&TwoFA{}).
 			Where("id = ? AND failed_attempts = ? AND (locked_until IS NULL OR locked_until <= ?)", current.Id, current.FailedAttempts, now).
-			Updates(map[string]interface{}{
+			Updates(map[string]any{
 				"failed_attempts": nextFailedAttempts,
 				"locked_until":    nextLockedUntil,
 			})
@@ -224,7 +224,7 @@ func ValidateBackupCode(userId int, code string) (bool, error) {
 			now := time.Now()
 			result := DB.Model(&TwoFABackupCode{}).
 				Where("id = ? AND is_used = ?", bc.Id, false).
-				Updates(map[string]interface{}{
+				Updates(map[string]any{
 					"is_used": true,
 					"used_at": now,
 				})
@@ -331,7 +331,7 @@ func (t *TwoFA) ValidateBackupCodeAndUpdateUsage(code string) (bool, error) {
 }
 
 // GetTwoFAStats 获取2FA统计信息（管理员使用）
-func GetTwoFAStats() (map[string]interface{}, error) {
+func GetTwoFAStats() (map[string]any, error) {
 	var totalUsers, enabledUsers int64
 
 	// 总用户数
@@ -349,7 +349,7 @@ func GetTwoFAStats() (map[string]interface{}, error) {
 		enabledRate = float64(enabledUsers) / float64(totalUsers) * 100
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"total_users":   totalUsers,
 		"enabled_users": enabledUsers,
 		"enabled_rate":  fmt.Sprintf("%.1f%%", enabledRate),

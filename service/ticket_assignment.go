@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting"
 )
 
 // ErrNoEligibleAssignee 表示分配引擎找不到合适的候选人（规则为空、策略为 manual、候选被禁用等）。

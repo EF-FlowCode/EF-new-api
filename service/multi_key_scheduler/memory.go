@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 // memoryBackend 是单实例下的本地后端。多实例部署应改用 Redis backend

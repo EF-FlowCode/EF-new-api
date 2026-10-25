@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Plus, RefreshCw, XCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import {
   AlertDialog,
@@ -15,6 +17,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -22,9 +26,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useLatestRequest } from '@/components/data-table/latest-request'
 import {
   batchAdminUpdateTicketStatus,
   fetchTickets,
+  exportTicketInvoices,
   type TicketSortField,
 } from '../api'
 import { TICKET_STATUS_META } from '../lib/ticket-utils'
@@ -134,6 +140,9 @@ export function TicketListPage({
 }: Props) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const canExport =
+    useAuthStore((state) => (state.auth.user?.role ?? 0) >= ROLE.ADMIN) && admin
+  const runLatest = useLatestRequest()
 
   // 进页面时一次性把上次的视图偏好读出来当初值（detailPathPrefix 每路由稳定，组件随路由重挂）
   const [initialPrefs] = useState(() => loadPrefs(detailPathPrefix))
@@ -148,6 +157,9 @@ export function TicketListPage({
   )
   const [typeFilter, setTypeFilter] = useState<string>(initialPrefs.typeFilter)
   const [createOpen, setCreateOpen] = useState(false)
+  const [companyNameInput, setCompanyNameInput] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [exporting, setExporting] = useState(false)
   // sortField=null 表示不传排序参数，后端按历史默认（更新时间倒序）返回
   const [sortField, setSortField] = useState<TicketSortField | null>(
     initialPrefs.sortField
@@ -199,6 +211,34 @@ export function TicketListPage({
 
   const clearSelection = () => setSelectedIds(new Set())
 
+  const handleInvoiceExport = async () => {
+    if (exporting || !canExport || selectedIds.size === 0) return
+    if (selectedIds.size > 500) {
+      toast.error(t('Select between 1 and 500 invoice tickets'))
+      return
+    }
+    setExporting(true)
+    try {
+      const { blob, filename } = await exportTicketInvoices(
+        Array.from(selectedIds)
+      )
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      toast.error(
+        t(error instanceof Error ? error.message : 'Failed to export invoices')
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const handleBulkClose = async () => {
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
@@ -245,35 +285,47 @@ export function TicketListPage({
       admin,
       orderBy: sortField ?? undefined,
       order: sortDir,
+      companyName: admin && typeFilter === 'invoice' ? companyName : undefined,
     }),
-    [page, pageSize, statusFilter, typeFilter, admin, sortField, sortDir]
+    [
+      page,
+      pageSize,
+      statusFilter,
+      typeFilter,
+      admin,
+      sortField,
+      sortDir,
+      companyName,
+    ]
   )
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true)
-    try {
-      const data = await fetchTickets(params)
-      setTickets(data.items || [])
-      setTotal(data.total || 0)
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Failed to load tickets'))
-      setTickets([])
-      setTotal(0)
-    } finally {
-      setLoading(false)
-    }
-  }
+    await runLatest((signal) => fetchTickets(params, signal), {
+      onSuccess: (data) => {
+        setTickets(data.items || [])
+        setTotal(data.total || 0)
+      },
+      onError: (error) => {
+        toast.error(
+          error instanceof Error ? error.message : t('Failed to load tickets')
+        )
+        setTickets([])
+        setTotal(0)
+      },
+      onSettled: () => setLoading(false),
+    })
+  }, [params, runLatest, t])
 
   useEffect(() => {
     refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params])
+  }, [refresh])
 
   useEffect(() => {
     setPage(1)
     // 过滤/排序/每页条数变了，原选择已无意义，清空避免误关不在视野里的工单
     clearSelection()
-  }, [statusFilter, typeFilter, pageSize, sortField, sortDir])
+  }, [statusFilter, typeFilter, pageSize, sortField, sortDir, companyName])
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
@@ -323,7 +375,16 @@ export function TicketListPage({
               ))}
             </SelectContent>
           </Select>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
+          <Select
+            value={typeFilter}
+            onValueChange={(value) => {
+              setTypeFilter(value)
+              if (value !== 'invoice') {
+                setCompanyName('')
+                setCompanyNameInput('')
+              }
+            }}
+          >
             <SelectTrigger className='w-[160px]'>
               <SelectValue />
             </SelectTrigger>
@@ -337,11 +398,66 @@ export function TicketListPage({
           </Select>
         </div>
 
+        {admin && (
+          <form
+            className='flex flex-wrap items-end gap-2'
+            onSubmit={(event) => {
+              event.preventDefault()
+              setCompanyName(companyNameInput.trim())
+              setTypeFilter('invoice')
+              setPage(1)
+              clearSelection()
+            }}
+          >
+            <div className='flex min-w-48 flex-1 flex-col gap-2 sm:max-w-sm'>
+              <Label htmlFor='invoice-company-search'>
+                {t('Search invoice title')}
+              </Label>
+              <Input
+                id='invoice-company-search'
+                value={companyNameInput}
+                placeholder={t('Enter part of a company or invoice title')}
+                maxLength={255}
+                onChange={(event) => setCompanyNameInput(event.target.value)}
+              />
+            </div>
+            <Button type='submit' variant='outline'>
+              {t('Search')}
+            </Button>
+            {companyName && (
+              <Button
+                type='button'
+                variant='ghost'
+                onClick={() => {
+                  setCompanyName('')
+                  setCompanyNameInput('')
+                  setPage(1)
+                  clearSelection()
+                }}
+              >
+                {t('Clear search')}
+              </Button>
+            )}
+          </form>
+        )}
+
         {admin && selectedIds.size > 0 && (
           <div className='bg-card flex flex-wrap items-center gap-3 rounded-xl border border-dashed p-3'>
             <span className='text-sm font-medium'>
               {t('{{n}} selected', { n: selectedIds.size })}
             </span>
+            {canExport && typeFilter === 'invoice' && (
+              <Button
+                size='sm'
+                variant='outline'
+                disabled={exporting || bulkBusy || loading}
+                onClick={handleInvoiceExport}
+              >
+                {exporting
+                  ? t('Exporting invoices...')
+                  : t('Export selected invoices')}
+              </Button>
+            )}
             <Button
               size='sm'
               variant='destructive'

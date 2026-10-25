@@ -1,18 +1,18 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { SessionBar } from './session-bar'
-import { SystemPromptPanel } from './system-prompt-panel'
-import { ParametersPanel } from './parameters-panel'
-import { ConversationSearch } from './conversation-search'
+import { Button } from '@/components/ui/button'
 import type {
   Message as MessageType,
   Session,
   PlaygroundConfig,
   ParameterEnabled,
 } from '../types'
+import { ConversationSearch } from './conversation-search'
+import { ParametersPanel } from './parameters-panel'
+import { SessionBar } from './session-bar'
+import { SystemPromptPanel } from './system-prompt-panel'
 
 const COLLAPSE_KEY = 'playground_sidebar_collapsed'
 

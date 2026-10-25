@@ -10,6 +10,7 @@ import { PaymentSettingsSection } from './payment-settings-section'
 // 客服分配等）。我之前 31d3bc9f 引入的 ticket-settings-section.tsx 已删，避免
 // 重复 import 造成 TicketSettingsSection 名字冲突 + 重复注册两个 ticket section。
 import { TicketSettingsSection } from './ticket-section'
+import { WebGroupAccessSection } from './web-group-access-section'
 import { WorkerSettingsSection } from './worker-settings-section'
 
 const INTEGRATIONS_SECTIONS = [
@@ -65,17 +66,11 @@ const INTEGRATIONS_SECTIONS = [
           WaffoPayMethods: settings.WaffoPayMethods ?? '[]',
         }}
         waffoPancakeDefaultValues={{
-          WaffoPancakeEnabled: settings.WaffoPancakeEnabled ?? false,
-          WaffoPancakeSandbox: settings.WaffoPancakeSandbox ?? false,
           WaffoPancakeMerchantID: settings.WaffoPancakeMerchantID ?? '',
           WaffoPancakePrivateKey: settings.WaffoPancakePrivateKey ?? '',
-          WaffoPancakeWebhookPublicKey:
-            settings.WaffoPancakeWebhookPublicKey ?? '',
-          WaffoPancakeWebhookTestKey: settings.WaffoPancakeWebhookTestKey ?? '',
           WaffoPancakeStoreID: settings.WaffoPancakeStoreID ?? '',
           WaffoPancakeProductID: settings.WaffoPancakeProductID ?? '',
           WaffoPancakeReturnURL: settings.WaffoPancakeReturnURL ?? '',
-          WaffoPancakeCurrency: settings.WaffoPancakeCurrency ?? 'USD',
           WaffoPancakeUnitPrice: settings.WaffoPancakeUnitPrice ?? 1,
           WaffoPancakeMinTopUp: settings.WaffoPancakeMinTopUp ?? 1,
         }}
@@ -96,6 +91,8 @@ const INTEGRATIONS_SECTIONS = [
           SMTPToken: settings.SMTPToken,
           SMTPArchiveBcc: settings.SMTPArchiveBcc,
           SMTPSSLEnabled: settings.SMTPSSLEnabled,
+          SMTPStartTLSEnabled: settings.SMTPStartTLSEnabled,
+          SMTPInsecureSkipVerify: settings.SMTPInsecureSkipVerify,
           SMTPForceAuthLogin: settings.SMTPForceAuthLogin,
         }}
       />
@@ -148,6 +145,10 @@ const INTEGRATIONS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_enabled'],
           'monitor_setting.auto_test_channel_minutes':
             settings['monitor_setting.auto_test_channel_minutes'],
+          'monitor_setting.channel_test_mode':
+            settings['monitor_setting.channel_test_mode'],
+          'monitor_setting.channel_test_concurrency':
+            settings['monitor_setting.channel_test_concurrency'],
         }}
       />
     ),
@@ -181,6 +182,19 @@ const INTEGRATIONS_SECTIONS = [
             ],
           'group_monitoring_setting.cache_tokens_separate_groups':
             settings['group_monitoring_setting.cache_tokens_separate_groups'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'web-group-access',
+    titleKey: 'Web Group Access',
+    descriptionKey: 'Configure region-based group choices and notices',
+    build: (settings: IntegrationSettings) => (
+      <WebGroupAccessSection
+        defaultValues={{
+          enabled: settings['web_group_setting.enabled'],
+          rules: settings['web_group_setting.rules'],
         }}
       />
     ),

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/system_setting"
-	"github.com/bytedance/gopkg/util/gopool"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	gopool "eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/system_setting"
 )
 
 func paymentMethodLabel(method string) string {
@@ -31,15 +31,15 @@ func paymentMethodLabel(method string) string {
 	}
 }
 
-func paymentActionURL() string {
-	base := strings.TrimRight(system_setting.ServerAddress, "/")
+func paymentActionURL(serverAddress string) string {
+	base := strings.TrimRight(serverAddress, "/")
 	if base == "" {
 		return ""
 	}
 	return base + "/topup"
 }
 
-func buildTopUpVars(topUp *model.TopUp, user *model.User, forAdmin bool) map[string]string {
+func buildTopUpVars(topUp *model.TopUp, user *model.User, forAdmin bool, serverAddress string) map[string]string {
 	completedAt := time.Unix(topUp.CompleteTime, 0).Format("2006-01-02 15:04:05")
 	if topUp.CompleteTime == 0 {
 		completedAt = time.Now().Format("2006-01-02 15:04:05")
@@ -82,7 +82,7 @@ func buildTopUpVars(topUp *model.TopUp, user *model.User, forAdmin bool) map[str
 
 	return map[string]string{
 		"system_name":           html.EscapeString(common.SystemNameOrDefault()),
-		"server_address":        html.EscapeString(strings.TrimRight(system_setting.ServerAddress, "/")),
+		"server_address":        html.EscapeString(strings.TrimRight(serverAddress, "/")),
 		"heading":               html.EscapeString(heading),
 		"intro":                 html.EscapeString(intro),
 		"trade_no":              tradeNoEsc,
@@ -95,7 +95,7 @@ func buildTopUpVars(topUp *model.TopUp, user *model.User, forAdmin bool) map[str
 		"info_table":            common.RenderInfoTableHTML(rows),
 		"content_preview":       "",
 		"content_preview_block": "",
-		"action_url":            html.EscapeString(paymentActionURL()),
+		"action_url":            html.EscapeString(paymentActionURL(serverAddress)),
 		"action_label":          html.EscapeString(actionLabel),
 	}
 }
@@ -106,18 +106,26 @@ func NotifyTopUpSuccessByTradeNo(tradeNo string) {
 	if tradeNo == "" {
 		return
 	}
-	if !common.PaymentNotifyUserEnabled && !common.PaymentNotifyAdminEnabled {
+	notificationSettings := common.GetPaymentNotificationSettings()
+	serverAddress := system_setting.GetServerAddress()
+	if !notificationSettings.UserEnabled && !notificationSettings.AdminEnabled {
 		return
 	}
-	NotifyTopUpSuccess(model.GetTopUpByTradeNo(tradeNo))
+	notifyTopUpSuccess(model.GetTopUpByTradeNo(tradeNo), notificationSettings, serverAddress)
 }
 
 // NotifyTopUpSuccess 异步在支付成功后发送邮件（用户 / 管理员 两条通路各自可开关）
 func NotifyTopUpSuccess(topUp *model.TopUp) {
+	notificationSettings := common.GetPaymentNotificationSettings()
+	serverAddress := system_setting.GetServerAddress()
+	notifyTopUpSuccess(topUp, notificationSettings, serverAddress)
+}
+
+func notifyTopUpSuccess(topUp *model.TopUp, notificationSettings common.PaymentNotificationSettings, serverAddress string) {
 	if topUp == nil {
 		return
 	}
-	if !common.PaymentNotifyUserEnabled && !common.PaymentNotifyAdminEnabled {
+	if !notificationSettings.UserEnabled && !notificationSettings.AdminEnabled {
 		return
 	}
 
@@ -128,11 +136,11 @@ func NotifyTopUpSuccess(topUp *model.TopUp) {
 			return
 		}
 
-		if common.PaymentNotifyUserEnabled {
+		if notificationSettings.UserEnabled {
 			userSetting := user.GetSetting()
 			userEmail := ResolveUserNotificationEmail(user, userSetting)
 			if userEmail != "" {
-				vars := buildTopUpVars(topUp, user, false)
+				vars := buildTopUpVars(topUp, user, false, serverAddress)
 				subject, body := RenderEmailByKey(constant.EmailTemplateKeyPaymentSuccessUser, vars)
 				if subject != "" && body != "" {
 					notify := dto.NewNotify(dto.NotifyTypePaymentSuccess, subject, body, nil)
@@ -143,12 +151,12 @@ func NotifyTopUpSuccess(topUp *model.TopUp) {
 			}
 		}
 
-		if common.PaymentNotifyAdminEnabled {
-			recipients := parseAdminEmails(common.PaymentAdminEmail)
+		if notificationSettings.AdminEnabled {
+			recipients := parseAdminEmails(notificationSettings.AdminEmail)
 			if len(recipients) == 0 {
 				return
 			}
-			vars := buildTopUpVars(topUp, user, true)
+			vars := buildTopUpVars(topUp, user, true, serverAddress)
 			subject, body := RenderEmailByKey(constant.EmailTemplateKeyPaymentSuccessAdmin, vars)
 			if subject == "" || body == "" {
 				return

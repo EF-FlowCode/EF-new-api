@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/constant"
+	"eflow.local/new-api/constant"
 )
 
 var (
@@ -61,17 +61,18 @@ func InitEnv() {
 	} else {
 		CryptoSecret = SessionSecret
 	}
+	if err := InitSessionCookieSettings(); err != nil {
+		log.Fatal(err)
+	}
 	if *LogDir != "" {
 		var err error
 		*LogDir, err = filepath.Abs(*LogDir)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if _, err := os.Stat(*LogDir); os.IsNotExist(err) {
-			err = os.Mkdir(*LogDir, 0777)
-			if err != nil {
-				log.Fatal(err)
-			}
+		// eflow: web 与 worker 共用 /data 卷并发启动时，Stat+Mkdir 会竞争失败（"file exists"），MkdirAll 对已存在的目录不报错
+		if err := os.MkdirAll(*LogDir, 0777); err != nil {
+			log.Fatal(err)
 		}
 	}
 
@@ -81,12 +82,20 @@ func InitEnv() {
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
 	NodeName = os.Getenv("NODE_NAME")
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
+	smtpStartTLSEnabled := GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLE", GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLED", false))
+	smtpInsecureSkipVerify := GetEnvOrDefaultBool("SMTP_INSECURE_SKIP_VERIFY", GetEnvOrDefaultBool("SMTP_TLS_INSECURE_SKIP_VERIFY", false))
+	if err := UpdateSMTPSettings(map[string]string{
+		"SMTPStartTLSEnabled":    strconv.FormatBool(smtpStartTLSEnabled),
+		"SMTPInsecureSkipVerify": strconv.FormatBool(smtpInsecureSkipVerify),
+	}); err != nil {
+		log.Fatal(err)
+	}
 	if TLSInsecureSkipVerify {
 		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {
 			if tr.TLSClientConfig != nil {
 				tr.TLSClientConfig.InsecureSkipVerify = true
 			} else {
-				tr.TLSClientConfig = InsecureTLSConfig
+				tr.TLSClientConfig = InsecureTLSConfig.Clone()
 			}
 		}
 	}
@@ -97,9 +106,15 @@ func InitEnv() {
 
 	// Initialize variables with GetEnvOrDefault
 	SyncFrequency = GetEnvOrDefault("SYNC_FREQUENCY", 60)
+	if SyncFrequency <= 0 {
+		// The option and channel sync loops sleep for this long; zero or a
+		// negative value would turn them into busy full-table reload loops.
+		SysLog(fmt.Sprintf("invalid SYNC_FREQUENCY %d, use default value 60", SyncFrequency))
+		SyncFrequency = 60
+	}
 	BatchUpdateInterval = GetEnvOrDefault("BATCH_UPDATE_INTERVAL", 5)
 	RelayTimeout = GetEnvOrDefault("RELAY_TIMEOUT", 0)
-	RelayResponseHeaderTimeout = GetEnvOrDefault("RESPONSE_HEADER_TIMEOUT", 0)
+	RelayResponseHeaderTimeout = relayResponseHeaderTimeoutFromEnv()
 	RelayIdleConnTimeout = GetEnvOrDefault("RELAY_IDLE_CONN_TIMEOUT", 90)
 	RelayMaxIdleConns = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS", 500)
 	RelayMaxIdleConnsPerHost = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS_PER_HOST", 100)
@@ -123,6 +138,12 @@ func InitEnv() {
 	GlobalWebRateLimitNum = GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT", 60)
 	GlobalWebRateLimitDuration = int64(GetEnvOrDefault("GLOBAL_WEB_RATE_LIMIT_DURATION", 180))
 
+	// Files that exist in the frontend build count against their own limiter,
+	// so a cold page load (lazy chunks, icons) cannot exhaust the web limit.
+	GlobalStaticRateLimitEnable = GetEnvOrDefaultBool("GLOBAL_STATIC_RATE_LIMIT_ENABLE", false)
+	GlobalStaticRateLimitNum = GetEnvOrDefault("GLOBAL_STATIC_RATE_LIMIT", 1000)
+	GlobalStaticRateLimitDuration = int64(GetEnvOrDefault("GLOBAL_STATIC_RATE_LIMIT_DURATION", 180))
+
 	CriticalRateLimitEnable = GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", true)
 	CriticalRateLimitNum = GetEnvOrDefault("CRITICAL_RATE_LIMIT", 20)
 	CriticalRateLimitDuration = int64(GetEnvOrDefault("CRITICAL_RATE_LIMIT_DURATION", 20*60))
@@ -130,6 +151,10 @@ func InitEnv() {
 	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 20)
 	SearchRateLimitDuration = int64(GetEnvOrDefault("SEARCH_RATE_LIMIT_DURATION", 60))
+
+	TaskQueryRateLimitEnable = GetEnvOrDefaultBool("TASK_QUERY_RATE_LIMIT_ENABLE", true)
+	TaskQueryRateLimitNum = GetEnvOrDefault("TASK_QUERY_RATE_LIMIT", 600)
+	TaskQueryRateLimitDuration = int64(GetEnvOrDefault("TASK_QUERY_RATE_LIMIT_DURATION", 60))
 	initConstantEnv()
 }
 
@@ -140,6 +165,8 @@ func initConstantEnv() {
 	constant.StreamScannerMaxBufferMB = GetEnvOrDefault("STREAM_SCANNER_MAX_BUFFER_MB", 128)
 	// MaxRequestBodyMB 请求体最大大小（解压后），用于防止超大请求/zip bomb导致内存暴涨
 	constant.MaxRequestBodyMB = GetEnvOrDefault("MAX_REQUEST_BODY_MB", 128)
+	// AnonymousRequestBodyLimitKB 匿名 API 请求体限制（读取前），0 表示禁用。
+	constant.AnonymousRequestBodyLimitKB = GetEnvOrDefault("ANONYMOUS_REQUEST_BODY_LIMIT_KB", 512)
 	// ForceStreamOption 覆盖请求参数，强制返回usage信息
 	constant.ForceStreamOption = GetEnvOrDefaultBool("FORCE_STREAM_OPTION", true)
 	constant.CountToken = GetEnvOrDefaultBool("CountToken", true)
@@ -157,12 +184,13 @@ func initConstantEnv() {
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
+	initTaskProtocolEnv()
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")
 	if soraPatchStr != "" {
 		var taskPricePatches []string
-		soraPatches := strings.Split(soraPatchStr, ",")
-		for _, patch := range soraPatches {
+		soraPatches := strings.SplitSeq(soraPatchStr, ",")
+		for patch := range soraPatches {
 			trimmedPatch := strings.TrimSpace(patch)
 			if trimmedPatch != "" {
 				taskPricePatches = append(taskPricePatches, trimmedPatch)
@@ -174,8 +202,8 @@ func initConstantEnv() {
 	// Initialize trusted redirect domains for URL validation
 	trustedDomainsStr := GetEnvOrDefaultString("TRUSTED_REDIRECT_DOMAINS", "")
 	var trustedDomains []string
-	domains := strings.Split(trustedDomainsStr, ",")
-	for _, domain := range domains {
+	domains := strings.SplitSeq(trustedDomainsStr, ",")
+	for domain := range domains {
 		trimmedDomain := strings.TrimSpace(domain)
 		if trimmedDomain != "" {
 			// Normalize domain to lowercase

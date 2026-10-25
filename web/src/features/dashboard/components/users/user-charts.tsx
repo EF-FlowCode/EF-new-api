@@ -98,7 +98,9 @@ export function UserCharts() {
       }
       const ThemeManager = await themeManagerPromise
       themeManagerRef.current = ThemeManager
-      ThemeManager.setCurrentTheme(resolvedTheme === 'midnight' ? 'dark' : 'light')
+      ThemeManager.setCurrentTheme(
+        resolvedTheme === 'midnight' ? 'dark' : 'light'
+      )
       setThemeReady(true)
     }
     updateTheme()

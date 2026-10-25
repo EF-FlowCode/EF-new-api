@@ -128,16 +128,18 @@ docker-compose up -d
 # 最新のイメージをプル
 docker pull calciumion/new-api:latest
 
-# MySQL 8.0+を使用（必須）
+# MySQL 8 のみサポート
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
-> **💡 ヒント:** `-v ./data:/data` は現在のディレクトリの `data` フォルダにデータを保存します。絶対パスに変更することもできます：`-v /your/custom/path:/data`
+> **MySQL:** `mysql-host` はコンテナから到達可能な MySQL 8.x のホスト名または IP アドレスに置き換えてください。`localhost` は New API コンテナ自身を指します。
+>
+> **ローカルファイル:** `-v ./data:/data` が保存するのはアップロードとローカル実行ファイルだけです。アカウント、設定、課金データは MySQL に保存されます。
 
 </details>
 
@@ -182,7 +184,7 @@ docker run --name new-api -d --restart always \
 |------|------|
 | 🎨 新しいUI | モダンなユーザーインターフェースデザイン |
 | 🌍 多言語 | 簡体字中国語、繁体字中国語、英語、フランス語、日本語をサポート |
-| 🔄 データ互換性 | オリジナルのOne APIデータベースと完全に互換性あり |
+| 🔄 データ互換性 | MySQL 8.x 上の One API スキーマに対応。その他のデータベースは外部移行が必要 |
 | 📈 データダッシュボード | ビジュアルコンソールと統計分析 |
 | 🔒 権限管理 | トークングループ化、モデル制限、ユーザー管理 |
 
@@ -296,7 +298,7 @@ docker run --name new-api -d --restart always \
 
 | コンポーネント | 要件 |
 |------|------|
-| **データベース** | MySQL 8.0+（`SQL_DSN` は必須） |
+| **データベース** | MySQL 8.x |
 | **コンテナエンジン** | Docker / Docker Compose |
 
 ### ⚙️ 環境変数設定
@@ -308,7 +310,7 @@ docker run --name new-api -d --restart always \
 |--------|------|--------|
 | `SESSION_SECRET` | セッションシークレット（マルチマシンデプロイに必須） | - |
 | `CRYPTO_SECRET` | 暗号化シークレット（Redisに必須） | - |
-| `SQL_DSN` | MySQL 8.0+ 接続文字列（必須） | - |
+| `SQL_DSN` | MySQL 8 接続文字列 | 必須 |
 | `REDIS_CONN_STRING` | Redis接続文字列 | - |
 | `STREAMING_TIMEOUT` | ストリーミング応答のタイムアウト時間（秒） | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | ストリームスキャナの1行あたりバッファ上限（MB）。4K画像など巨大なbase64 `data:` ペイロードを扱う場合は値を増加させてください | `64` |
@@ -349,18 +351,19 @@ docker-compose up -d
 <details>
 <summary><strong>方法 2: Dockerコマンド</strong></summary>
 
-**MySQL 8.0+を使用:**
+**MySQL 8を使用:**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
 > **💡 パス説明:**
-> - `./data:/data` - 相対パス、データは現在のディレクトリのdataフォルダに保存されます
+> - `mysql-host` はコンテナから到達可能な MySQL 8.x のアドレスに置き換えてください。コンテナ内の `localhost` はデータベースホストではありません
+> - `./data:/data` - ローカルのアップロードと実行ファイルを保存します。データベースデータは MySQL に保存されます
 > - 絶対パスを使用することもできます：`/your/custom/path:/data`
 
 </details>
@@ -370,7 +373,7 @@ docker run --name new-api -d --restart always \
 
 1. 宝塔パネル（**9.2.0バージョン**以上）をインストールし、アプリケーションストアで**New-API**を検索してインストールします。
 
-📖 [画像付きチュートリアル](./docs/BT.md)
+📖 [画像付きチュートリアル](docs/operations/bt-installation.md)
 
 </details>
 
@@ -461,3 +464,5 @@ docker run --name new-api -d --restart always \
 <sub>❤️ で構築された QuantumNous</sub>
 
 </div>
+
+[eflow ブランチのドキュメント](docs/README.md)

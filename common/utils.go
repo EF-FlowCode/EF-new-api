@@ -2,7 +2,9 @@ package common
 
 import (
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -15,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -185,7 +188,7 @@ func Seconds2Time(num int) (time string) {
 	return
 }
 
-func Interface2String(inter interface{}) string {
+func Interface2String(inter any) string {
 	switch inter.(type) {
 	case string:
 		return inter.(string)
@@ -205,7 +208,7 @@ func Interface2String(inter interface{}) string {
 	return fmt.Sprintf("%v", inter)
 }
 
-func UnescapeHTML(x string) interface{} {
+func UnescapeHTML(x string) any {
 	return template.HTML(x)
 }
 
@@ -333,4 +336,18 @@ func BuildURL(base string, endpoint string) string {
 		return base + endpoint
 	}
 	return u.ResolveReference(ref).String()
+}
+
+// requestIdPrefix keeps request ids from different builds distinguishable.
+var requestIdPrefix = func() string {
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Path != "" {
+		h := sha256.Sum256([]byte(bi.Main.Path))
+		return hex.EncodeToString(h[:4])
+	}
+	return GetRandomString(8)
+}()
+
+// NewRequestId returns an id in the same format as the request-id middleware.
+func NewRequestId() string {
+	return GetTimeString() + requestIdPrefix + GetRandomString(8)
 }

@@ -29,7 +29,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: '1.4.0'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -55,13 +55,13 @@ jobs:
       #   if: runner.os != 'Windows'
       #   run: |
       #     go mod download
-      #     go build -ldflags "-s -w -X 'new-api/common.Version=$(git describe --tags)' -extldflags '-static'" -o new-api
+      #     go build -ldflags "-s -w -X 'eflow.local/new-api/common.Version=$(git describe --tags)' -extldflags '-static'" -o new-api
 
       - name: Build Go binary (Windows)
         if: runner.os == 'Windows'
         run: |
           go mod download
-          go build -ldflags "-s -w -X 'new-api/common.Version=$(git describe --tags)'" -o new-api.exe
+          go build -ldflags "-s -w -X 'eflow.local/new-api/common.Version=$(git describe --tags)'" -o new-api.exe
 
       - name: Update Electron version
         run: |

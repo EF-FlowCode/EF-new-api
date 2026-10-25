@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { VChart } from '@visactor/react-vchart'
+import { useTranslation } from 'react-i18next'
 import { VCHART_OPTION } from '@/lib/vchart'
 import { useTheme } from '@/context/theme-provider'
 import type { HistoryPoint } from '../types'
@@ -176,7 +176,9 @@ export function AvailabilityCacheChart({
         content: [
           {
             key: (datum: ChartPoint) =>
-              datum.type === 'availability' ? t('Availability') : t('Cache hit'),
+              datum.type === 'availability'
+                ? t('Availability')
+                : t('Cache hit'),
             value: (datum: ChartPoint) => `${datum.value.toFixed(1)}%`,
           },
         ],
@@ -185,7 +187,9 @@ export function AvailabilityCacheChart({
         content: [
           {
             key: (datum: ChartPoint) =>
-              datum.type === 'availability' ? t('Availability') : t('Cache hit'),
+              datum.type === 'availability'
+                ? t('Availability')
+                : t('Cache hit'),
             value: (datum: ChartPoint) => `${datum.value.toFixed(1)}%`,
           },
         ],

@@ -10,6 +10,7 @@ import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { DrawingLogFilters, LogCategory, TaskLogFilters } from '../types'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
+import { TaskReviewQueue } from './dialogs/task-review-dialog'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
@@ -197,6 +198,7 @@ export function TaskLogsFilterBar(props: TaskLogsFilterBarProps) {
             )}
             {t('Search')}
           </Button>
+          {props.logCategory === 'task' && <TaskReviewQueue />}
           {props.viewOptions}
         </div>
       </div>

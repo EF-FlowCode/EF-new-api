@@ -57,19 +57,22 @@ func GetPageQuery(c *gin.Context) *PageInfo {
 		}
 	}
 
-	if pageInfo.PageSize == 0 {
+	// GORM treats a negative Limit as "no limit". Normalize all non-positive
+	// values before they reach model queries so external callers cannot turn a
+	// paginated endpoint into an unbounded log read with page_size=-1.
+	if pageInfo.PageSize <= 0 {
 		// 兼容
 		pageSize, _ := strconv.Atoi(c.Query("ps"))
-		if pageSize != 0 {
+		if pageSize > 0 {
 			pageInfo.PageSize = pageSize
 		}
-		if pageInfo.PageSize == 0 {
+		if pageInfo.PageSize <= 0 {
 			pageSize, _ = strconv.Atoi(c.Query("size")) // token page
-			if pageSize != 0 {
+			if pageSize > 0 {
 				pageInfo.PageSize = pageSize
 			}
 		}
-		if pageInfo.PageSize == 0 {
+		if pageInfo.PageSize <= 0 {
 			pageInfo.PageSize = ItemsPerPage
 		}
 	}

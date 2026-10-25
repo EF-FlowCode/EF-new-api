@@ -1,9 +1,11 @@
 # Frontend Development - Backend built from local source
 #
 # Usage:
-#   1. docker compose -f docker-compose.dev.yml up -d
-#   2. cd web && bun install && bun run dev
-#   3. Open http://localhost:3001 (Rsbuild dev server, API auto-proxied to :3000)
+#   1. Run .\menu.ps1 or .\scripts\dev.ps1
+#   2. Open http://localhost:3001 (Rsbuild dev server, API auto-proxied to :3000)
+#
+# Backend only:
+#   .\scripts\dev.ps1 -BackendOnly
 #
 # Rebuild backend after Go code changes:
 #   docker compose -f docker-compose.dev.yml up -d --build new-api
@@ -12,25 +14,34 @@
 #   docker compose -f docker-compose.dev.yml down
 #
 # Reset data:
-#   docker compose -f docker-compose.dev.yml down -v
+#   .\scripts\dev.ps1 -ResetData
+
+name: new-api
 
 services:
   new-api:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-v0.0.0}
     image: new-api-dev:local
     container_name: new-api-dev
     restart: unless-stopped
+    stop_grace_period: 130s
     ports:
       - "3000:3000"
     volumes:
       - dev_data:/data
     environment:
-      - SQL_DSN=root:123456@tcp(mysql:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local
+      - SQL_DSN=root:123456@tcp(mysql:3306)/new_api?charset=utf8mb4&parseTime=True&loc=Local
       - REDIS_CONN_STRING=redis://redis
       - TZ=Asia/Shanghai
       - BATCH_UPDATE_ENABLED=true
+#      - SESSION_COOKIE_SECURE=true
+#      - SESSION_COOKIE_TRUSTED_URL=https://dev.example.com
+#      - SMTP_STARTTLS_ENABLED=true
+#      - SMTP_INSECURE_SKIP_VERIFY=false
     depends_on:
       redis:
         condition: service_started
@@ -52,8 +63,10 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: 123456
-      MYSQL_DATABASE: new-api
+      MYSQL_DATABASE: new_api
       TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:3307:3306"
     volumes:
       - dev_mysql_data:/var/lib/mysql
     networks:
@@ -61,8 +74,8 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 5s
-      timeout: 3s
-      retries: 20
+      timeout: 5s
+      retries: 30
 
 volumes:
   dev_data:

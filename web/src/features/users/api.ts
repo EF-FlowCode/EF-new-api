@@ -1,4 +1,7 @@
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
+import type { CustomOAuthBinding } from '@/lib/oauth'
+import { securityProofHeaders } from '@/lib/secure-verification'
+import type { BuiltinBindingType } from './lib/builtin-binding-types'
 import type {
   User,
   GetUsersParams,
@@ -17,6 +20,16 @@ import type {
 /**
  * Get paginated users list
  */
+// Administrative user changes carry a single-use, user-bound proof when the
+// backend requires one (status/role changes, deletion, password or email
+// resets, security resets, binding removal).
+function withProof(proofToken?: string) {
+  return {
+    ...CALLER_HANDLED_REQUEST_CONFIG,
+    headers: securityProofHeaders(proofToken),
+  }
+}
+
 export async function getUsers(
   params: GetUsersParams = {}
 ): Promise<GetUsersResponse> {
@@ -102,9 +115,10 @@ export async function getUser(id: number): Promise<ApiResponse<User>> {
  * Create a new user
  */
 export async function createUser(
-  data: UserFormData
+  data: UserFormData,
+  proofToken?: string
 ): Promise<ApiResponse<User>> {
-  const res = await api.post('/api/user/', data)
+  const res = await api.post('/api/user/', data, withProof(proofToken))
   return res.data
 }
 
@@ -112,17 +126,21 @@ export async function createUser(
  * Update an existing user
  */
 export async function updateUser(
-  data: UserFormData & { id: number }
+  data: UserFormData & { id: number },
+  proofToken?: string
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.put('/api/user/', data)
+  const res = await api.put('/api/user/', data, withProof(proofToken))
   return res.data
 }
 
 /**
  * Delete a single user (hard delete)
  */
-export async function deleteUser(id: number): Promise<ApiResponse> {
-  const res = await api.delete(`/api/user/${id}/`)
+export async function deleteUser(
+  id: number,
+  proofToken?: string
+): Promise<ApiResponse> {
+  const res = await api.delete(`/api/user/${id}/`, withProof(proofToken))
   return res.data
 }
 
@@ -131,22 +149,32 @@ export async function deleteUser(id: number): Promise<ApiResponse> {
  */
 export async function manageUser(
   id: number,
-  action: ManageUserAction
+  action: ManageUserAction,
+  proofToken?: string
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.post('/api/user/manage', { id, action })
+  const res = await api.post(
+    '/api/user/manage',
+    { id, action },
+    withProof(proofToken)
+  )
   return res.data
 }
 
 // eflow: 把任意用户切到指定 role（含 5=客服）。后端 set_role 用 value 字段携带目标角色。
 export async function setUserRole(
   id: number,
-  role: number
+  role: number,
+  proofToken?: string
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.post('/api/user/manage', {
-    id,
-    action: 'set_role',
-    value: role,
-  })
+  const res = await api.post(
+    '/api/user/manage',
+    {
+      id,
+      action: 'set_role',
+      value: role,
+    },
+    withProof(proofToken)
+  )
   return res.data
 }
 
@@ -156,23 +184,36 @@ export async function setUserRole(
 export async function adjustUserQuota(
   payload: ManageUserQuotaPayload
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.post('/api/user/manage', payload)
+  const res = await api.post(
+    '/api/user/manage',
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
 /**
  * Reset user's Passkey registration
  */
-export async function resetUserPasskey(id: number): Promise<ApiResponse> {
-  const res = await api.delete(`/api/user/${id}/reset_passkey`)
+export async function resetUserPasskey(
+  id: number,
+  proofToken?: string
+): Promise<ApiResponse> {
+  const res = await api.delete(
+    `/api/user/${id}/reset_passkey`,
+    withProof(proofToken)
+  )
   return res.data
 }
 
 /**
  * Reset user's Two-Factor Authentication setup
  */
-export async function resetUserTwoFA(id: number): Promise<ApiResponse> {
-  const res = await api.delete(`/api/user/${id}/2fa`)
+export async function resetUserTwoFA(
+  id: number,
+  proofToken?: string
+): Promise<ApiResponse> {
+  const res = await api.delete(`/api/user/${id}/2fa`, withProof(proofToken))
   return res.data
 }
 
@@ -200,20 +241,16 @@ export async function getUserDistinctGroups(): Promise<ApiResponse<string[]>> {
 // Admin Binding Management APIs
 // ============================================================================
 
-export interface OAuthBinding {
-  provider_id: string
-  provider_name: string
-  user_id?: number
-  external_id?: string
-}
-
 /**
  * Get user's custom OAuth bindings (admin)
  */
 export async function getUserOAuthBindings(
   userId: number
-): Promise<ApiResponse<OAuthBinding[]>> {
-  const res = await api.get(`/api/user/${userId}/oauth/bindings`)
+): Promise<ApiResponse<CustomOAuthBinding[]>> {
+  const res = await api.get(
+    `/api/user/${userId}/oauth/bindings`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -222,9 +259,13 @@ export async function getUserOAuthBindings(
  */
 export async function adminClearUserBinding(
   userId: number,
-  bindingType: string
+  bindingType: BuiltinBindingType,
+  proofToken?: string
 ): Promise<ApiResponse> {
-  const res = await api.delete(`/api/user/${userId}/bindings/${bindingType}`)
+  const res = await api.delete(
+    `/api/user/${userId}/bindings/${bindingType}`,
+    withProof(proofToken)
+  )
   return res.data
 }
 
@@ -233,10 +274,12 @@ export async function adminClearUserBinding(
  */
 export async function adminUnbindCustomOAuth(
   userId: number,
-  providerId: string
+  providerId: number,
+  proofToken?: string
 ): Promise<ApiResponse> {
   const res = await api.delete(
-    `/api/user/${userId}/oauth/bindings/${providerId}`
+    `/api/user/${userId}/oauth/bindings/${providerId}`,
+    withProof(proofToken)
   )
   return res.data
 }

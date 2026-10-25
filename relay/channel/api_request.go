@@ -1,7 +1,6 @@
 package channel
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,36 +11,40 @@ import (
 	"sync"
 	"time"
 
-	common2 "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	common2 "eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
-// applyUpstreamContentLength populates req.ContentLength when the upstream
-// body is wrapped in a BodyStorage (see relay/common/outbound_body.go).
-//
-// net/http.NewRequest only auto-detects ContentLength for *bytes.Reader,
-// *bytes.Buffer and *strings.Reader. When the body is a type-erased io.Reader
-// (which is the case for ReaderOnly(BodyStorage)), the Content-Length header
-// would otherwise be omitted, forcing chunked transfer encoding and breaking
-// some upstreams that require an explicit Content-Length.
-func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
-	if info == nil {
+// ApplyUpstreamBodyMetadata restores the request metadata that net/http cannot
+// infer after a replayable body has been type-erased behind io.Reader. In
+// particular, GetBody is required for transparent HTTP/2 retries after a
+// REFUSED_STREAM or connection-level reset.
+func ApplyUpstreamBodyMetadata(req *http.Request, body io.Reader) {
+	replayable, ok := body.(common2.ReplayableBody)
+	if !ok {
 		return
 	}
-	if info.UpstreamRequestBodySize > 0 && req.ContentLength <= 0 {
-		req.ContentLength = info.UpstreamRequestBodySize
+
+	// A BodyStorage also implements io.Closer. Hide that closer from the
+	// transport so it cannot release shared storage before GetBody is called.
+	if _, rawStorage := body.(common2.BodyStorage); rawStorage {
+		req.Body = io.NopCloser(body)
+	}
+
+	req.ContentLength = replayable.Size()
+	if req.GetBody == nil {
+		req.GetBody = replayable.NewReader
 	}
 }
 
@@ -425,7 +428,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
+	ApplyUpstreamBodyMetadata(req, requestBody)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -456,7 +459,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
+	ApplyUpstreamBodyMetadata(req, requestBody)
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	headers := req.Header
@@ -520,111 +523,42 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	return targetConn, nil
 }
 
-func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.CancelFunc, <-chan struct{}) {
-	pingerCtx, stopPinger := context.WithCancel(context.Background())
-	done := make(chan struct{})
-
-	gopool.Go(func() {
-		defer close(done)
-		defer func() {
-			// 增加panic恢复处理
-			if r := recover(); r != nil {
-				logger.LogDebug(c, "SSE ping goroutine panic recovered: %v", r)
-			}
-			logger.LogDebug(c, "SSE ping goroutine stopped")
-		}()
-
-		if pingInterval <= 0 {
-			pingInterval = helper.DefaultPingInterval
-		}
-
-		ticker := time.NewTicker(pingInterval)
-		// 确保在任何情况下都清理ticker
-		defer func() {
-			ticker.Stop()
-			logger.LogDebug(c, "SSE ping ticker stopped")
-		}()
-
-		var pingMutex sync.Mutex
-		logger.LogDebug(c, "SSE ping goroutine started")
-
-		// 增加超时控制，防止goroutine长时间运行
-		maxPingDuration := 120 * time.Minute // 最大ping持续时间
-		pingTimeout := time.NewTimer(maxPingDuration)
-		defer pingTimeout.Stop()
-
-		for {
-			select {
-			// 发送 ping 数据
-			case <-ticker.C:
-				if err := sendPingData(c, &pingMutex); err != nil {
-					logger.LogDebug(c, "SSE ping error, stopping goroutine: %s", err.Error())
-					return
-				}
-			// 收到退出信号
-			case <-pingerCtx.Done():
-				return
-			// request 结束
-			case <-c.Request.Context().Done():
-				return
-			// 超时保护，防止goroutine无限运行
-			case <-pingTimeout.C:
-				logger.LogDebug(c, "SSE ping goroutine timeout, stopping")
-				return
-			}
-		}
-	})
-
-	return stopPinger, done
-}
-
-func sendPingData(c *gin.Context, mutex *sync.Mutex) error {
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	// Bound the write so a slow client cannot block this goroutine forever;
-	// doRequest's defer waits for the pinger to exit before returning.
-	helper.ExtendWriteDeadline(c)
-	err := helper.PingData(c)
-	if err != nil {
-		logger.LogError(c, "SSE ping error: "+err.Error())
-		return err
-	}
-
-	logger.LogDebug(c, "SSE ping data sent")
-	return nil
-}
-
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	return doRequest(c, req, info)
 }
+
+// keepUpstreamRedirectResponse stops net/http from following redirects while
+// returning the upstream 3xx response to the relay without an extra error.
+func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
+	// Clients are cached and shared across channels, so override redirect
+	// behavior on a shallow copy instead of mutating the cached client. This
+	// still reuses its transport and connection pools, including HTTP/2's
+	// transparent stream retries. Following a cross-host redirect would carry
+	// custom auth headers (x-api-key, x-goog-api-key, api-key, ...) and the
+	// request body to the new host.
+	relayClient := *client
+	relayClient.CheckRedirect = keepUpstreamRedirectResponse
 
-	var stopPinger context.CancelFunc
-	var pingerDone <-chan struct{}
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)
-		// 处理流式请求的 ping 保活
+		// 处理流式请求的 ping 保活。请求级保活（Claude）已在运行时复用它，
+		// 这里的停止不会提前结束外层保活。
 		generalSettings := operation_setting.GetGeneralSetting()
 		if generalSettings.PingIntervalEnabled && !info.DisablePing {
 			pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
-			stopPinger, pingerDone = startPingKeepAlive(c, pingInterval)
-			// 使用defer确保在任何情况下都能停止ping goroutine
-			defer func() {
-				if stopPinger != nil {
-					stopPinger()
-					<-pingerDone
-					logger.LogDebug(c, "SSE ping goroutine stopped by defer")
-				}
-			}()
+			defer helper.StartStreamKeepAlive(c, pingInterval)()
 		}
 	}
 
-	resp, err := client.Do(req)
+	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
@@ -639,30 +573,5 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	_ = req.Body.Close()
 	_ = c.Request.Body.Close()
-	return resp, nil
-}
-
-func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
-	fullRequestURL, err := a.BuildRequestURL(info)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("new request failed: %w", err)
-	}
-	applyUpstreamContentLength(req, info)
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(requestBody), nil
-	}
-
-	err = a.BuildRequestHeader(c, req, info)
-	if err != nil {
-		return nil, fmt.Errorf("setup request header failed: %w", err)
-	}
-	resp, err := doRequest(c, req, info)
-	if err != nil {
-		return nil, fmt.Errorf("do request failed: %w", err)
-	}
 	return resp, nil
 }

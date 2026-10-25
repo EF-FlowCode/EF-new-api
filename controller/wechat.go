@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/system_setting"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -24,15 +27,15 @@ type wechatLoginResponse struct {
 	Data    string `json:"data"`
 }
 
-func getWeChatIdByCode(code string) (string, error) {
+func getWeChatIdByCode(code string, settings system_setting.LegacyOAuthSettings) (string, error) {
 	if code == "" {
 		return "", errors.New("无效的参数")
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/wechat/user?code=%s", common.WeChatServerAddress, url.QueryEscape(code)), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/wechat/user?code=%s", settings.WeChatServerAddress, url.QueryEscape(code)), nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", common.WeChatServerToken)
+	req.Header.Set("Authorization", settings.WeChatServerToken)
 	client := http.Client{
 		Timeout: 5 * time.Second,
 	}
@@ -56,7 +59,10 @@ func getWeChatIdByCode(code string) (string, error) {
 }
 
 func WeChatAuth(c *gin.Context) {
-	if !common.WeChatAuthEnabled {
+	settings := system_setting.GetLegacyOAuthSettings()
+	authSettings := common.GetAuthSettings()
+	userQuotaSettings := common.GetUserQuotaSettings()
+	if !settings.WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "管理员未开启通过微信登录以及注册",
 			"success": false,
@@ -65,7 +71,7 @@ func WeChatAuth(c *gin.Context) {
 	}
 	code := c.Query("code")
 	invitationCodeValue := strings.TrimSpace(c.Query("invitation_code"))
-	wechatId, err := getWeChatIdByCode(code)
+	wechatId, err := getWeChatIdByCode(code, settings)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"message": err.Error(),
@@ -93,7 +99,7 @@ func WeChatAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
+		if authSettings.RegistrationEnabled {
 			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
 			user.DisplayName = "WeChat User"
 			user.Role = common.RoleCommonUser
@@ -101,7 +107,7 @@ func WeChatAuth(c *gin.Context) {
 			inviterId := 0
 			err := model.DB.Transaction(func(tx *gorm.DB) error {
 				var invitationCode *model.InvitationCode
-				if shouldValidateOAuthInvitationCode(invitationCodeValue) {
+				if shouldValidateOAuthInvitationCode(invitationCodeValue, authSettings) {
 					invitationCodeResult, err := model.GetUsableInvitationCodeWithTx(tx, invitationCodeValue)
 					if err != nil {
 						return err
@@ -112,7 +118,7 @@ func WeChatAuth(c *gin.Context) {
 					}
 				}
 				user.InviterId = inviterId
-				if err := user.InsertWithTx(tx, inviterId); err != nil {
+				if err := user.InsertWithTx(tx, inviterId, userQuotaSettings); err != nil {
 					return err
 				}
 				if invitationCode != nil {
@@ -132,7 +138,7 @@ func WeChatAuth(c *gin.Context) {
 				})
 				return
 			}
-			user.FinalizeOAuthUserCreation(inviterId)
+			user.FinalizeOAuthUserCreation(inviterId, userQuotaSettings)
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -149,7 +155,7 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
-	setupLogin(&user, c)
+	completeLogin(&user, c, loginMethodWeChat)
 }
 
 type wechatBindRequest struct {
@@ -157,7 +163,8 @@ type wechatBindRequest struct {
 }
 
 func WeChatBind(c *gin.Context) {
-	if !common.WeChatAuthEnabled {
+	settings := system_setting.GetLegacyOAuthSettings()
+	if !settings.WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "管理员未开启通过微信登录以及注册",
 			"success": false,
@@ -173,7 +180,15 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	code := req.Code
-	wechatId, err := getWeChatIdByCode(code)
+	proofContext, err := common.Marshal(service.AccountBindingContext{Provider: "wechat", Code: code})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: proofContext}) == nil {
+		return
+	}
+	wechatId, err := getWeChatIdByCode(code, settings)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"message": err.Error(),
@@ -190,20 +205,17 @@ func WeChatBind(c *gin.Context) {
 	}
 	session := sessions.Default(c)
 	id := session.Get("id")
-	user := model.User{
-		Id: id.(int),
+	userId, ok := id.(int)
+	if !ok || userId == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未登录"})
+		return
 	}
-	err = user.FillUserById()
-	if err != nil {
+	// 只更新绑定列，避免完整用户快照覆盖并发的状态变更。
+	if err := model.UpdateUserBindColumn(userId, "wechat_id", wechatId); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	user.WeChatId = wechatId
-	err = user.Update(false)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	recordUserSecurityAudit(c, userId, "user.binding_bind", map[string]any{"provider": "wechat"})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

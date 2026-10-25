@@ -7,26 +7,27 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
 )
 
 type AwsClaudeRequest struct {
 	// AnthropicVersion should be "bedrock-2023-05-31"
-	AnthropicVersion string              `json:"anthropic_version"`
-	AnthropicBeta    json.RawMessage     `json:"anthropic_beta,omitempty"`
-	System           any                 `json:"system,omitempty"`
-	Messages         []dto.ClaudeMessage `json:"messages"`
-	MaxTokens        uint                `json:"max_tokens,omitempty"`
-	Temperature      *float64            `json:"temperature,omitempty"`
-	TopP             float64             `json:"top_p,omitempty"`
-	TopK             int                 `json:"top_k,omitempty"`
-	StopSequences    []string            `json:"stop_sequences,omitempty"`
-	Tools            any                 `json:"tools,omitempty"`
-	ToolChoice       any                 `json:"tool_choice,omitempty"`
-	Thinking         *dto.Thinking       `json:"thinking,omitempty"`
-	OutputConfig     json.RawMessage     `json:"output_config,omitempty"`
+	AnthropicVersion  string              `json:"anthropic_version"`
+	AnthropicBeta     json.RawMessage     `json:"anthropic_beta,omitempty"`
+	System            any                 `json:"system,omitempty"`
+	Messages          []dto.ClaudeMessage `json:"messages"`
+	MaxTokens         *uint               `json:"max_tokens,omitempty"`
+	Temperature       *float64            `json:"temperature,omitempty"`
+	TopP              *float64            `json:"top_p,omitempty"`
+	TopK              *int                `json:"top_k,omitempty"`
+	StopSequences     []string            `json:"stop_sequences,omitempty"`
+	Tools             any                 `json:"tools,omitempty"`
+	ToolChoice        any                 `json:"tool_choice,omitempty"`
+	ContextManagement json.RawMessage     `json:"context_management,omitempty"`
+	Thinking          *dto.Thinking       `json:"thinking,omitempty"`
+	OutputConfig      json.RawMessage     `json:"output_config,omitempty"`
 	//Metadata         json.RawMessage     `json:"metadata,omitempty"`
 }
 
@@ -39,17 +40,19 @@ func formatRequest(requestBody io.Reader, requestHeader http.Header) (*AwsClaude
 	awsClaudeRequest.AnthropicVersion = "bedrock-2023-05-31"
 
 	// check header anthropic-beta
-	anthropicBetaValues := requestHeader.Get("anthropic-beta")
-	if len(anthropicBetaValues) > 0 {
-		var tempArray []string
-		tempArray = strings.Split(anthropicBetaValues, ",")
-		if len(tempArray) > 0 {
-			betaJson, err := json.Marshal(tempArray)
-			if err != nil {
-				return nil, err
-			}
-			awsClaudeRequest.AnthropicBeta = betaJson
+	// eflow: 合并多行 anthropic-beta 并去掉空白项（上游 767a82b87）。
+	var betas []string
+	for beta := range strings.SplitSeq(strings.Join(requestHeader.Values("anthropic-beta"), ","), ",") {
+		if beta = strings.TrimSpace(beta); beta != "" {
+			betas = append(betas, beta)
 		}
+	}
+	if len(betas) > 0 {
+		betaJson, err := common.Marshal(betas)
+		if err != nil {
+			return nil, err
+		}
+		awsClaudeRequest.AnthropicBeta = betaJson
 	}
 	logger.LogJson(context.Background(), "json", awsClaudeRequest)
 	return &awsClaudeRequest, nil
@@ -132,7 +135,7 @@ func parseStopSequences(stop any) []string {
 		}
 	case []string:
 		return v
-	case []interface{}:
+	case []any:
 		var sequences []string
 		for _, item := range v {
 			if str, ok := item.(string); ok && str != "" {

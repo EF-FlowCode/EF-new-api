@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -77,49 +77,22 @@ func UpdateMidjourneyTaskBulk() {
 				}
 				continue
 			}
-			requestUrl := fmt.Sprintf("%s/mj/task/list-by-condition", *midjourneyChannel.BaseURL)
-
-			body, _ := json.Marshal(map[string]any{
-				"ids": taskIds,
-			})
-			req, err := http.NewRequest("POST", requestUrl, bytes.NewBuffer(body))
+			if midjourneyChannel.BaseURL == nil || *midjourneyChannel.BaseURL == "" {
+				logger.LogError(ctx, fmt.Sprintf("midjourney channel #%d has no base URL", channelId))
+				continue
+			}
+			responseItems, err := fetchMidjourneyTasks(midjourneyChannel, taskIds)
 			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Task error: %v", err))
+				logger.LogError(ctx, fmt.Sprintf("Get Mjp Task error: %v", err))
 				continue
 			}
-			// 设置超时时间
-			timeout := time.Second * 15
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			// 使用带有超时的 context 创建新的请求
-			req = req.WithContext(ctx)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("mj-api-secret", midjourneyChannel.Key)
-			resp, err := service.GetHttpClient().Do(req)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
-				continue
-			}
-			if resp.StatusCode != http.StatusOK {
-				logger.LogError(ctx, fmt.Sprintf("Get Task status code: %d", resp.StatusCode))
-				continue
-			}
-			responseBody, err := io.ReadAll(resp.Body)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error: %v", err))
-				continue
-			}
-			var responseItems []dto.MidjourneyDto
-			err = json.Unmarshal(responseBody, &responseItems)
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Get Mjp Task parse body error2: %v, body: %s", err, string(responseBody)))
-				continue
-			}
-			resp.Body.Close()
-			req.Body.Close()
-			cancel()
 
 			for _, responseItem := range responseItems {
 				task := taskM[responseItem.MjId]
+				if task == nil {
+					// The upstream may return ids this node did not ask about.
+					continue
+				}
 
 				useTime := (time.Now().UnixNano() / int64(time.Millisecond)) - task.SubmitTime
 				// 如果时间超过一小时，且进度不是100%，则认为任务失败
@@ -177,22 +150,7 @@ func UpdateMidjourneyTaskBulk() {
 				if err != nil {
 					logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
 				} else if won && shouldReturnQuota {
-					err = model.IncreaseUserQuota(task.UserId, task.Quota, false)
-					if err != nil {
-						logger.LogError(ctx, "fail to increase user quota: "+err.Error())
-					}
-					model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-						UserId:    task.UserId,
-						LogType:   model.LogTypeRefund,
-						Content:   "",
-						ChannelId: task.ChannelId,
-						ModelName: service.CovertMjpActionToModelName(task.Action),
-						Quota:     task.Quota,
-						Other: map[string]interface{}{
-							"task_id": task.MjId,
-							"reason":  "构图失败",
-						},
-					})
+					service.RefundMidjourneyQuota(ctx, task, "构图失败")
 				}
 			}
 		}
@@ -255,6 +213,7 @@ func checkMjTaskNeedUpdate(oldTask *model.Midjourney, newTask dto.MidjourneyDto)
 }
 
 func GetAllMidjourney(c *gin.Context) {
+	midjourneySettings := setting.GetMidjourneySettings()
 	pageInfo := common.GetPageQuery(c)
 
 	// 解析其他查询参数
@@ -268,9 +227,9 @@ func GetAllMidjourney(c *gin.Context) {
 	items := model.GetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.CountAllTasks(queryParams)
 
-	if setting.MjForwardUrlEnabled {
+	if midjourneySettings.ForwardURLEnabled {
 		for i, midjourney := range items {
-			midjourney.ImageUrl = system_setting.ServerAddress + "/mj/image/" + midjourney.MjId
+			midjourney.ImageUrl = system_setting.GetServerAddress() + "/mj/image/" + midjourney.MjId
 			items[i] = midjourney
 		}
 	}
@@ -280,6 +239,7 @@ func GetAllMidjourney(c *gin.Context) {
 }
 
 func GetUserMidjourney(c *gin.Context) {
+	midjourneySettings := setting.GetMidjourneySettings()
 	pageInfo := common.GetPageQuery(c)
 
 	userId := c.GetInt("id")
@@ -293,13 +253,48 @@ func GetUserMidjourney(c *gin.Context) {
 	items := model.GetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
 	total := model.CountAllUserTask(userId, queryParams)
 
-	if setting.MjForwardUrlEnabled {
+	if midjourneySettings.ForwardURLEnabled {
 		for i, midjourney := range items {
-			midjourney.ImageUrl = system_setting.ServerAddress + "/mj/image/" + midjourney.MjId
+			midjourney.ImageUrl = system_setting.GetServerAddress() + "/mj/image/" + midjourney.MjId
 			items[i] = midjourney
 		}
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(items)
 	common.ApiSuccess(c, pageInfo)
+}
+
+// fetchMidjourneyTasks closes the response and cancels its context on every
+// path; the inline version leaked both on non-200 and read errors.
+func fetchMidjourneyTasks(channel *model.Channel, taskIds []string) ([]dto.MidjourneyDto, error) {
+	body, err := json.Marshal(map[string]any{"ids": taskIds})
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/mj/task/list-by-condition", *channel.BaseURL), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("mj-api-secret", channel.Key)
+	// net/http keeps mj-api-secret on cross-host redirects; do not follow them.
+	resp, err := service.NewRedirectlessHTTPClient(service.GetHttpClient()).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status code %d", resp.StatusCode)
+	}
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var responseItems []dto.MidjourneyDto
+	if err = json.Unmarshal(responseBody, &responseItems); err != nil {
+		return nil, fmt.Errorf("parse body: %w, body: %s", err, string(responseBody))
+	}
+	return responseItems, nil
 }

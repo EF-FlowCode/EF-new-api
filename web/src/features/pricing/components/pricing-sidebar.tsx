@@ -17,8 +17,12 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
-import { parseTags } from '../lib/filters'
-import type { PricingModel, PricingVendor } from '../types'
+import { countModelsByEndpointType, parseTags } from '../lib/filters'
+import type {
+  PricingEndpointOverride,
+  PricingModel,
+  PricingVendor,
+} from '../types'
 
 type FilterOption = {
   value: string
@@ -26,6 +30,7 @@ type FilterOption = {
   count?: number
   suffix?: string
   icon?: ReactNode
+  title?: string
 }
 
 type FilterSectionProps = {
@@ -33,6 +38,7 @@ type FilterSectionProps = {
   value: string
   options: FilterOption[]
   onChange: (value: string) => void
+  defaultOpen?: boolean
 }
 
 export interface PricingSidebarProps {
@@ -44,16 +50,15 @@ export interface PricingSidebarProps {
   onQuotaTypeChange: (value: string) => void
   onEndpointTypeChange: (value: string) => void
   onVendorChange: (value: string) => void
-  onGroupChange: (value: string) => void
   onTagChange: (value: string) => void
   vendors: PricingVendor[]
-  groups: string[]
-  groupRatios?: Record<string, number>
   tags: string[]
   models: PricingModel[]
+  groupEndpointOverrides?: Record<string, PricingEndpointOverride>
   hasActiveFilters: boolean
   onClearFilters: () => void
   className?: string
+  showHeader?: boolean
 }
 
 function countBy(
@@ -61,14 +66,6 @@ function countBy(
   predicate: (model: PricingModel) => boolean
 ): number {
   return models.reduce((count, model) => count + (predicate(model) ? 1 : 0), 0)
-}
-
-function formatGroupRatio(ratio: number | undefined): string | undefined {
-  if (ratio == null) return undefined
-  const formatted = Number.isInteger(ratio)
-    ? ratio.toString()
-    : ratio.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
-  return `x${formatted}`
 }
 
 function FilterChip(props: {
@@ -86,34 +83,53 @@ function FilterChip(props: {
           ? 'border-foreground/30 bg-foreground/5 text-foreground shadow-sm'
           : 'border-border/70 bg-background text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground'
       )}
-      title={props.option.label}
+      title={props.option.title || props.option.label}
     >
-      {props.option.icon && <span className='shrink-0'>{props.option.icon}</span>}
+      {props.option.icon && (
+        <span className='shrink-0'>{props.option.icon}</span>
+      )}
       <span className='truncate'>{props.option.label}</span>
-      {(props.option.suffix || props.option.count != null) && (
-        <span
-          className={cn(
-            'rounded-full px-1.5 py-0.5 text-[10px]',
-            props.active
-              ? 'bg-background text-foreground'
-              : 'bg-muted text-muted-foreground'
-          )}
-        >
-          {props.option.suffix ?? props.option.count}
-        </span>
+      {props.option.count != null && (
+        <Badge variant='secondary' className='px-1.5 py-0 text-[10px]'>
+          {props.option.count}
+        </Badge>
+      )}
+      {props.option.suffix && (
+        <Badge variant='outline' className='px-1.5 py-0 font-mono text-[10px]'>
+          {props.option.suffix}
+        </Badge>
       )}
     </button>
   )
 }
 
 function FilterSection(props: FilterSectionProps) {
+  const selectedOption = props.options.find(
+    (option) => option.value === props.value
+  )
+
   return (
-    <Collapsible defaultOpen className='border-border/70 border-b pb-3 last:border-b-0'>
+    <Collapsible
+      defaultOpen={props.defaultOpen || props.value !== FILTER_ALL}
+      className='border-border/70 border-b pb-3 last:border-b-0'
+    >
       <CollapsibleTrigger className='group flex w-full items-center justify-between py-2.5 text-left'>
-        <span className='text-foreground text-sm font-semibold'>
-          {props.title}
+        <span className='flex min-w-0 items-center gap-2'>
+          <span className='text-foreground text-sm font-semibold'>
+            {props.title}
+          </span>
+          {props.value !== FILTER_ALL && selectedOption && (
+            <Badge
+              variant='secondary'
+              className='max-w-40 truncate'
+              title={selectedOption.title || selectedOption.label}
+            >
+              {selectedOption.label}
+              {selectedOption.suffix && ` · ${selectedOption.suffix}`}
+            </Badge>
+          )}
         </span>
-        <ChevronDown className='text-muted-foreground size-4 transition-transform group-data-[state=open]:rotate-180' />
+        <ChevronDown className='text-muted-foreground size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180' />
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className='flex flex-wrap gap-1.5'>
@@ -153,18 +169,6 @@ export function PricingSidebar(props: PricingSidebarProps) {
         icon: vendor.icon ? getLobeIcon(vendor.icon, 14) : undefined,
       }))
       .filter((vendor) => vendor.count > 0),
-  ]
-
-  const groupOptions: FilterOption[] = [
-    {
-      value: FILTER_ALL,
-      label: t('All Groups'),
-    },
-    ...props.groups.map((group) => ({
-      value: group,
-      label: group,
-      suffix: formatGroupRatio(props.groupRatios?.[group]),
-    })),
   ]
 
   const quotaOptions: FilterOption[] = [
@@ -213,57 +217,62 @@ export function PricingSidebar(props: PricingSidebarProps) {
       .map(([value, label]) => ({
         value,
         label,
-        count: countBy(props.models, (model) =>
-          model.supported_endpoint_types?.includes(value) ?? false
+        count: countModelsByEndpointType(
+          props.models,
+          value,
+          props.groupFilter,
+          props.groupEndpointOverrides
         ),
-      })),
+      }))
+      .filter(
+        (endpoint) =>
+          endpoint.count > 0 || endpoint.value === props.endpointTypeFilter
+      ),
   ]
 
   return (
-    <aside
-      className={cn(
-        'rounded-xl border p-3',
-        props.className
-      )}
-    >
-      <div className='mb-2.5 flex items-center justify-between gap-2'>
-        <div>
-          <h2 className='text-foreground text-sm font-bold'>{t('Filter')}</h2>
-          <p className='text-muted-foreground mt-1 text-xs'>
-            {t('Refine models by provider, group, type, and tags.')}
-          </p>
+    <aside className={cn('rounded-lg border p-3', props.className)}>
+      {(props.showHeader !== false || props.hasActiveFilters) && (
+        <div className='mb-2.5 flex items-center justify-between gap-2'>
+          {props.showHeader !== false ? (
+            <div>
+              <h2 className='text-foreground text-sm font-bold'>
+                {t('Filter')}
+              </h2>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                {t('Filter models by provider, type, endpoint, and tags.')}
+              </p>
+            </div>
+          ) : (
+            <Badge variant='secondary'>{t('Filters active')}</Badge>
+          )}
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            onClick={props.onClearFilters}
+            disabled={!props.hasActiveFilters}
+            className='h-7 px-2 text-xs'
+          >
+            <RotateCcw data-icon='inline-start' />
+            {t('Reset')}
+          </Button>
         </div>
-        <Button
-          type='button'
-          variant='ghost'
-          size='sm'
-          onClick={props.onClearFilters}
-          disabled={!props.hasActiveFilters}
-          className='h-7 gap-1.5 px-2 text-xs'
-        >
-          <RotateCcw className='size-3.5' />
-          {t('Reset')}
-        </Button>
-      </div>
+      )}
 
-      {props.hasActiveFilters && (
+      {props.showHeader !== false && props.hasActiveFilters && (
         <Badge variant='secondary' className='mb-3'>
           {t('Filters active')}
         </Badge>
       )}
 
-      <div className='space-y-1'>
-        <FilterSection
-          title={t('Groups')}
-          value={props.groupFilter}
-          options={groupOptions}
-          onChange={props.onGroupChange}
-        />
+      <div className='flex flex-col gap-1'>
         <FilterSection
           title={t('All Vendors')}
           value={props.vendorFilter}
           options={vendorOptions}
           onChange={props.onVendorChange}
+          defaultOpen
         />
         <FilterSection
           title={t('Model Tags')}

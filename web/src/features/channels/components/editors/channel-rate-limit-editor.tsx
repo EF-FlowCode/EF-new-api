@@ -1,18 +1,18 @@
 import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Clock } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
+import { useRedisStatus } from '../../hooks/use-redis-status'
 import {
   DEFAULT_CHANNEL_RATE_LIMIT,
   normalizeChannelRateLimit,
   type ChannelRateLimit,
 } from '../../lib/channel-extra-rules'
-import { useRedisStatus } from '../../hooks/use-redis-status'
 
 type Props = {
   value: ChannelRateLimit | undefined
@@ -62,7 +62,9 @@ export function ChannelRateLimitEditor({ value, onChange }: Props) {
             <Clock className='h-3.5 w-3.5' />
           </span>
           <div>
-            <div className='text-sm font-semibold'>{t('Channel rate limit')}</div>
+            <div className='text-sm font-semibold'>
+              {t('Channel rate limit')}
+            </div>
             <p className='text-muted-foreground text-xs'>
               {t(
                 "Limit this channel's requests per minute (RPM) and concurrency to avoid upstream throttling; when saturated, skip to other channels in the same group, queue serially, or reject directly"
@@ -87,7 +89,9 @@ export function ChannelRateLimitEditor({ value, onChange }: Props) {
         </Alert>
       )}
 
-      <div className={cn('grid gap-3 sm:grid-cols-2', disabled && 'opacity-60')}>
+      <div
+        className={cn('grid gap-3 sm:grid-cols-2', disabled && 'opacity-60')}
+      >
         <div className='space-y-1.5'>
           <Label className='text-muted-foreground text-xs font-normal'>
             {t('Requests per minute (RPM, 0 = unlimited)')}
@@ -99,7 +103,9 @@ export function ChannelRateLimitEditor({ value, onChange }: Props) {
             disabled={disabled}
             onChange={(e) => {
               const n = Number(e.target.value)
-              update({ rpm: Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0 })
+              update({
+                rpm: Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0,
+              })
             }}
           />
         </div>
@@ -115,7 +121,9 @@ export function ChannelRateLimitEditor({ value, onChange }: Props) {
             onChange={(e) => {
               const n = Number(e.target.value)
               update({
-                concurrency: Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0,
+                concurrency: Number.isFinite(n)
+                  ? Math.max(0, Math.floor(n))
+                  : 0,
               })
             }}
           />
@@ -164,10 +172,7 @@ export function ChannelRateLimitEditor({ value, onChange }: Props) {
 
       {v.on_limit === 'queue' && (
         <div
-          className={cn(
-            'grid gap-3 sm:grid-cols-2',
-            disabled && 'opacity-60'
-          )}
+          className={cn('grid gap-3 sm:grid-cols-2', disabled && 'opacity-60')}
         >
           <div className='space-y-1.5'>
             <Label className='text-muted-foreground text-xs font-normal'>

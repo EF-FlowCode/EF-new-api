@@ -9,7 +9,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { resetModelRatios, updateSystemOptionsBulk } from '../api'
 import { SettingsSection } from '../components/settings-section'
-import { ModelRatioForm } from './model-ratio-form'
+import { pricingModelFromSearch } from './lib/pricing-settings-link'
+import { ModelRatioForm, type OpenModelRequest } from './model-ratio-form'
+import { TaskPricingSettings } from './task-pricing-overview'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
 import {
@@ -73,6 +75,15 @@ const modelSchema = z.object({
       })
     }
   }),
+  BatchInputRatio: z.string().superRefine((value, ctx) => {
+    const result = validateJsonString(value)
+    if (!result.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: result.message || 'Invalid JSON',
+      })
+    }
+  }),
   AudioRatio: z.string().superRefine((value, ctx) => {
     const result = validateJsonString(value)
     if (!result.valid) {
@@ -126,6 +137,19 @@ export function RatioSettingsCard({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [tab, setTab] = useState('models')
+  // Set by the task price overview, or by ?model= from a "price not
+  // configured" link: open this model's price dialog.
+  const [openModelRequest, setOpenModelRequest] =
+    useState<OpenModelRequest | null>(() => {
+      const model = pricingModelFromSearch(window.location.search)
+      return model ? { model, nonce: Date.now() } : null
+    })
+  const clearOpenModelRequest = useCallback(() => setOpenModelRequest(null), [])
+  const editModelPrice = useCallback((model: string) => {
+    setOpenModelRequest({ model, nonce: Date.now() })
+    setTab('models')
+  }, [])
 
   const resetMutation = useMutation({
     mutationFn: resetModelRatios,
@@ -163,6 +187,7 @@ export function RatioSettingsCard({
     CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
     CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
     ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
+    BatchInputRatio: normalizeJsonString(modelDefaults.BatchInputRatio),
     AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
     AudioCompletionRatio: normalizeJsonString(
       modelDefaults.AudioCompletionRatio
@@ -183,6 +208,7 @@ export function RatioSettingsCard({
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
       CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
       ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
+      BatchInputRatio: formatJsonForTextarea(modelDefaults.BatchInputRatio),
       AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
       AudioCompletionRatio: formatJsonForTextarea(
         modelDefaults.AudioCompletionRatio
@@ -200,6 +226,7 @@ export function RatioSettingsCard({
       CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
       CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
       ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
+      BatchInputRatio: normalizeJsonString(modelDefaults.BatchInputRatio),
       AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
       AudioCompletionRatio: normalizeJsonString(
         modelDefaults.AudioCompletionRatio
@@ -217,6 +244,7 @@ export function RatioSettingsCard({
       CreateCacheRatio: formatJsonForTextarea(modelDefaults.CreateCacheRatio),
       CompletionRatio: formatJsonForTextarea(modelDefaults.CompletionRatio),
       ImageRatio: formatJsonForTextarea(modelDefaults.ImageRatio),
+      BatchInputRatio: formatJsonForTextarea(modelDefaults.BatchInputRatio),
       AudioRatio: formatJsonForTextarea(modelDefaults.AudioRatio),
       AudioCompletionRatio: formatJsonForTextarea(
         modelDefaults.AudioCompletionRatio
@@ -235,6 +263,7 @@ export function RatioSettingsCard({
         CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
         CompletionRatio: normalizeJsonString(values.CompletionRatio),
         ImageRatio: normalizeJsonString(values.ImageRatio),
+        BatchInputRatio: normalizeJsonString(values.BatchInputRatio),
         AudioRatio: normalizeJsonString(values.AudioRatio),
         AudioCompletionRatio: normalizeJsonString(values.AudioCompletionRatio),
         ExposeRatioEnabled: values.ExposeRatioEnabled,
@@ -281,9 +310,19 @@ export function RatioSettingsCard({
         'Configure model, caching, and group ratios used for billing'
       )}
     >
-      <Tabs defaultValue='models' className='space-y-6'>
-        <TabsList className='grid w-full grid-cols-4'>
+      <Tabs
+        value={tab}
+        onValueChange={(value) => {
+          setTab(value)
+          if (value !== 'models') setOpenModelRequest(null)
+        }}
+        className='space-y-6'
+      >
+        <TabsList className='flex h-auto w-full flex-wrap'>
           <TabsTrigger value='models'>{t('Model ratios')}</TabsTrigger>
+          <TabsTrigger value='task-prices'>
+            {t('Plugin task prices')}
+          </TabsTrigger>
           <TabsTrigger value='unset-models'>
             {t('Unset price models')}
           </TabsTrigger>
@@ -300,6 +339,8 @@ export function RatioSettingsCard({
             onReset={handleResetRatios}
             isSaving={bulkUpdate.isPending}
             isResetting={resetMutation.isPending}
+            openModelRequest={openModelRequest}
+            onOpenModelRequestHandled={clearOpenModelRequest}
           />
         </TabsContent>
 
@@ -314,6 +355,9 @@ export function RatioSettingsCard({
           />
         </TabsContent>
 
+        <TabsContent value='task-prices'>
+          <TaskPricingSettings onEditModel={editModelPrice} />
+        </TabsContent>
         <TabsContent value='tool-prices'>
           <ToolPriceSettings defaultValue={toolPricesDefault} />
         </TabsContent>
@@ -327,6 +371,7 @@ export function RatioSettingsCard({
               CacheRatio: modelDefaults.CacheRatio,
               CreateCacheRatio: modelDefaults.CreateCacheRatio,
               ImageRatio: modelDefaults.ImageRatio,
+              BatchInputRatio: modelDefaults.BatchInputRatio,
               AudioRatio: modelDefaults.AudioRatio,
               AudioCompletionRatio: modelDefaults.AudioCompletionRatio,
               'billing_setting.billing_mode': modelDefaults.BillingMode,

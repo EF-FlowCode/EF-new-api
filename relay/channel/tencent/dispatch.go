@@ -3,10 +3,10 @@ package tencent
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
 )
 
 const tokenHubBaseURL = "https://tokenhub.tencentmaas.com"
@@ -22,7 +22,7 @@ func (a *DispatchAdaptor) Init(info *relaycommon.RelayInfo) {
 		a.Adaptor = &Adaptor{}
 	} else {
 		a.Adaptor = &openai.Adaptor{}
-		if info.ChannelBaseUrl == "" || info.ChannelBaseUrl == constant.ChannelBaseURLs[constant.ChannelTypeTencent] {
+		if info.ChannelBaseUrl == "" || info.ChannelBaseUrl == constant.GetChannelBaseURL(constant.ChannelTypeTencent) {
 			info.ChannelBaseUrl = tokenHubBaseURL
 		}
 	}

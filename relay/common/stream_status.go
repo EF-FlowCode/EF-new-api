@@ -1,6 +1,8 @@
 package common
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -29,13 +31,17 @@ type StreamErrorEntry struct {
 }
 
 type StreamStatus struct {
-	EndReason  StreamEndReason
-	EndError   error
-	endOnce    sync.Once
+	EndReason StreamEndReason
+	EndError  error
+	endOnce   sync.Once
 
-	mu         sync.Mutex
-	Errors     []StreamErrorEntry
-	ErrorCount int
+	mu             sync.Mutex
+	Errors         []StreamErrorEntry
+	ErrorCount     int
+	responseFailed bool
+	// cancelOnlyFailure reports that responseFailed was set only by a client
+	// cancellation, which ReconcileDeliveredCompletion may still undo.
+	cancelOnlyFailure bool
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -46,10 +52,49 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Keep late failures even if a scanner's EOF/DONE won the first-end race.
+	if err != nil || (reason != StreamEndReasonDone && reason != StreamEndReasonEOF && reason != StreamEndReasonHandlerStop) {
+		cancelled := reason == StreamEndReasonClientGone && errors.Is(err, context.Canceled)
+		s.cancelOnlyFailure = cancelled && (!s.responseFailed || s.cancelOnlyFailure)
+		s.responseFailed = true
+	}
 	s.endOnce.Do(func() {
 		s.EndReason = reason
 		s.EndError = err
 	})
+}
+
+// ResponseFailed is read after stream workers have joined. Soft parsing errors,
+// abnormal termination and late errors all prevent success-limit accounting.
+func (s *StreamStatus) ResponseFailed() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.responseFailed || s.ErrorCount > 0 || !s.IsNormalEnd()
+}
+
+// ReconcileDeliveredCompletion turns a client cancellation into a normal end
+// when the handler had already delivered the protocol's completion. It is only
+// called after every stream goroutine has joined, and leaves any other failure
+// untouched.
+func (s *StreamStatus) ReconcileDeliveredCompletion() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.EndReason != StreamEndReasonClientGone || !errors.Is(s.EndError, context.Canceled) ||
+		s.ErrorCount > 0 || (s.responseFailed && !s.cancelOnlyFailure) {
+		return
+	}
+	s.EndReason = StreamEndReasonDone
+	s.EndError = nil
+	s.responseFailed = false
+	s.cancelOnlyFailure = false
 }
 
 func (s *StreamStatus) RecordError(msg string) {

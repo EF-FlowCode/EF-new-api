@@ -6,16 +6,33 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/pkg/billingexpr"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 )
+
+func TestComposeTieredTextQuotaSaturatesBeforeNarrowing(t *testing.T) {
+	for _, amount := range []string{"9223372036854775807", "18446744073709551616", "-18446744073709551616"} {
+		t.Run(amount, func(t *testing.T) {
+			surcharge := decimal.RequireFromString(amount)
+			want := math.MaxInt32
+			if surcharge.IsNegative() {
+				want = math.MinInt32
+			}
+			summary := textQuotaSummary{ToolCallSurchargeQuota: surcharge}
+			info := &relaycommon.RelayInfo{TieredBillingSnapshot: &billingexpr.BillingSnapshot{GroupRatio: 1}}
+			require.Equal(t, want, composeTieredTextQuota(info, summary, 100, nil))
+			require.Equal(t, want, composeTieredTextQuota(info, summary, 100, &billingexpr.TieredResult{ActualQuotaBeforeGroup: 100}))
+		})
+	}
+}
 
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -147,6 +164,7 @@ func TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage(t 
 
 	require.True(t, summary.IsClaudeUsageSemantic)
 	require.Equal(t, "anthropic", summary.UsageSemantic)
+	require.Equal(t, 1350, summary.QuotaDataTokens)
 	require.Equal(t, 1488, summary.Quota)
 }
 
@@ -206,6 +224,7 @@ func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testi
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 	// 62 + 3544*0.1 + 586*1.25 + 95*5 = 1624.9 => 1624
+	require.Equal(t, 4287, summary.QuotaDataTokens)
 	require.Equal(t, 1624, summary.Quota)
 }
 
@@ -239,6 +258,7 @@ func TestCalculateTextQuotaSummaryBillsOpenAICacheWriteTokens(t *testing.T) {
 		summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 		require.Equal(t, 1470, summary.CacheCreationTokens)
+		require.Equal(t, 1492, summary.QuotaDataTokens)
 		// (1473-0-1470) + 1470*1.25 + 19*2 = 3 + 1837.5 + 38 = 1878.5 => 1879
 		require.Equal(t, 1879, summary.Quota)
 	})
@@ -570,4 +590,53 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 	relayInfo.PriceData.AddOtherRatio("n", 2)
 	summary = calculateTextQuotaSummary(ctx, relayInfo, usage)
 	require.Equal(t, 120000, summary.Quota)
+}
+
+// 按上游 1b63c28dc：Claude 语义下输入、输出都为 0、只有缓存读写的请求仍要计费，
+// 不能因为 prompt+completion 为 0 就按"上游无用量"免单。
+func TestClaudeCacheOnlyUsageRemainsBillable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name      string
+		usage     dto.Usage
+		wantQuota int
+	}{
+		{name: "one-hour cache write", usage: dto.Usage{PromptTokensDetails: dto.InputTokenDetails{CachedCreationTokens: 20000}, ClaudeCacheCreation1hTokens: 20000}, wantQuota: 100000},
+		{name: "five-minute cache write", usage: dto.Usage{PromptTokensDetails: dto.InputTokenDetails{CachedCreationTokens: 100}, ClaudeCacheCreation5mTokens: 100}, wantQuota: 313},
+		{name: "cache read", usage: dto.Usage{PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 100}}, wantQuota: 25},
+		{name: "no usage", usage: dto.Usage{}, wantQuota: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			info := &relaycommon.RelayInfo{
+				RelayFormat:     types.RelayFormatClaude,
+				OriginModelName: "claude-opus-5-5",
+				PriceData: types.PriceData{
+					ModelRatio: 2.5, CompletionRatio: 5, CacheRatio: 0.1,
+					CacheCreationRatio: 1.25, CacheCreation5mRatio: 1.25, CacheCreation1hRatio: 2,
+					GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+				},
+			}
+			usage := tc.usage
+			usage.UsageSemantic = "anthropic"
+			summary := calculateTextQuotaSummary(ctx, info, &usage)
+			require.Zero(t, summary.PromptTokens)
+			require.Zero(t, summary.CompletionTokens)
+			require.Equal(t, tc.wantQuota, summary.Quota)
+			require.Equal(t, tc.wantQuota > 0, summary.hasBillableUsage())
+			wantAnomaly := constant.BillingAnomalyNone
+			if tc.wantQuota == 0 {
+				wantAnomaly = constant.BillingAnomalyNoUpstreamUsage
+			}
+			require.Equal(t, wantAnomaly, classifyBillingAnomaly(ctx, info, &usage, summary.billableTokens()))
+		})
+	}
+}
+
+// OpenAI 语义的 prompt_tokens 已含缓存，缓存 token 不再单独算作可计费用量。
+func TestOpenAISemanticCacheTokensDoNotMakeZeroUsageBillable(t *testing.T) {
+	summary := textQuotaSummary{CacheTokens: 100, CacheCreationTokens: 50}
+	require.False(t, summary.hasBillableUsage())
+	summary.IsClaudeUsageSemantic = true
+	require.True(t, summary.hasBillableUsage())
 }

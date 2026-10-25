@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Copy, Link2, Plus, RefreshCw, Settings2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getRequestErrorMessage } from '@/lib/api'
 import { formatLocalCurrencyAmount } from '@/lib/currency'
 import { useIsStaff } from '@/hooks/use-admin'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
@@ -69,7 +70,7 @@ export function MyInvitationCodes() {
   const [staffMaxUses, setStaffMaxUses] = useState<string>('') // '' = 默认策略
   const [staffValidDays, setStaffValidDays] = useState<string>('') // '' = 默认策略；'0' = 永久
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const [list, q] = await Promise.all([
@@ -79,15 +80,17 @@ export function MyInvitationCodes() {
       setCodes(list)
       setQuota(q)
     } catch (e) {
-      toast.error((e as Error).message)
+      toast.error(
+        getRequestErrorMessage(e, t('Failed to load invitation codes'))
+      )
     } finally {
       setLoading(false)
     }
-  }
+  }, [t])
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [load])
 
   const onGenerate = async () => {
     if (!quota?.can_generate) return
@@ -135,7 +138,7 @@ export function MyInvitationCodes() {
         void copyToClipboard(arr.map((c) => c.code).join('\n'))
       }
     } catch (e) {
-      toast.error((e as Error).message)
+      toast.error(getRequestErrorMessage(e, t('Operation failed')))
     } finally {
       setGenerating(false)
     }

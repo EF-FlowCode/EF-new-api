@@ -193,14 +193,22 @@ export function OllamaModelsDialog({
         ? Array.from(new Set(selected))
         : Array.from(new Set([...existingModels, ...selected]))
 
-    const res = await updateChannel(currentRow.id, { models: next.join(',') })
-    if (res.success) {
-      toast.success(
-        mode === 'replace'
-          ? t('Models updated successfully')
-          : t('Models appended successfully')
+    try {
+      const res = await updateChannel(currentRow.id, { models: next.join(',') })
+      if (res.success) {
+        toast.success(
+          mode === 'replace'
+            ? t('Models updated successfully')
+            : t('Models appended successfully')
+        )
+        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      } else {
+        toast.error(res.message || t('Failed to update models'))
+      }
+    } catch (error: unknown) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to update models')
       )
-      queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     }
   }
 

@@ -1,9 +1,9 @@
 package oaichat
 
 import (
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 // ResponseOpenAI2Gemini 将 OpenAI 响应转换为 Gemini 格式
@@ -64,13 +64,13 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info convmeta
 
 		toolCalls := choice.Message.ParseToolCalls()
 		for _, toolCall := range toolCalls {
-			var args map[string]interface{}
+			var args map[string]any
 			if toolCall.Function.Arguments != "" {
 				if err := kitutil.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-					args = map[string]interface{}{"arguments": toolCall.Function.Arguments}
+					args = map[string]any{"arguments": toolCall.Function.Arguments}
 				}
 			} else {
-				args = make(map[string]interface{})
+				args = make(map[string]any)
 			}
 
 			part := dto.GeminiPart{
@@ -166,13 +166,13 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 		if choice.Delta.ToolCalls != nil {
 			for _, toolCall := range choice.Delta.ToolCalls {
 				// 解析参数
-				var args map[string]interface{}
+				var args map[string]any
 				if toolCall.Function.Arguments != "" {
 					if err := kitutil.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-						args = map[string]interface{}{"arguments": toolCall.Function.Arguments}
+						args = map[string]any{"arguments": toolCall.Function.Arguments}
 					}
 				} else {
-					args = make(map[string]interface{})
+					args = make(map[string]any)
 				}
 
 				part := dto.GeminiPart{

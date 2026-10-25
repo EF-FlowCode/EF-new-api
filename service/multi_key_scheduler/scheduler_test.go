@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 func TestMemoryAcquireRPMExceeded(t *testing.T) {
@@ -13,7 +13,7 @@ func TestMemoryAcquireRPMExceeded(t *testing.T) {
 	q := dto.ModelQuota{RPMMax: 2}
 	ctx := context.Background()
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		dec := b.Acquire(ctx, 99, "fp1", "qwen-plus", q)
 		if !dec.Allowed {
 			t.Fatalf("Acquire #%d should be allowed, got %+v", i, dec)

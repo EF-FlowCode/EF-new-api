@@ -7,8 +7,12 @@ const (
 	ContextKeyPromptTokens    ContextKey = "prompt_tokens"
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
-	ContextKeyOriginalModel    ContextKey = "original_model"
-	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	ContextKeyOriginalModel     ContextKey = "original_model"
+	ContextKeyRequestStartTime  ContextKey = "request_start_time"
+	ContextKeyAuthSettings      ContextKey = "auth_settings"
+	ContextKeyRelayPolicy       ContextKey = "relay_runtime_policy"
+	ContextKeyRelaySucceeded    ContextKey = "relay_succeeded"
+	ContextKeyRelayStreamStatus ContextKey = "relay_stream_status"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"
@@ -58,6 +62,9 @@ const (
 	ContextKeyUserName                    ContextKey = "username"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
+	// eflow: ContextKeyBillingAnomaly 由渠道处理器显式标注哪部分用量是本地估算的
+	// （值为 model.LogBillingAnomaly*）；未标注时结算层按通用规则推断。
+	ContextKeyBillingAnomaly ContextKey = "billing_anomaly"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"
 
@@ -78,4 +85,11 @@ const (
 	// transient rate-limit detour does not displace cache affinity on the
 	// original channel.
 	ContextKeyRateLimitSkipped ContextKey = "rate_limit_skipped"
+
+	// ContextKeyAuditLogged marks that the current request has already recorded
+	// its own audit event, so the auth-chain fallback (finishAdminAudit) skips it.
+	ContextKeyAuditLogged ContextKey = "audit_logged"
+
+	// ContextKeyTokenAuditParams contains only the API token operation's safe metadata.
+	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
 )

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { ShieldCheck, KeyRound, Loader2 } from 'lucide-react'
+import { ShieldCheck, KeyRound, Loader2, LogIn } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,11 +12,19 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { usableMethods } from '../hooks/use-secure-verification'
 import type {
   SecureVerificationState,
   VerificationMethod,
   VerificationMethods,
 } from '../types'
+
+const METHOD_LABELS: Record<VerificationMethod, string> = {
+  '2fa': 'Authenticator code',
+  passkey: 'Passkey',
+  password: 'Password',
+  session: 'Recent sign-in',
+}
 
 interface SecureVerificationDialogProps {
   open: boolean
@@ -40,12 +48,20 @@ export function SecureVerificationDialog({
   onMethodChange,
 }: SecureVerificationDialogProps) {
   const { t } = useTranslation()
-  const availableTabs: VerificationMethod[] = useMemo(() => {
-    const tabs: VerificationMethod[] = []
-    if (methods.has2FA) tabs.push('2fa')
-    if (methods.hasPasskey && methods.passkeySupported) tabs.push('passkey')
-    return tabs
-  }, [methods])
+  const availableTabs: VerificationMethod[] = useMemo(
+    () => usableMethods(methods),
+    [methods]
+  )
+  // Allowed methods that cannot be used right now, with the server's reason.
+  const unavailable = useMemo(
+    () =>
+      methods.options.filter(
+        (option) =>
+          !option.available ||
+          (option.method === 'passkey' && !methods.passkeySupported)
+      ),
+    [methods]
+  )
 
   const activeMethod =
     state.method ?? (availableTabs.length > 0 ? availableTabs[0] : null)
@@ -64,13 +80,17 @@ export function SecureVerificationDialog({
 
   const handleVerify = () => {
     if (!activeMethod) return
-    const payload = activeMethod === '2fa' ? state.code : undefined
+    const payload =
+      activeMethod === '2fa' || activeMethod === 'password'
+        ? state.code
+        : undefined
     onVerify(activeMethod, payload)
   }
 
   const verifyDisabled =
     state.loading ||
-    (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6))
+    (activeMethod === '2fa' && (!state.code.trim() || state.code.length < 6)) ||
+    (activeMethod === 'password' && !state.code)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,9 +116,11 @@ export function SecureVerificationDialog({
                   <ShieldCheck className='text-muted-foreground h-8 w-8' />
                 </div>
                 <p className='text-muted-foreground text-sm'>
-                  {t(
-                    'Enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
-                  )}
+                  {unavailable.length > 0 && unavailable[0].reason
+                    ? t(unavailable[0].reason)
+                    : t(
+                        'Enable Two-factor Authentication or Passkey in your profile to unlock sensitive operations.'
+                      )}
                 </p>
               </div>
             ) : (
@@ -110,15 +132,44 @@ export function SecureVerificationDialog({
                 className='gap-4'
               >
                 <TabsList>
-                  {methods.has2FA && (
-                    <TabsTrigger value='2fa'>
-                      {t('Authenticator code')}
+                  {availableTabs.map((method) => (
+                    <TabsTrigger key={method} value={method}>
+                      {t(METHOD_LABELS[method])}
                     </TabsTrigger>
-                  )}
-                  {methods.hasPasskey && methods.passkeySupported && (
-                    <TabsTrigger value='passkey'>{t('Passkey')}</TabsTrigger>
-                  )}
+                  ))}
                 </TabsList>
+
+                <TabsContent value='session' className='space-y-3'>
+                  <div className='bg-muted/50 flex items-center gap-3 rounded-lg p-4'>
+                    <LogIn className='text-primary h-6 w-6 shrink-0' />
+                    <p className='text-muted-foreground text-left text-sm'>
+                      {t(
+                        'Your account has no password, two-factor authentication or Passkey, so the sign-in you just completed confirms this action.'
+                      )}
+                    </p>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value='password' className='space-y-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t('Enter your current password to continue.')}
+                  </p>
+                  <Input
+                    type='password'
+                    autoComplete='current-password'
+                    value={state.code}
+                    onChange={(event) => onCodeChange(event.target.value)}
+                    placeholder={t('Current password')}
+                    disabled={state.loading}
+                    autoFocus={activeMethod === 'password'}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !verifyDisabled) {
+                        event.preventDefault()
+                        handleVerify()
+                      }
+                    }}
+                  />
+                </TabsContent>
 
                 <TabsContent value='2fa' className='space-y-3'>
                   <p className='text-muted-foreground text-sm'>
@@ -159,13 +210,20 @@ export function SecureVerificationDialog({
                       </div>
                     </div>
                   </div>
-                  {!methods.passkeySupported && (
-                    <p className='text-destructive text-sm'>
-                      {t('This device does not support Passkey verification.')}
-                    </p>
-                  )}
                 </TabsContent>
               </Tabs>
+            )}
+            {availableTabs.length > 0 && unavailable.length > 0 && (
+              <ul className='text-muted-foreground mt-4 space-y-1 text-xs'>
+                {unavailable.map((option) => (
+                  <li key={option.method}>
+                    {t(METHOD_LABELS[option.method])}:{' '}
+                    {option.method === 'passkey' && !methods.passkeySupported
+                      ? t('This device does not support Passkey verification.')
+                      : t(option.reason ?? 'Unavailable')}
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
 

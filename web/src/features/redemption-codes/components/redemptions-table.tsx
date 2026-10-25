@@ -76,6 +76,12 @@ export function RedemptionsTable() {
     columnFilters: [{ columnId: 'status', searchKey: 'status', type: 'array' }],
   })
 
+  const statusFilter =
+    (columnFilters.find((filter) => filter.id === 'status')?.value as
+      | string[]
+      | undefined) ?? []
+  const statusFilterValue = statusFilter[0] ?? ''
+
   // 后端 model.NewRedemptionSortOptions 白名单：id/name/quota/created_time/used_user_id
   const sortBy = sorting[0]?.id
   const sortOrder: 'asc' | 'desc' | undefined = sorting[0]
@@ -91,6 +97,7 @@ export function RedemptionsTable() {
       pagination.pageIndex + 1,
       pagination.pageSize,
       globalFilter,
+      statusFilterValue,
       sortBy,
       sortOrder,
       refreshTrigger,
@@ -100,13 +107,15 @@ export function RedemptionsTable() {
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
+        status: statusFilterValue,
         sort_by: sortBy,
         sort_order: sortOrder,
       }
 
-      const result = hasFilter
-        ? await searchRedemptions({ ...params, keyword: globalFilter })
-        : await getRedemptions(params)
+      const result =
+        hasFilter || statusFilterValue
+          ? await searchRedemptions({ ...params, keyword: globalFilter })
+          : await getRedemptions(params)
 
       return {
         items: result.data?.items || [],
@@ -129,6 +138,8 @@ export function RedemptionsTable() {
       globalFilter,
       pagination,
     },
+    // eflow: 按 ID 记选择，翻页后不会把别页同位置的行当成已选（批量删除依赖这一点）。
+    getRowId: (row) => String(row.id),
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
     onSortingChange: setSorting,
@@ -173,12 +184,14 @@ export function RedemptionsTable() {
       <div className='space-y-3 sm:space-y-4'>
         <DataTableToolbar
           table={table}
+          searchMode='manual'
           searchPlaceholder={t('Filter by name or ID...')}
           filters={[
             {
               columnId: 'status',
               title: t('Status'),
               options: redemptionStatusOptions,
+              singleSelect: true,
             },
           ]}
         />

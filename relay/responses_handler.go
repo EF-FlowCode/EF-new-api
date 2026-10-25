@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	appconstant "github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	appconstant "eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,12 +73,19 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		// ModelMappedHelper rewrites OriginModelName to this channel's mapped
+		// upstream name for compact pricing; restore the client model so a retry
+		// on another channel maps from the original name again.
+		clientModelName := info.OriginModelName
+		defer func() { info.OriginModelName = clientModelName }()
+	}
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForInfo(info)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
@@ -99,7 +106,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if newApiErr != nil {
 			return newApiErr
 		}
-		if retryErr := service.StreamAbortRetryError(info); retryErr != nil {
+		if retryErr := service.StreamAbortRetryError(c, info); retryErr != nil {
 			return retryErr
 		}
 		usageDto := usage
@@ -117,7 +124,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
@@ -144,13 +151,12 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
 		jsonData = nil
-		info.UpstreamRequestBodySize = size
 		requestBody = body
 	}
 

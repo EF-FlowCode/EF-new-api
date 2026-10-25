@@ -18,7 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 import {
   formatJsonForTextarea,
   normalizeJsonString,
@@ -69,7 +69,7 @@ type ClaudeSettingsCardProps = {
 
 export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const normalizedDefaultsRef = useRef<FlatClaudeSettings>({
     'claude.model_headers_settings': normalizeJsonString(
       defaultValues.claude.model_headers_settings
@@ -149,9 +149,9 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
       return
     }
 
-    for (const key of updates) {
-      await updateOption.mutateAsync({ key, value: normalized[key] })
-    }
+    await updateOptions.mutateAsync(
+      updates.map((key) => ({ key, value: normalized[key] }))
+    )
   }
 
   return (
@@ -263,8 +263,8 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
             />
           </div>
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

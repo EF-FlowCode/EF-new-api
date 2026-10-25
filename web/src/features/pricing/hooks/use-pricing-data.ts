@@ -8,7 +8,7 @@ export function usePricingData() {
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['pricing'],
-    queryFn: getPricing,
+    queryFn: () => getPricing(),
     staleTime: 5 * 60 * 1000,
   })
 
@@ -48,6 +48,7 @@ export function usePricingData() {
     groupRatio: data?.group_ratio ?? {},
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
+    groupEndpointOverrides: data?.group_endpoint_overrides ?? {},
     autoGroups: data?.auto_groups ?? [],
     isLoading,
     error,

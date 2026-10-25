@@ -321,6 +321,7 @@ export function ApiKeysTable() {
           <div className='min-w-0 sm:flex sm:justify-end'>
             <DataTableToolbar
               table={table}
+              searchMode='manual'
               searchPlaceholder={t('Filter by name or key...')}
               filters={[
                 {

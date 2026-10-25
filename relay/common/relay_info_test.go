@@ -3,7 +3,7 @@ package common
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/types"
 	"github.com/stretchr/testify/require"
 )
 

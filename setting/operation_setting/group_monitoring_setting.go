@@ -1,7 +1,10 @@
 package operation_setting
 
 import (
-	"github.com/QuantumNous/new-api/setting/config"
+	"slices"
+	"strings"
+
+	"eflow.local/new-api/setting/config"
 )
 
 type GroupMonitoringSetting struct {
@@ -42,5 +45,30 @@ func init() {
 }
 
 func GetGroupMonitoringSetting() GroupMonitoringSetting {
-	return groupMonitoringSetting
+	return config.MustSnapshot[GroupMonitoringSetting]("group_monitoring_setting")
+}
+
+// IsAvailabilityExcluded reports whether a request must be omitted from
+// availability statistics. Model, status-code, and keyword rules use OR
+// semantics; keyword matching is case-insensitive.
+func (s GroupMonitoringSetting) IsAvailabilityExcluded(statusCode int, modelName, content string) bool {
+	if modelName != "" {
+		if slices.Contains(s.AvailabilityExcludeModels, modelName) {
+			return true
+		}
+	}
+	if statusCode > 0 {
+		if slices.Contains(s.AvailabilityExcludeStatusCodes, statusCode) {
+			return true
+		}
+	}
+	if content != "" && len(s.AvailabilityExcludeKeywords) > 0 {
+		lowerContent := strings.ToLower(content)
+		for _, keyword := range s.AvailabilityExcludeKeywords {
+			if strings.Contains(lowerContent, strings.ToLower(keyword)) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -27,9 +27,7 @@ export const DEFAULT_CHANNEL_RATE_LIMIT: ChannelRateLimit = {
   queue_depth: 20,
 }
 
-export function normalizeChannelRateLimit(
-  value: unknown
-): ChannelRateLimit {
+export function normalizeChannelRateLimit(value: unknown): ChannelRateLimit {
   const src =
     value && typeof value === 'object' ? (value as Record<string, unknown>) : {}
   const rpmRaw = Number(src.rpm)
@@ -165,9 +163,7 @@ export function normalizeErrorFilterRule(rule: unknown): ErrorFilterRule {
   }
 }
 
-export function normalizeErrorFilterRules(
-  rules: unknown
-): ErrorFilterRule[] {
+export function normalizeErrorFilterRules(rules: unknown): ErrorFilterRule[] {
   if (!Array.isArray(rules)) return []
   return rules.map(normalizeErrorFilterRule)
 }

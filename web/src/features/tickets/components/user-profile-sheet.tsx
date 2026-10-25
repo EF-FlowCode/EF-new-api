@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { RefreshCw, User } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { RefreshCw, User } from 'lucide-react'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
+import { formatQuotaWithCurrency } from '@/lib/currency'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,9 +24,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api } from '@/lib/api'
-import { formatQuotaWithCurrency } from '@/lib/currency'
-import { cn } from '@/lib/utils'
 import { formatTicketTimestamp } from '../lib/ticket-utils'
 
 type RecentLog = {
@@ -107,7 +107,10 @@ export function TicketUserProfileSheet({ ticketId, username, userId }: Props) {
     setLoading(true)
     attempted.current = true
     try {
-      const res = await api.get(`/api/ticket/admin/${ticketId}/user-profile`)
+      const res = await api.get(
+        `/api/ticket/admin/${ticketId}/user-profile`,
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data?.success) {
         setProfile(res.data.data || null)
       } else {
@@ -207,12 +210,17 @@ export function TicketUserProfileSheet({ ticketId, username, userId }: Props) {
                   </Row>
                   {profile.pending_refund_quota != null &&
                     profile.pending_refund_quota > 0 && (
-                      <Row label={t('Pending refund')} className='sm:col-span-2'>
+                      <Row
+                        label={t('Pending refund')}
+                        className='sm:col-span-2'
+                      >
                         <span className='inline-flex flex-wrap items-center gap-2'>
-                          {formatQuotaWithCurrency(profile.pending_refund_quota)}
+                          {formatQuotaWithCurrency(
+                            profile.pending_refund_quota
+                          )}
                           <Badge
                             variant='outline'
-                            className='border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-normal'
+                            className='border-amber-500/40 bg-amber-500/10 font-normal text-amber-600 dark:text-amber-400'
                           >
                             {t('Already deducted, awaiting review')}
                           </Badge>

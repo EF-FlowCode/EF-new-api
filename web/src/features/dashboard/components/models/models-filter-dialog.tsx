@@ -68,8 +68,8 @@ export function ModelsFilter(props: ModelsFilterProps) {
   const [filters, setFilters] = useState<DashboardFilters>(() =>
     buildDefaultDashboardFilters(props.preferences)
   )
-  const [selectedRange, setSelectedRange] = useState<number | null>(() =>
-    props.preferences.defaultTimeRangeDays
+  const [selectedRange, setSelectedRange] = useState<number | null>(
+    () => props.preferences.defaultTimeRangeDays
   )
 
   useEffect(() => {

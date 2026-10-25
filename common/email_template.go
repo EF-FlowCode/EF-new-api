@@ -14,8 +14,9 @@ type EmailTemplateRow struct {
 
 // SystemNameOrDefault 返回配置的系统名，为空时回落到 "New API"
 func SystemNameOrDefault() string {
-	if SystemName != "" {
-		return SystemName
+	systemName := GetBrandingSettings().SystemName
+	if systemName != "" {
+		return systemName
 	}
 	return "New API"
 }

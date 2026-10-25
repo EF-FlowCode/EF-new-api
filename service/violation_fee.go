@@ -5,12 +5,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/shopspring/decimal"
 
@@ -27,15 +28,19 @@ func IsViolationFeeCode(code types.ErrorCode) bool {
 	return strings.HasPrefix(string(code), ViolationFeeCodePrefix)
 }
 
-func HasCSAMViolationMarker(err *types.NewAPIError) bool {
-	if err == nil {
+// HasCSAMViolationMarker 仅识别 xAI(Grok) 渠道返回的违规标记。其他渠道即使返回相同
+// 文案（如通用的 "Content violates usage guidelines"）也不视为 Grok 违规，不扣违规费。
+func HasCSAMViolationMarker(err *types.NewAPIError, channelType int) bool {
+	if err == nil || channelType != constant.ChannelTypeXai {
 		return false
 	}
-	if strings.Contains(err.Error(), CSAMViolationMarker) || strings.Contains(err.Error(), ContentViolatesUsageMarker) {
-		return true
-	}
 	msg := err.ToOpenAIError().Message
-	return strings.Contains(msg, CSAMViolationMarker) || strings.Contains(err.Error(), ContentViolatesUsageMarker)
+	for _, text := range []string{err.Error(), msg} {
+		if strings.Contains(text, CSAMViolationMarker) || strings.Contains(text, ContentViolatesUsageMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 func WrapAsViolationFeeGrokCSAM(err *types.NewAPIError) *types.NewAPIError {
@@ -53,12 +58,16 @@ func WrapAsViolationFeeGrokCSAM(err *types.NewAPIError) *types.NewAPIError {
 // - if error.code already has the violation-fee prefix, skip-retry is enabled.
 //
 // It must be called before retry decision logic.
-func NormalizeViolationFeeError(err *types.NewAPIError) *types.NewAPIError {
+func NormalizeViolationFeeErrorForRelay(err *types.NewAPIError, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	return NormalizeViolationFeeError(err, relayChannelType(relayInfo))
+}
+
+func NormalizeViolationFeeError(err *types.NewAPIError, channelType int) *types.NewAPIError {
 	if err == nil {
 		return nil
 	}
 
-	if HasCSAMViolationMarker(err) {
+	if HasCSAMViolationMarker(err, channelType) {
 		return WrapAsViolationFeeGrokCSAM(err)
 	}
 
@@ -70,15 +79,25 @@ func NormalizeViolationFeeError(err *types.NewAPIError) *types.NewAPIError {
 	return err
 }
 
-func shouldChargeViolationFee(err *types.NewAPIError) bool {
-	if err == nil {
+// shouldChargeViolationFee 只对 xAI(Grok) 渠道扣违规费；其他渠道即使透传了同名
+// violation_fee 错误码（例如上游是另一层中转）也不扣。
+func shouldChargeViolationFee(err *types.NewAPIError, channelType int) bool {
+	if err == nil || channelType != constant.ChannelTypeXai {
 		return false
 	}
 	if err.GetErrorCode() == types.ErrorCodeViolationFeeGrokCSAM {
 		return true
 	}
 	// In case some callers didn't normalize, keep a safety net.
-	return HasCSAMViolationMarker(err)
+	return HasCSAMViolationMarker(err, channelType)
+}
+
+// relayChannelType 返回本次最后一次尝试的渠道类型；未进入渠道（ChannelMeta 为空）时返回 0。
+func relayChannelType(relayInfo *relaycommon.RelayInfo) int {
+	if relayInfo == nil || relayInfo.ChannelMeta == nil {
+		return 0
+	}
+	return relayInfo.ChannelType
 }
 
 func calcViolationFeeQuota(amount, groupRatio float64) int {
@@ -88,15 +107,14 @@ func calcViolationFeeQuota(amount, groupRatio float64) int {
 	if groupRatio <= 0 {
 		return 0
 	}
-	quota := decimal.NewFromFloat(amount).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
+	quota := common.QuotaFromDecimal(decimal.NewFromFloat(amount).
+		Mul(decimal.NewFromFloat(common.GetQuotaPerUnit())).
 		Mul(decimal.NewFromFloat(groupRatio)).
-		Round(0).
-		IntPart()
+		Round(0))
 	if quota <= 0 {
 		return 0
 	}
-	return int(quota)
+	return quota
 }
 
 // ChargeViolationFeeIfNeeded charges an additional fee after the normal flow finishes (including refund).
@@ -108,7 +126,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	//if relayInfo.IsPlayground {
 	//	return false
 	//}
-	if !shouldChargeViolationFee(apiErr) {
+	if !shouldChargeViolationFee(apiErr, relayChannelType(relayInfo)) {
 		return false
 	}
 

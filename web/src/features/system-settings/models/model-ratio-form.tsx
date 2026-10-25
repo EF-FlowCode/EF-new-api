@@ -25,12 +25,15 @@ type ModelFormValues = {
   CreateCacheRatio: string
   CompletionRatio: string
   ImageRatio: string
+  BatchInputRatio: string
   AudioRatio: string
   AudioCompletionRatio: string
   ExposeRatioEnabled: boolean
   BillingMode: string
   BillingExpr: string
 }
+
+export type OpenModelRequest = { model: string; nonce: number }
 
 type ModelRatioFormProps = {
   form: UseFormReturn<ModelFormValues>
@@ -39,6 +42,9 @@ type ModelRatioFormProps = {
   isSaving: boolean
   isResetting: boolean
   variant?: 'default' | 'unset'
+  /** Open this model's price dialog (from the task price overview). */
+  openModelRequest?: OpenModelRequest | null
+  onOpenModelRequestHandled?: () => void
 }
 
 export function ModelRatioForm({
@@ -48,13 +54,23 @@ export function ModelRatioForm({
   isSaving,
   isResetting,
   variant = 'default',
+  openModelRequest,
+  onOpenModelRequestHandled,
 }: ModelRatioFormProps) {
   const { t } = useTranslation()
   const isUnsetVariant = variant === 'unset'
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
+  // The price dialog lives in the visual editor, so a request switches to it.
+  const [seenRequest, setSeenRequest] = useState<number>()
+  if (openModelRequest && openModelRequest.nonce !== seenRequest) {
+    setSeenRequest(openModelRequest.nonce)
+    setEditMode('visual')
+  }
+  // Disabled channels count too: their models need a price before the channel
+  // is tested or re-enabled.
   const enabledModelsQuery = useQuery({
-    queryKey: ['enabled-models'],
-    queryFn: getEnabledModels,
+    queryKey: ['enabled-models', 'include-disabled'],
+    queryFn: () => getEnabledModels({ includeDisabled: true }),
     enabled: isUnsetVariant,
   })
 
@@ -110,6 +126,7 @@ export function ModelRatioForm({
               createCacheRatio={form.watch('CreateCacheRatio')}
               completionRatio={form.watch('CompletionRatio')}
               imageRatio={form.watch('ImageRatio')}
+              batchInputRatio={form.watch('BatchInputRatio')}
               audioRatio={form.watch('AudioRatio')}
               audioCompletionRatio={form.watch('AudioCompletionRatio')}
               billingMode={form.watch('BillingMode')}
@@ -118,6 +135,9 @@ export function ModelRatioForm({
                 isUnsetVariant ? enabledModelsQuery.data?.data : undefined
               }
               filterMode={isUnsetVariant ? 'unset' : 'all'}
+              hasPendingChanges={form.formState.isDirty}
+              openRequest={openModelRequest ?? undefined}
+              onOpenRequestHandled={onOpenModelRequestHandled}
               onChange={(field, value) => {
                 const fieldMap: Record<string, keyof ModelFormValues> = {
                   'billing_setting.billing_mode': 'BillingMode',

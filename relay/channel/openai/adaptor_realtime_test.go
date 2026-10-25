@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"eflow.local/new-api/constant"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )

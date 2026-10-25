@@ -1,0 +1,23 @@
+name: new-api-systemone
+services:
+  systemone-proxy:
+    image: ${SYSTEMONE_IMAGE:-new-api-systemone:local}
+    build:
+      context: .
+      dockerfile: Dockerfile.systemone
+    container_name: new-api-systemone-proxy
+    restart: unless-stopped
+    stop_grace_period: 130s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - ./examples/systemone-proxy.docker.json:/etc/systemone-proxy.json:ro
+    networks:
+      - gateway
+networks:
+  gateway:
+    external: true
+    name: new-api_dev-network

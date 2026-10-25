@@ -1,20 +1,22 @@
 package common
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
+	"net/http"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/pkg/billingexpr"
+	relayconstant "eflow.local/new-api/relay/constant"
+	relaydto "eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -28,22 +30,13 @@ type ThinkingContentInfo struct {
 }
 
 const (
-	LastMessageTypeNone     = "none"
-	LastMessageTypeText     = "text"
-	LastMessageTypeTools    = "tools"
-	LastMessageTypeThinking = "thinking"
+	LastMessageTypeNone     = convmeta.LastMessageTypeNone
+	LastMessageTypeText     = convmeta.LastMessageTypeText
+	LastMessageTypeTools    = convmeta.LastMessageTypeTools
+	LastMessageTypeThinking = convmeta.LastMessageTypeThinking
 )
 
-type ClaudeConvertInfo struct {
-	LastMessagesType string
-	Index            int
-	Usage            *dto.Usage
-	FinishReason     string
-	Done             bool
-
-	ToolCallBaseIndex      int
-	ToolCallMaxIndexOffset int
-}
+type ClaudeConvertInfo = convmeta.ClaudeConvertInfo
 
 type RerankerInfo struct {
 	Documents       []any
@@ -71,8 +64,8 @@ type ChannelMeta struct {
 	ApiKey               string
 	Organization         string
 	ChannelCreateTime    int64
-	ParamOverride        map[string]interface{}
-	HeadersOverride      map[string]interface{}
+	ParamOverride        map[string]any
+	HeadersOverride      map[string]any
 	ChannelSetting       dto.ChannelSettings
 	ChannelOtherSettings dto.ChannelOtherSettings
 	UpstreamModelName    string
@@ -86,6 +79,7 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
+	ResponsesTools          *convmeta.ResponsesToolState
 	TokenId                 int
 	TokenKey                string
 	TokenGroup              string
@@ -101,7 +95,6 @@ type RelayInfo struct {
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
 	IsPlayground           bool
-	UsePrice               bool
 	RelayMode              int
 	OriginModelName        string
 	RequestURLPath         string
@@ -117,6 +110,7 @@ type RelayInfo struct {
 	IsFirstRequest         bool
 	AudioUsage             bool
 	ReasoningEffort        string
+	GeminiReasoningState   *relaydto.ReasoningConversionState
 	UserSetting            dto.UserSetting
 	UserEmail              string
 	UserQuota              int
@@ -129,7 +123,7 @@ type RelayInfo struct {
 	// 必须在提交前锁定全额。
 	ForcePreConsume bool
 	// Billing 是计费会话，封装了预扣费/结算/退款的统一生命周期。
-	// 免费模型时为 nil。
+	// 初始免费组可为 nil；auto 重试切换到付费组时会在发送前创建。
 	Billing BillingSettler
 	// RequestId identifies this relay request.
 	RequestId                 string
@@ -137,7 +131,7 @@ type RelayInfo struct {
 	IsChannelTest             bool // channel test request
 	RetryIndex                int
 	LastError                 *types.NewAPIError
-	RuntimeHeadersOverride    map[string]interface{}
+	RuntimeHeadersOverride    map[string]any
 	UseRuntimeHeadersOverride bool
 	ParamOverrideAudit        []string
 	RiskAudit                 *types.RiskAudit
@@ -159,8 +153,9 @@ type RelayInfo struct {
 	// QuotaClamp records a saturated quota conversion for safe rejection and auditing.
 	QuotaClamp *common.QuotaClamp
 
-	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
-	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
+	// TieredBillingSnapshot captures tiered billing rules at pre-consume time.
+	// Auto-group retries refresh its group-dependent fields before each attempt
+	// and again before settlement. Non-nil only for "tiered_expr" billing.
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
 
@@ -175,6 +170,10 @@ type RelayInfo struct {
 
 	StreamStatus *StreamStatus
 
+	// ResponseModel 是上游声明的响应模型（只用于日志诊断，见 response_model.go），
+	// 每次换渠道重试时清空。
+	ResponseModel *ResponseModel
+
 	ThinkingContentInfo
 	TokenCountMeta
 	*ClaudeConvertInfo
@@ -185,6 +184,12 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// A retry must not inherit the previous attempt's stream outcome.
+	info.ResponseModel = nil
+	info.StreamStatus = nil
+	common.SetContextKey(c, constant.ContextKeyRelayStreamStatus, (*StreamStatus)(nil))
+	info.GeminiReasoningState = nil
+	info.ResponsesTools = nil
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)
@@ -224,11 +229,34 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 		channelMeta.ChannelOtherSettings = channelOtherSettings
 	}
 
+	// A native-forwarding Advanced Custom route may forward the client body
+	// unchanged even when the channel-wide pass-through switch is off.
+	if constant.SupportsAdvancedCustomRoutes(channelType) && !channelMeta.ChannelSetting.PassThroughBodyEnabled {
+		requestPath := strings.TrimSpace(strings.Split(info.RequestURLPath, "?")[0])
+		if strings.HasPrefix(requestPath, "/pg/") {
+			requestPath = "/v1" + strings.TrimPrefix(requestPath, "/pg")
+		}
+		route, matched := channelMeta.ChannelOtherSettings.AdvancedCustom.MatchPathForModel(requestPath, info.OriginModelName)
+		if matched && route.PassThroughBodyEnabled && route.SupportsPassThroughBody() {
+			channelMeta.ChannelSetting.PassThroughBodyEnabled = true
+		}
+	}
+
 	if streamSupportedChannels[channelMeta.ChannelType] {
 		channelMeta.SupportStreamOptions = true
 	}
 
 	info.ChannelMeta = channelMeta
+	// Advanced Custom reuses the legacy Custom channel type (8), so it cannot
+	// be represented in the static streamSupportedChannels map. Enable the
+	// stream_options contract only when the advanced route configuration is
+	// present; ordinary Custom channels retain their legacy behavior. vLLM and
+	// SGLang always carry a relay route preset.
+	if constant.SupportsAdvancedCustomRoutes(channelMeta.ChannelType) &&
+		channelMeta.ChannelOtherSettings.AdvancedCustom != nil &&
+		channelMeta.ChannelOtherSettings.AdvancedCustom.HasRelayRoutes() {
+		channelMeta.SupportStreamOptions = true
+	}
 
 	// reset some fields based on channel meta
 	// 重置某些字段，例如模型名称等
@@ -427,6 +455,42 @@ func GenRelayInfoOpenAI(c *gin.Context, request dto.Request) *RelayInfo {
 	return info
 }
 
+func reasoningEffortFromRequest(request dto.Request) string {
+	var effort string
+	switch req := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		if req == nil {
+			return ""
+		}
+		effort = req.ReasoningEffort
+		if strings.TrimSpace(effort) == "" && len(req.Reasoning) > 0 {
+			value := gjson.GetBytes(req.Reasoning, "effort")
+			if value.Type == gjson.String {
+				effort = value.String()
+			}
+		}
+	case *dto.OpenAIResponsesRequest:
+		if req != nil && req.Reasoning != nil {
+			effort = req.Reasoning.Effort
+		}
+	case *dto.ClaudeRequest:
+		if req != nil {
+			effort = req.GetEfforts()
+		}
+	case *dto.GeminiChatRequest:
+		if req != nil && req.GenerationConfig.ThinkingConfig != nil {
+			config := req.GenerationConfig.ThinkingConfig
+			effort = config.ThinkingLevel
+			if canonical, err := reasoning.ParseEffort(effort); err == nil {
+				effort = string(canonical)
+			}
+			if effort == "" && config.ThinkingBudget != nil {
+				effort = string(reasoning.EffortFromBudget(*config.ThinkingBudget))
+			}
+		}
+	}
+	return strings.TrimSpace(effort)
+}
 func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 
 	//channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
@@ -447,7 +511,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	isStream := false
 
 	if request != nil {
-		isStream = request.IsStream(c)
+		isStream = request.IsStream(c.Request)
 	}
 	c.Set(string(constant.ContextKeyIsStream), isStream)
 
@@ -460,7 +524,8 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	additionalTiers, _ := common.GetContextKey(c, constant.ContextKeyUserAdditionalCustomerTiers)
 	userAdditionalTiers, _ := additionalTiers.([]string)
 	info := &RelayInfo{
-		Request: request,
+		Request:         request,
+		ReasoningEffort: reasoningEffortFromRequest(request),
 
 		RequestId:               reqId,
 		UserId:                  common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -666,6 +731,41 @@ func (info *RelayInfo) HasSendResponse() bool {
 	return info.FirstResponseTime.After(info.StartTime)
 }
 
+// ClientReceivedOutput reports whether the client already got response bytes.
+// SendResponseCount is only incremented by some stream writers (the Claude
+// passthrough and protocol bridges write without it), so a committed response
+// writer is treated as delivered output too: it can no longer be retried and
+// what was delivered must be settled rather than refunded.
+func (info *RelayInfo) ClientReceivedOutput(c *gin.Context) bool {
+	if info.SendResponseCount > 0 {
+		return true
+	}
+	return ResponseOutputWritten(c)
+}
+
+// ResponseOutputWritten reports whether the client got response output. A
+// stream writer that records its payload (relay/helper's SSE writer) answers
+// for itself: keepalive pings commit headers but are not output, so a request
+// that only sent pings can still be retried and refunded. Other writers count
+// as soon as anything was written.
+func ResponseOutputWritten(c *gin.Context) bool {
+	if c == nil || c.Writer == nil {
+		return false
+	}
+	var writer http.ResponseWriter = c.Writer
+	for writer != nil {
+		if reporter, ok := writer.(interface{ PayloadWritten() bool }); ok {
+			return reporter.PayloadWritten()
+		}
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		writer = unwrapper.Unwrap()
+	}
+	return c.Writer.Written()
+}
+
 type TaskRelayInfo struct {
 	Action       string
 	OriginTaskID string
@@ -681,98 +781,21 @@ type TaskRelayInfo struct {
 	LockedChannel any
 }
 
-type TaskSubmitReq struct {
-	Prompt         string                 `json:"prompt"`
-	Model          string                 `json:"model,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`
-	Image          string                 `json:"image,omitempty"`
-	Images         []string               `json:"images,omitempty"`
-	Size           string                 `json:"size,omitempty"`
-	Duration       int                    `json:"duration,omitempty"`
-	Seconds        string                 `json:"seconds,omitempty"`
-	InputReference string                 `json:"input_reference,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
-}
-
-func (t *TaskSubmitReq) GetPrompt() string {
-	return t.Prompt
-}
-
-func (t *TaskSubmitReq) HasImage() bool {
-	return len(t.Images) > 0
-}
-
-func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
-	type Alias TaskSubmitReq
-	aux := &struct {
-		Metadata json.RawMessage `json:"metadata,omitempty"`
-		Duration json.RawMessage `json:"duration,omitempty"`
-		*Alias
-	}{
-		Alias: (*Alias)(t),
-	}
-
-	if err := common.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-
-	if len(aux.Duration) > 0 {
-		var durationInt int
-		if err := common.Unmarshal(aux.Duration, &durationInt); err == nil {
-			t.Duration = durationInt
-		} else {
-			var durationStr string
-			if err := common.Unmarshal(aux.Duration, &durationStr); err == nil && durationStr != "" {
-				if v, err := strconv.Atoi(durationStr); err == nil {
-					t.Duration = v
-				}
-			}
-		}
-	}
-
-	if len(aux.Metadata) > 0 {
-		var metadataStr string
-		if err := common.Unmarshal(aux.Metadata, &metadataStr); err == nil && metadataStr != "" {
-			var metadataObj map[string]interface{}
-			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
-				t.Metadata = metadataObj
-				return nil
-			}
-		}
-
-		var metadataObj map[string]interface{}
-		if err := common.Unmarshal(aux.Metadata, &metadataObj); err == nil {
-			t.Metadata = metadataObj
-		}
-	}
-
-	return nil
-}
-func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
-	metadata := t.Metadata
-	if metadata != nil {
-		metadataBytes, err := common.Marshal(metadata)
-		if err != nil {
-			return fmt.Errorf("marshal metadata failed: %w", err)
-		}
-		err = common.Unmarshal(metadataBytes, v)
-		if err != nil {
-			return fmt.Errorf("unmarshal metadata to target failed: %w", err)
-		}
-	}
-	return nil
-}
-
 type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	CompletionUsage        map[string]any `json:"-"`
+	CompletionUsageInvalid bool           `json:"-"`
+	SubmitTime             int64          `json:"submit_time,omitempty"`
+	StartTime              int64          `json:"start_time,omitempty"`
+	FinishTime             int64          `json:"finish_time,omitempty"`
+	Code                   int            `json:"code"`
+	TaskID                 string         `json:"task_id"`
+	Status                 string         `json:"status"`
+	Reason                 string         `json:"reason,omitempty"`
+	Url                    string         `json:"url,omitempty"`
+	RemoteUrl              string         `json:"remote_url,omitempty"`
+	Progress               string         `json:"progress,omitempty"`
+	CompletionTokens       int            `json:"completion_tokens,omitempty"` // 用于按倍率计费
+	TotalTokens            int            `json:"total_tokens,omitempty"`      // 用于按倍率计费
 }
 
 func FailTaskInfo(reason string) *TaskInfo {
@@ -797,7 +820,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		return jsonData, nil
 	}
 
-	var data map[string]interface{}
+	var data map[string]any
 	if err := common.Unmarshal(jsonData, &data); err != nil {
 		common.SysError("RemoveDisabledFields Unmarshal error :" + err.Error())
 		return jsonData, nil
@@ -841,7 +864,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 	// 默认移除 stream_options.include_obfuscation，除非明确允许（避免关闭响应流混淆保护）
 	if !channelOtherSettings.AllowIncludeObfuscation {
 		if streamOptionsAny, exists := data["stream_options"]; exists {
-			if streamOptions, ok := streamOptionsAny.(map[string]interface{}); ok {
+			if streamOptions, ok := streamOptionsAny.(map[string]any); ok {
 				if _, includeExists := streamOptions["include_obfuscation"]; includeExists {
 					delete(streamOptions, "include_obfuscation")
 				}
@@ -888,7 +911,7 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 		return jsonData, nil
 	}
 
-	var data map[string]interface{}
+	var data map[string]any
 	if err := common.Unmarshal(jsonData, &data); err != nil {
 		common.SysError("RemoveGeminiDisabledFields Unmarshal error: " + err.Error())
 		return jsonData, nil
@@ -896,18 +919,18 @@ func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
 
 	// Process contents array
 	// Handle both camelCase (functionResponse) and snake_case (function_response)
-	if contents, ok := data["contents"].([]interface{}); ok {
+	if contents, ok := data["contents"].([]any); ok {
 		for _, content := range contents {
-			if contentMap, ok := content.(map[string]interface{}); ok {
-				if parts, ok := contentMap["parts"].([]interface{}); ok {
+			if contentMap, ok := content.(map[string]any); ok {
+				if parts, ok := contentMap["parts"].([]any); ok {
 					for _, part := range parts {
-						if partMap, ok := part.(map[string]interface{}); ok {
+						if partMap, ok := part.(map[string]any); ok {
 							// Check functionResponse (camelCase)
-							if funcResp, ok := partMap["functionResponse"].(map[string]interface{}); ok {
+							if funcResp, ok := partMap["functionResponse"].(map[string]any); ok {
 								delete(funcResp, "id")
 							}
 							// Check function_response (snake_case)
-							if funcResp, ok := partMap["function_response"].(map[string]interface{}); ok {
+							if funcResp, ok := partMap["function_response"].(map[string]any); ok {
 								delete(funcResp, "id")
 							}
 						}

@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -16,12 +18,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { cn } from '@/lib/utils'
-import { useAuthStore } from '@/stores/auth-store'
-import {
-  createInvoiceTicket,
-  fetchEligibleInvoiceOrders,
-} from '../api'
+import { createInvoiceTicket, fetchEligibleInvoiceOrders } from '../api'
 import { TICKET_PRIORITY, type EligibleTopUpOrder } from '../types'
 
 type Props = {
@@ -63,9 +60,14 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
   const [email, setEmail] = useState('')
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const notesRef = useRef<HTMLTextAreaElement>(null)
+  const returnToNotes = useRef(false)
+  const submissionPending = useRef(false)
 
   useEffect(() => {
     if (!open) {
+      setConfirmOpen(false)
       setOrders([])
       setSelected(new Set())
       setInvoiceType('personal')
@@ -123,7 +125,8 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
     /\S+@\S+\.\S+/.test(email.trim())
 
   const submit = async () => {
-    if (!canSubmit || submitting) return
+    if (!canSubmit || submissionPending.current) return
+    submissionPending.current = true
     setSubmitting(true)
     try {
       const subject = t('Invoice request ({{n}} orders)', { n: selected.size })
@@ -150,13 +153,19 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
         e instanceof Error ? e.message : t('Failed to create invoice ticket')
       )
     } finally {
+      submissionPending.current = false
       setSubmitting(false)
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-3xl'>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!submissionPending.current && !confirmOpen) onOpenChange(next)
+      }}
+    >
+      <DialogContent className='max-h-[calc(100dvh_-_2rem)] w-[calc(100vw_-_2rem)] overflow-y-auto sm:max-w-3xl'>
         <DialogHeader>
           <DialogTitle>{t('Request invoice')}</DialogTitle>
           <DialogDescription>
@@ -208,18 +217,17 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
                     const checked = selected.has(o.id)
                     return (
                       <li key={o.id}>
-                        <button
-                          type='button'
-                          onClick={() => toggle(o.id)}
+                        <label
+                          htmlFor={`invoice-order-${o.id}`}
                           className={cn(
-                            'hover:bg-accent/40 flex w-full items-center gap-3 px-3 py-2 text-left transition-colors',
+                            'hover:bg-accent/40 flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors',
                             checked && 'bg-primary/5'
                           )}
                         >
                           <Checkbox
+                            id={`invoice-order-${o.id}`}
                             checked={checked}
                             onCheckedChange={() => toggle(o.id)}
-                            onClick={(e) => e.stopPropagation()}
                           />
                           <div className='min-w-0 flex-1'>
                             <div className='flex flex-wrap items-center gap-2'>
@@ -237,7 +245,7 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
                           <span className='text-rose-600 dark:text-rose-400'>
                             ¥{(o.money ?? 0).toFixed(2)}
                           </span>
-                        </button>
+                        </label>
                       </li>
                     )
                   })}
@@ -352,13 +360,17 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
               />
             </div>
             <div className='space-y-1.5 sm:col-span-2'>
-              <Label>{t('Notes')}</Label>
+              <Label htmlFor='invoice-notes'>{t('Notes')}</Label>
               <Textarea
+                id='invoice-notes'
+                ref={notesRef}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 rows={3}
                 maxLength={2000}
-                placeholder={t('Optional notes for the support team')}
+                placeholder={t(
+                  'Specify any per-invoice amount limit or split-invoice requirements here.'
+                )}
               />
             </div>
           </section>
@@ -372,10 +384,58 @@ export function InvoiceTicketDialog({ open, onOpenChange, onCreated }: Props) {
           >
             {t('Cancel')}
           </Button>
-          <Button onClick={submit} disabled={!canSubmit || submitting}>
+          <Button
+            onClick={() => {
+              returnToNotes.current = true
+              setConfirmOpen(true)
+            }}
+            disabled={!canSubmit || submitting}
+          >
             {t('Submit invoice request')}
           </Button>
         </DialogFooter>
+        {/* Use the same Dialog primitive for both layers so their focus and
+            dismiss stacks stay shared, including when Radix versions differ. */}
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent
+            className='max-h-[calc(100dvh_-_2rem)] w-[calc(100vw_-_2rem)] overflow-y-auto'
+            role='alertdialog'
+            showCloseButton={false}
+            onInteractOutside={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => {
+              if (returnToNotes.current) {
+                event.preventDefault()
+                notesRef.current?.focus()
+              }
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>
+                {t('Confirm per-invoice amount requirements')}
+              </DialogTitle>
+              <DialogDescription>
+                {t(
+                  'Please confirm your reimbursement policy for each invoice, including the amount limit, any specified amount, and whether invoices need to be split. Describe any special requirements in the notes before submitting.'
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant='outline' onClick={() => setConfirmOpen(false)}>
+                {t('Back to notes')}
+              </Button>
+              <Button
+                disabled={!canSubmit || submitting}
+                onClick={() => {
+                  returnToNotes.current = false
+                  setConfirmOpen(false)
+                  void submit()
+                }}
+              >
+                {t('Confirmed, submit request')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   )

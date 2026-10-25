@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -51,6 +51,12 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	if info.RelayMode == relayconstant.RelayModeEmbeddings {
 		return info.ChannelBaseUrl + "/api/embed", nil
 	}
+	if info.RelayMode == relayconstant.RelayModeResponses {
+		return info.ChannelBaseUrl + "/v1/responses", nil
+	}
+	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
+		return "", errors.New("responses compact is not supported by Ollama")
+	}
 	if strings.Contains(info.RequestURLPath, "/v1/completions") || info.RelayMode == relayconstant.RelayModeCompletions {
 		return info.ChannelBaseUrl + "/api/generate", nil
 	}
@@ -83,7 +89,8 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	return nil, errors.New("not implemented")
+	adaptor := openai.Adaptor{}
+	return adaptor.ConvertOpenAIResponsesRequest(c, info, request)
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
@@ -94,6 +101,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	switch info.RelayMode {
 	case relayconstant.RelayModeEmbeddings:
 		return ollamaEmbeddingHandler(c, info, resp)
+	case relayconstant.RelayModeResponses:
+		adaptor := openai.Adaptor{}
+		return adaptor.DoResponse(c, resp, info)
 	default:
 		if info.IsStream {
 			return ollamaStreamHandler(c, info, resp)

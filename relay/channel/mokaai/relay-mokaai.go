@@ -5,11 +5,11 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -22,7 +22,7 @@ func embeddingRequestOpenAI2Moka(request dto.GeneralOpenAIRequest) *dto.Embeddin
 		input = []string{v} // Convert string to []string
 	case []string:
 		input = v // Already a []string, no conversion needed
-	case []interface{}:
+	case []any:
 		for _, part := range v {
 			if str, ok := part.(string); ok {
 				input = append(input, str) // Append each string to the slice

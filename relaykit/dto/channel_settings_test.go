@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -145,6 +145,81 @@ func TestAdvancedCustomModelListRouteRequiresExactIncomingPath(t *testing.T) {
 	route, ok := config.ModelListRoute()
 	require.True(t, ok)
 	assert.Equal(t, "/provider/models", route.UpstreamPath)
+}
+
+func TestAdvancedCustomValidateBalanceRouteConstraints(t *testing.T) {
+	valid := &AdvancedCustomConfig{Routes: []AdvancedCustomRoute{{
+		IncomingPath: AdvancedCustomBalancePath,
+		UpstreamPath: "/provider/balance",
+		Converter:    advancedCustomConverterNone,
+	}}}
+	require.NoError(t, valid.Validate())
+
+	route, ok := valid.BalanceRoute()
+	require.True(t, ok)
+	assert.Equal(t, "/provider/balance", route.UpstreamPath)
+
+	tests := []struct {
+		name   string
+		routes []AdvancedCustomRoute
+		want   string
+	}{
+		{
+			name: "model matching rules",
+			routes: []AdvancedCustomRoute{{
+				IncomingPath: AdvancedCustomBalancePath,
+				UpstreamPath: "/provider/balance",
+				Models:       []string{"gpt-4o"},
+			}},
+			want: "models must be empty",
+		},
+		{
+			name: "converter",
+			routes: []AdvancedCustomRoute{{
+				IncomingPath: AdvancedCustomBalancePath,
+				UpstreamPath: "/provider/balance",
+				Converter:    advancedCustomConverterOpenAIChatToOpenAIResponses,
+			}},
+			want: "converter must be none",
+		},
+		{
+			name: "model placeholder",
+			routes: []AdvancedCustomRoute{{
+				IncomingPath: AdvancedCustomBalancePath,
+				UpstreamPath: "/provider/{model}/balance",
+			}},
+			want: "upstream_path must not contain {model}",
+		},
+		{
+			name: "duplicate routes",
+			routes: []AdvancedCustomRoute{
+				{IncomingPath: AdvancedCustomBalancePath, UpstreamPath: "/provider/balance"},
+				{IncomingPath: AdvancedCustomBalancePath, UpstreamPath: "/provider/credits"},
+			},
+			want: "duplicates the /v1/dashboard/billing/credit_grants route",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (&AdvancedCustomConfig{Routes: tt.routes}).Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestAdvancedCustomHasRelayRoutes(t *testing.T) {
+	require.False(t, (*AdvancedCustomConfig)(nil).HasRelayRoutes())
+	require.False(t, (&AdvancedCustomConfig{}).HasRelayRoutes())
+	require.False(t, (&AdvancedCustomConfig{Routes: []AdvancedCustomRoute{
+		{IncomingPath: AdvancedCustomModelListPath, UpstreamPath: "/models"},
+		{IncomingPath: AdvancedCustomBalancePath, UpstreamPath: "/balance"},
+	}}).HasRelayRoutes())
+	require.True(t, (&AdvancedCustomConfig{Routes: []AdvancedCustomRoute{
+		{IncomingPath: AdvancedCustomModelListPath, UpstreamPath: "/models"},
+		{IncomingPath: "/v1/chat/completions", UpstreamPath: "/chat"},
+	}}).HasRelayRoutes())
 }
 
 func TestAdvancedCustomValidateDuplicateIncomingPathWithDisjointModels(t *testing.T) {
@@ -577,4 +652,34 @@ func TestChannelSettingsValidateHTTPTransport(t *testing.T) {
 	err = (&ChannelSettings{HTTPProtocol: "http1", HTTP2ConnectionShards: 2}).ValidateHTTPTransport()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "http2_connection_shards")
+}
+
+func TestAdvancedCustomValidateRoutePassThroughBody(t *testing.T) {
+	valid := &AdvancedCustomConfig{Routes: []AdvancedCustomRoute{
+		{IncomingPath: "/v1/chat/completions", UpstreamPath: "/v1/chat/completions", PassThroughBodyEnabled: true},
+		{IncomingPath: "/v1/messages", UpstreamPath: "/v1/chat/completions", Converter: advancedCustomConverterClaudeMessagesToOpenAIChat},
+	}}
+	require.NoError(t, valid.Validate())
+	route, ok := valid.MatchPathForModel("/v1/chat/completions", "gpt-test")
+	require.True(t, ok)
+	assert.True(t, route.PassThroughBodyEnabled)
+
+	encoded, err := json.Marshal(valid.Routes[1])
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "pass_through_body_enabled")
+
+	for _, test := range []struct {
+		name  string
+		route AdvancedCustomRoute
+		want  string
+	}{
+		{name: "converter route", route: AdvancedCustomRoute{IncomingPath: "/v1/messages", UpstreamPath: "/v1/chat/completions", Converter: advancedCustomConverterClaudeMessagesToOpenAIChat, PassThroughBodyEnabled: true}, want: "pass_through_body_enabled requires converter none"},
+		{name: "model list route", route: AdvancedCustomRoute{IncomingPath: AdvancedCustomModelListPath, UpstreamPath: "/v1/models", PassThroughBodyEnabled: true}, want: "pass_through_body_enabled must be false for /v1/models"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := (&AdvancedCustomConfig{Routes: []AdvancedCustomRoute{test.route}}).Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.want)
+		})
+	}
 }

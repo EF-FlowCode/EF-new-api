@@ -13,7 +13,6 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -23,11 +22,10 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const dataDashboardSchema = z.object({
   DataExportEnabled: z.boolean(),
-  DataExportInterval: z.number().int().min(1).max(1440),
   DataExportDefaultTime: z.enum(['hour', 'day', 'week']),
 })
 
@@ -45,7 +43,7 @@ const granularityOptions = [
 
 export function DashboardSection({ defaultValues }: DashboardSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm<DataDashboardFormValues>({
     resolver: zodResolver(dataDashboardSchema),
@@ -62,9 +60,10 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
         value !== defaultValues[key as keyof DataDashboardFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value }))
+    )
   }
 
   const isEnabled = form.watch('DataExportEnabled')
@@ -72,7 +71,7 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
   return (
     <SettingsSection
       title={t('Data Dashboard')}
-      description={t('Configure experimental data export for the dashboard')}
+      description={t('Configure dashboard usage aggregation')}
     >
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
@@ -96,32 +95,7 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
             )}
           />
 
-          <div className='grid gap-6 sm:grid-cols-2'>
-            <FormField
-              control={form.control}
-              name='DataExportInterval'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Refresh interval (minutes)')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={1}
-                      max={1440}
-                      step={1}
-                      disabled={!isEnabled}
-                      value={field.value}
-                      onChange={(e) => field.onChange(e.target.valueAsNumber)}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Keep this above 1 minute to avoid heavy database load')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
+          <div className='grid gap-6'>
             <FormField
               control={form.control}
               name='DataExportDefaultTime'
@@ -157,8 +131,8 @@ export function DashboardSection({ defaultValues }: DashboardSectionProps) {
             />
           </div>
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

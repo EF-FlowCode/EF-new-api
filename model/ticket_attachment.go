@@ -3,7 +3,7 @@ package model
 import (
 	"errors"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"gorm.io/gorm"
 )
 
@@ -27,10 +27,9 @@ type TicketAttachment struct {
 }
 
 var (
-	ErrAttachmentNotFound   = errors.New("ticket attachment not found")
-	ErrAttachmentForbidden  = errors.New("ticket attachment forbidden")
-	ErrAttachmentBound      = errors.New("ticket attachment already bound")
-	ErrAttachmentBindTicket = errors.New("ticket attachment belongs to another ticket")
+	ErrAttachmentNotFound  = errors.New("ticket attachment not found")
+	ErrAttachmentForbidden = errors.New("ticket attachment forbidden")
+	ErrAttachmentBound     = errors.New("ticket attachment already bound")
 )
 
 func (a *TicketAttachment) BeforeCreate(tx *gorm.DB) error {
@@ -97,13 +96,21 @@ func BindAttachmentsToMessage(tx *gorm.DB, attachmentIds []int, ticketId int, me
 		}
 	}
 	now := common.GetTimestamp()
-	return tx.Model(&TicketAttachment{}).
-		Where("id IN ?", attachmentIds).
-		Updates(map[string]interface{}{
+	// 条件更新：并发撤回/清理/另一条消息先绑定时行数不足，整条消息回滚。
+	result := tx.Model(&TicketAttachment{}).
+		Where("id IN ? AND user_id = ? AND message_id = 0", attachmentIds, userId).
+		Updates(map[string]any{
 			"ticket_id":    ticketId,
 			"message_id":   messageId,
 			"created_time": now,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != int64(len(attachmentIds)) {
+		return ErrAttachmentBound
+	}
+	return nil
 }
 
 // GetStaffAttachmentsByTicket 取该工单所有"由客服/管理员上传并已绑定到消息"的附件。
@@ -121,9 +128,14 @@ func GetStaffAttachmentsByTicket(ticketId int, ownerUserId int) ([]*TicketAttach
 	return list, nil
 }
 
-// DeleteAttachment 软删除附件记录（真实文件由调用方另行清理，因为失败重试语义不同）。
-func DeleteAttachment(id int) error {
-	return DB.Delete(&TicketAttachment{}, id).Error
+// DeleteUnboundAttachment 仅在附件仍未绑定消息时软删除记录，返回是否删除。
+// 调用方只在返回 true 后再删真实文件，避免与发送消息并发时删掉已绑定附件。
+func DeleteUnboundAttachment(id int) (bool, error) {
+	result := DB.Where("message_id = 0").Delete(&TicketAttachment{}, id)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 // ListOrphanAttachments 返回超过 olderThan 秒仍未绑定到消息的附件，供清理任务使用。

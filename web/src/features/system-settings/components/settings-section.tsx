@@ -13,7 +13,8 @@ export function SettingsSection({
   children,
   className,
 }: SettingsSectionProps) {
-  const baseClassName = 'space-y-4'
+  const baseClassName =
+    'border-border/70 bg-card/60 space-y-4 rounded-lg border p-4 shadow-xs sm:p-5'
   const sectionClassName = className
     ? `${baseClassName} ${className}`
     : baseClassName
@@ -25,8 +26,8 @@ export function SettingsSection({
           {...titleProps}
           className={
             titleProps?.className
-              ? `text-base font-semibold ${titleProps.className}`
-              : 'text-base font-semibold'
+              ? `text-sm font-semibold ${titleProps.className}`
+              : 'text-sm font-semibold'
           }
         >
           {title}

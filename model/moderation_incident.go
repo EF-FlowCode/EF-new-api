@@ -3,7 +3,7 @@ package model
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 // ModerationIncident records one OpenAI omni-moderation evaluation. We keep
@@ -29,7 +29,7 @@ type ModerationIncident struct {
 	Categories        string  `json:"categories" gorm:"type:text"`
 	AppliedTypes      string  `json:"applied_types" gorm:"type:text"`
 	InputSummary      string  `json:"input_summary" gorm:"type:text"`
-	UpstreamLatencyMS int `json:"upstream_latency_ms" gorm:"default:0"`
+	UpstreamLatencyMS int     `json:"upstream_latency_ms" gorm:"default:0"`
 	// Source distinguishes traffic events ("relay") from admin debug runs
 	// ("debug") so debug calls don't pollute production sensitivity tuning.
 	Source string `json:"source" gorm:"type:varchar(16);index;default:'relay'"`

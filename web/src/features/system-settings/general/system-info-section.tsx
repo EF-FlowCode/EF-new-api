@@ -19,7 +19,7 @@ import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const _systemInfoSchema = z.object({
   Notice: z.string().optional(),
@@ -49,7 +49,7 @@ function normalizeValue(value: unknown): string {
 
 export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const normalizedDefaults: SystemInfoFormValues = {
     Notice: normalizeValue(defaultValues.Notice),
@@ -92,16 +92,15 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       >,
       defaultValues: normalizedDefaults,
       onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
+        const updates = Object.entries(changedFields).map(([key, value]) => {
           let v = normalizeValue(value)
           if (key === 'ServerAddress') {
             v = v.replace(/\/+$/, '')
           }
-          await updateOption.mutateAsync({
-            key,
-            value: v,
-          })
-        }
+          return { key, value: v }
+        })
+        if (updates.length === 0) return
+        await updateOptions.mutateAsync(updates)
       },
     })
 
@@ -190,7 +189,8 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                     />
                   </FormControl>
                   <FormDescription>
-                    顶部导航「分组监控」内嵌的页面地址，可填外网或 docker 内网。留空则隐藏顶部入口。
+                    顶部导航「分组监控」内嵌的页面地址，可填外网或 docker
+                    内网。留空则隐藏顶部入口。
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -340,15 +340,15 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
             <div className='flex gap-2'>
               <Button
                 type='submit'
-                disabled={isSubmitting || updateOption.isPending}
+                disabled={isSubmitting || updateOptions.isPending}
               >
-                {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+                {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
               </Button>
               <Button
                 type='button'
                 variant='outline'
                 onClick={handleReset}
-                disabled={!isDirty || updateOption.isPending || isSubmitting}
+                disabled={!isDirty || updateOptions.isPending || isSubmitting}
               >
                 <RotateCcw className='mr-2 h-4 w-4' />
                 {t('Reset')}

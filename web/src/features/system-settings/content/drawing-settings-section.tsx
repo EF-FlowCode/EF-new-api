@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const drawingSchema = z.object({
   DrawingEnabled: z.boolean(),
@@ -36,7 +36,7 @@ export function DrawingSettingsSection({
   defaultValues,
 }: DrawingSettingsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const form = useForm<DrawingFormValues>({
     resolver: zodResolver(drawingSchema),
     defaultValues,
@@ -51,9 +51,10 @@ export function DrawingSettingsSection({
       ([key, value]) => value !== defaultValues[key as keyof DrawingFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value }))
+    )
   }
 
   const switches: Array<{
@@ -137,8 +138,8 @@ export function DrawingSettingsSection({
             ))}
           </div>
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending
               ? t('Saving...')
               : t('Save drawing settings')}
           </Button>

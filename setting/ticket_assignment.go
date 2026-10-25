@@ -1,11 +1,13 @@
 package setting
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 // 工单自动分配策略。
@@ -18,8 +20,8 @@ const (
 
 // 没有任何可用客服时的兜底行为。
 const (
-	TicketAssignFallbackNone         = "none"           // 留在待认领池，仅通知管理员
-	TicketAssignFallbackGeneralGroup = "general_group"  // 回落到普通工单组
+	TicketAssignFallbackNone         = "none"          // 留在待认领池，仅通知管理员
+	TicketAssignFallbackGeneralGroup = "general_group" // 回落到普通工单组
 )
 
 // TicketAssignRule 描述一种工单类型的分配规则。
@@ -130,11 +132,8 @@ func TicketTypesForUser(userId int) []string {
 	defer ticketAssignConfigMu.RUnlock()
 	types := make([]string, 0, len(ticketAssignConfig.Rules))
 	for typeKey, rule := range ticketAssignConfig.Rules {
-		for _, uid := range rule.Users {
-			if uid == userId {
-				types = append(types, typeKey)
-				break
-			}
+		if slices.Contains(rule.Users, userId) {
+			types = append(types, typeKey)
 		}
 	}
 	sort.Strings(types)
@@ -149,13 +148,7 @@ func AssigneeIdsForUser(userId int) []int {
 	defer ticketAssignConfigMu.RUnlock()
 	seen := map[int]struct{}{userId: {}}
 	for _, rule := range ticketAssignConfig.Rules {
-		member := false
-		for _, uid := range rule.Users {
-			if uid == userId {
-				member = true
-				break
-			}
-		}
+		member := slices.Contains(rule.Users, userId)
 		if member {
 			for _, uid := range rule.Users {
 				if uid > 0 {
@@ -174,19 +167,28 @@ func AssigneeIdsForUser(userId int) []int {
 
 // UpdateTicketAssignConfigFromJSON 从 JSON 字符串加载配置，用于 OptionMap 热更新。
 // 解析失败时保持旧配置不变并返回错误。
-func UpdateTicketAssignConfigFromJSON(raw string) error {
+func parseTicketAssignConfigJSON(raw string) (TicketAssignConfig, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		ticketAssignConfigMu.Lock()
-		ticketAssignConfig = defaultTicketAssignConfig()
-		ticketAssignConfigMu.Unlock()
-		return nil
+		return defaultTicketAssignConfig(), nil
 	}
 	var cfg TicketAssignConfig
 	if err := common.UnmarshalJsonStr(trimmed, &cfg); err != nil {
+		return TicketAssignConfig{}, err
+	}
+	return normalizeTicketAssignConfig(cfg), nil
+}
+
+func ValidateTicketAssignConfigJSON(raw string) error {
+	_, err := parseTicketAssignConfigJSON(raw)
+	return err
+}
+
+func UpdateTicketAssignConfigFromJSON(raw string) error {
+	normalized, err := parseTicketAssignConfigJSON(raw)
+	if err != nil {
 		return err
 	}
-	normalized := normalizeTicketAssignConfig(cfg)
 	ticketAssignConfigMu.Lock()
 	ticketAssignConfig = normalized
 	ticketAssignConfigMu.Unlock()
@@ -215,9 +217,7 @@ func normalizeTicketAssignConfig(in TicketAssignConfig) TicketAssignConfig {
 	}
 	// 保留 general/refund/invoice 三个基本键始终存在，避免前端取值时为空。
 	base := defaultTicketAssignConfig().Rules
-	for k, v := range base {
-		out.Rules[k] = v
-	}
+	maps.Copy(out.Rules, base)
 	for rawKey, rule := range in.Rules {
 		key := strings.ToLower(strings.TrimSpace(rawKey))
 		if key == "" {

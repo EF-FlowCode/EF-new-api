@@ -4,7 +4,7 @@ import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { MESSAGE_ACTION_LABELS } from '../constants'
 import { useMessageActionGuard } from '../hooks/use-message-action-guard'
-import { getVersionText } from '../lib/message-utils'
+import { getCurrentVersion, getVersionText } from '../lib/message-utils'
 import type { Message } from '../types'
 import { MessageActionButton } from './message-action-button'
 
@@ -37,7 +37,7 @@ export function MessageActions({
   const isLoading =
     message.status === 'loading' || message.status === 'streaming'
   // content 可能是 string | ContentPart[]（图文消息），复制/比较都要纯文本
-  const content = getVersionText(message.versions[0]?.content || '')
+  const content = getVersionText(getCurrentVersion(message).content)
   const isCopied = copiedText === content
 
   const handleCopy = () => {

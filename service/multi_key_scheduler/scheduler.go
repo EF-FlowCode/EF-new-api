@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
 )
 
 // 拒绝原因
@@ -41,8 +41,8 @@ const (
 	DefaultAffinityInFlightCap = 0   // 默认不按 in_flight 让位：in_flight 会因 hung/client-gone/重启泄漏、不可靠；>0 时运维显式开启该护栏
 	rpmWindowSeconds           = 60
 	tpmWindowSeconds           = 60
-	defaultEntryTTL      = 300 // Redis hash key TTL
-	observedMaxTTL       = 86400
+	defaultEntryTTL            = 300 // Redis hash key TTL
+	observedMaxTTL             = 86400
 )
 
 // KeyCandidate 调用方传入的候选 key（一般是 channel 中所有 enabled 状态的 key）。
@@ -65,15 +65,15 @@ type AcquireResult struct {
 
 // StateEntry 是 SnapshotChannel 返回给 admin-api 状态面板的一行。
 type StateEntry struct {
-	KeyFp        string `json:"key_fp"`
-	Model        string `json:"model"`
-	RPMCount     int    `json:"rpm_count"`
-	TPMCount     int    `json:"tpm_count"`
-	InFlight     int    `json:"in_flight"`
-	CoolUntilMs  int64  `json:"cool_until_ms,omitempty"`
-	Last429AtMs  int64  `json:"last_429_at_ms,omitempty"`
-	Last429Msg   string `json:"last_429_msg,omitempty"`
-	ObservedMax  int    `json:"observed_max,omitempty"`
+	KeyFp       string `json:"key_fp"`
+	Model       string `json:"model"`
+	RPMCount    int    `json:"rpm_count"`
+	TPMCount    int    `json:"tpm_count"`
+	InFlight    int    `json:"in_flight"`
+	CoolUntilMs int64  `json:"cool_until_ms,omitempty"`
+	Last429AtMs int64  `json:"last_429_at_ms,omitempty"`
+	Last429Msg  string `json:"last_429_msg,omitempty"`
+	ObservedMax int    `json:"observed_max,omitempty"`
 }
 
 // IsEnabledFor 判定调度器是否应介入：cfg 自身允许 + 至少配了一个 model 配额。

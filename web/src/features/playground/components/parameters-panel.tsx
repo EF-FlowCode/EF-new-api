@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import type { PlaygroundConfig, ParameterEnabled } from '../types'
@@ -59,9 +59,7 @@ export function ParametersPanel({
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
 
-  const enabledCount = PARAM_SPECS.filter(
-    (s) => parameterEnabled[s.key]
-  ).length
+  const enabledCount = PARAM_SPECS.filter((s) => parameterEnabled[s.key]).length
 
   return (
     <div className='border-b'>
@@ -83,8 +81,7 @@ export function ParametersPanel({
           {PARAM_SPECS.map((spec) => {
             const isOn = parameterEnabled[spec.key]
             const raw = config[spec.key as keyof PlaygroundConfig]
-            const value =
-              raw === null || raw === undefined ? '' : String(raw)
+            const value = raw === null || raw === undefined ? '' : String(raw)
             return (
               <div
                 key={spec.key}

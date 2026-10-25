@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -59,6 +59,10 @@ func VideoProxy(c *gin.Context) {
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to get channel for task %s: %s", taskID, err.Error()))
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to retrieve channel information")
+		return
+	}
+	if task.PrivateData.Plugin != nil {
+		serveTaskPluginContent(c, task, channel)
 		return
 	}
 	baseURL := channel.GetBaseURL()
@@ -154,6 +158,11 @@ func VideoProxy(c *gin.Context) {
 		return
 	}
 
+	// Media downloads may legitimately be redirected to signed storage URLs, so
+	// keep following redirects (with the client's SSRF checks) but drop channel
+	// credentials once a hop leaves the original origin; net/http alone would
+	// keep x-goog-api-key.
+	client = service.NewCredentialStrippingRedirectClient(client, "Authorization", "x-goog-api-key")
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Failed to fetch video from %s: %s", videoURL, err.Error()))
@@ -209,7 +218,9 @@ func writeVideoDataURL(c *gin.Context, dataURL string) error {
 	}
 
 	c.Writer.Header().Set("Content-Type", mimeType)
-	c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
+	if c.Writer.Header().Get("Cache-Control") == "" {
+		c.Writer.Header().Set("Cache-Control", "public, max-age=86400")
+	}
 	c.Writer.WriteHeader(http.StatusOK)
 	_, err = c.Writer.Write(videoBytes)
 	return err

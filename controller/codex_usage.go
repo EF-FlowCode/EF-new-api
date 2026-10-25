@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay/channel/codex"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/relay/channel/codex"
+	"eflow.local/new-api/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -76,29 +76,15 @@ func GetCodexChannelUsage(c *gin.Context) {
 	}
 
 	if (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) && strings.TrimSpace(oauthKey.RefreshToken) != "" {
-		refreshCtx, refreshCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-		defer refreshCancel()
-
-		res, refreshErr := service.RefreshCodexOAuthTokenWithProxy(refreshCtx, oauthKey.RefreshToken, ch.GetSetting().Proxy)
-		if refreshErr == nil {
-			oauthKey.AccessToken = res.AccessToken
-			oauthKey.RefreshToken = res.RefreshToken
-			oauthKey.LastRefresh = time.Now().Format(time.RFC3339)
-			oauthKey.Expired = res.ExpiresAt.Format(time.RFC3339)
-			if strings.TrimSpace(oauthKey.Type) == "" {
-				oauthKey.Type = "codex"
-			}
-
-			encoded, encErr := common.Marshal(oauthKey)
-			if encErr == nil {
-				_ = model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error
-				model.InitChannelCache()
-				service.ResetProxyClientCache()
-			}
-
+		// Shares the per-channel refresh lock with the auto-refresh task and
+		// model fetch, and persists account_id/email like they do.
+		refreshed, _, refreshErr := service.RefreshCodexChannelCredential(c.Request.Context(), ch.Id, service.CodexCredentialRefreshOptions{ResetCaches: true, StaleAccessToken: accessToken})
+		if refreshErr != nil {
+			common.SysError("failed to refresh codex credential: " + refreshErr.Error())
+		} else {
 			ctx2, cancel2 := context.WithTimeout(c.Request.Context(), 15*time.Second)
 			defer cancel2()
-			statusCode, body, err = service.FetchCodexWhamUsage(ctx2, client, ch.GetBaseURL(), oauthKey.AccessToken, accountID)
+			statusCode, body, err = service.FetchCodexWhamUsage(ctx2, client, ch.GetBaseURL(), refreshed.AccessToken, accountID)
 			if err != nil {
 				common.SysError("failed to fetch codex usage after refresh: " + err.Error())
 				c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取用量信息失败，请稍后重试"})

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	mathrand "math/rand"
 	"net/http"
 	"strconv"
@@ -14,13 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
-	"github.com/bytedance/gopkg/util/gopool"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	gopool "eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/model"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,20 +30,22 @@ import (
 // engine attaches the rule decision so the debug card can show admins which
 // rules fired without re-running the upstream model.
 type ModerationResult struct {
-	RequestID         string                  `json:"request_id"`
-	Flagged           bool                    `json:"flagged"`
-	MaxScore          float64                 `json:"max_score"`
-	MaxCategory       string                  `json:"max_category"`
-	Categories        map[string]float64      `json:"categories"`
-	AppliedTypes      map[string][]string     `json:"applied_types"`
-	UpstreamLatencyMS int                     `json:"upstream_latency_ms"`
-	UsedKeySuffix     string                  `json:"used_key_suffix"`
-	Error             string                  `json:"error,omitempty"`
-	CompletedAt       int64                   `json:"completed_at"`
+	RequestID         string                    `json:"request_id"`
+	Flagged           bool                      `json:"flagged"`
+	MaxScore          float64                   `json:"max_score"`
+	MaxCategory       string                    `json:"max_category"`
+	Categories        map[string]float64        `json:"categories"`
+	AppliedTypes      map[string][]string       `json:"applied_types"`
+	UpstreamLatencyMS int                       `json:"upstream_latency_ms"`
+	UsedKeySuffix     string                    `json:"used_key_suffix"`
+	Error             string                    `json:"error,omitempty"`
+	CompletedAt       int64                     `json:"completed_at"`
 	Decision          *types.ModerationDecision `json:"decision,omitempty"`
 }
 
 type moderationEvent struct {
+	drainDone      func()
+	walPayload     string
 	OccurAt        int64
 	Source         string // "relay" / "debug"
 	UserID         int
@@ -53,19 +56,21 @@ type moderationEvent struct {
 	Group          string
 	RequestID      string
 	TextItems      []string
-	Images         []string // already https URL or data URI
-	Done           chan *ModerationResult
+	Images         []string               // already https URL or data URI
+	Done           chan *ModerationResult `json:"-"`
 }
 
 type moderationCenter struct {
-	started     atomic.Bool
-	mu          sync.Mutex
-	queue       chan *moderationEvent
-	keyRing     *ModerationKeyRing
-	dropCount   atomic.Int64
-	httpClient  *http.Client
-	debugStore  sync.Map // requestID -> *moderationDebugEntry
-	workerState sync.Map // workerID -> *moderationWorkerState
+	started    atomic.Bool
+	mu         sync.Mutex
+	queue      chan *moderationEvent
+	keyRing    *ModerationKeyRing
+	dropCount  atomic.Int64
+	httpClient *http.Client
+	// appliedConfig 为最近一次应用到 keyRing/httpClient 的配置指纹，用于追上其他实例保存的配置。
+	appliedConfig string
+	debugStore    sync.Map // requestID -> *moderationDebugEntry
+	workerState   sync.Map // workerID -> *moderationWorkerState
 	// redisQueue is a write-ahead log used so events survive process
 	// restart in multi-instance deployments. Pure best-effort — Redis
 	// outages never block the relay path; the in-memory channel remains
@@ -135,6 +140,7 @@ func (m *moderationCenter) start() {
 		},
 	}
 	m.keyRing = NewModerationKeyRing(cfg.APIKeys)
+	m.appliedConfig = moderationConfigFingerprint(cfg)
 	if cfg.RedisQueueEnabled {
 		m.redisQueue = newModerationRedisQueue(cfg.EventQueueSize)
 		if m.redisQueue != nil {
@@ -146,6 +152,13 @@ func (m *moderationCenter) start() {
 	}
 	if err := ReloadModerationRules(); err != nil {
 		common.SysError("moderation reload rules failed: " + err.Error())
+	}
+	// WAL recovery precedes workers; account for each restored queued event.
+	for n := len(m.queue); n > 0; n-- {
+		event := <-m.queue
+		gopool.Add()
+		event.drainDone = gopool.Done
+		m.queue <- event
 	}
 	if common.IsMasterNode {
 		if err := SeedDefaultModerationRules(); err != nil {
@@ -163,19 +176,36 @@ func (m *moderationCenter) start() {
 	}
 	if common.IsMasterNode {
 		go m.runRetentionLoop()
-		go m.runDebugSweeper()
 	}
+	go m.runDebugSweeper()
 	m.started.Store(true)
 }
 
 func (m *moderationCenter) applyConfig(cfg *operation_setting.ModerationSetting) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.appliedConfig = moderationConfigFingerprint(cfg)
 	if m.keyRing != nil {
 		m.keyRing.Reset(cfg.APIKeys)
 	}
 	if m.httpClient != nil {
-		m.httpClient.Timeout = time.Duration(cfg.HTTPTimeoutMS) * time.Millisecond
+		client := *m.httpClient
+		client.Timeout = time.Duration(cfg.HTTPTimeoutMS) * time.Millisecond
+		m.httpClient = &client
+	}
+}
+
+// reconcileConfig 在当前配置与已应用配置不一致时重新应用；未启动时不做任何事。
+func (m *moderationCenter) reconcileConfig() {
+	if !m.started.Load() {
+		return
+	}
+	cfg := operation_setting.GetModerationSetting()
+	m.mu.Lock()
+	changed := m.appliedConfig != moderationConfigFingerprint(cfg)
+	m.mu.Unlock()
+	if changed {
+		m.applyConfig(cfg)
 	}
 }
 
@@ -207,7 +237,7 @@ func EnqueueModerationFromRelay(c *gin.Context, info *relaycommon.RelayInfo, _ *
 	if info == nil {
 		return
 	}
-	if relayErr != nil && info.SendResponseCount == 0 {
+	if relayErr != nil && !info.ClientReceivedOutput(c) {
 		return
 	}
 	cfg := operation_setting.GetModerationSetting()
@@ -357,14 +387,14 @@ func extractModerationPayload(meta *types.TokenCountMeta) (string, []string) {
 //
 // group selects the group context for rule evaluation:
 //   - non-empty:  evaluate against that group's bound rules (mirrors how the
-//                 production relay path would judge the same input). The
-//                 group does NOT need to be inside ModerationSetting
-//                 .EnabledGroups — debug bypasses the whitelist gate so
-//                 admins can rehearse before flipping it on.
+//     production relay path would judge the same input). The
+//     group does NOT need to be inside ModerationSetting
+//     .EnabledGroups — debug bypasses the whitelist gate so
+//     admins can rehearse before flipping it on.
 //   - empty:      fall back to the legacy preview behavior, which scans
-//                 every enabled rule regardless of group bindings — useful
-//                 for "would any rule have fired?" rehearsals before any
-//                 group is bound.
+//     every enabled rule regardless of group bindings — useful
+//     for "would any rule have fired?" rehearsals before any
+//     group is bound.
 func SubmitModerationDebug(text string, images []string, group string) (string, error) {
 	cfg := operation_setting.GetModerationSetting()
 	if !cfg.Enabled {
@@ -417,6 +447,10 @@ func GetModerationDebugResult(requestID string) (*ModerationResult, bool) {
 	if !ok || entry == nil {
 		return nil, false
 	}
+	if entry.ExpiresAt <= time.Now().Unix() {
+		globalModerationCenter.debugStore.CompareAndDelete(requestID, entry)
+		return nil, false
+	}
 	return entry.Result, true
 }
 
@@ -442,9 +476,14 @@ func (m *moderationCenter) enqueue(event *moderationEvent) {
 	if event == nil || m.queue == nil {
 		return
 	}
+	gopool.Add()
+	event.drainDone = gopool.Done
 	if m.redisQueue != nil {
-		if payload, err := common.Marshal(event); err == nil {
-			if err := m.redisQueue.enqueue(string(payload)); err != nil {
+		if payload, err := common.Marshal(event); err != nil {
+			common.SysError("moderation event serialization failed: " + err.Error())
+		} else {
+			event.walPayload = string(payload)
+			if err := m.redisQueue.enqueue(event.walPayload); err != nil {
 				common.SysError("moderation redis enqueue failed: " + err.Error())
 			}
 		}
@@ -458,13 +497,15 @@ func (m *moderationCenter) enqueue(event *moderationEvent) {
 	// rare but possible race where another worker drains the queue
 	// between our two attempts.
 	select {
-	case <-m.queue:
+	case old := <-m.queue:
+		m.completeEvent(old)
 		m.dropCount.Add(1)
 	default:
 	}
 	select {
 	case m.queue <- event:
 	default:
+		m.completeEvent(event)
 		m.dropCount.Add(1)
 	}
 	if m.dropCount.Load()%100 == 1 {
@@ -478,12 +519,15 @@ func (m *moderationCenter) enqueueDirect(event *moderationEvent) error {
 	if event == nil || m.queue == nil {
 		return errors.New("moderation center not started")
 	}
+	gopool.Add()
+	event.drainDone = gopool.Done
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
 	case m.queue <- event:
 		return nil
 	case <-timer.C:
+		event.drainDone()
 		return errors.New("moderation queue is full, please retry")
 	}
 }
@@ -496,15 +540,22 @@ func (m *moderationCenter) runWorker(workerID int) {
 		m.markWorker(workerID, "processing", common.GetTimestamp())
 		result := m.processEvent(event)
 		m.recordResult(event, result)
-		// Acknowledge the Redis write-ahead log entry. Best-effort — a
-		// stale entry just gets retried on next startup, which is the
-		// correct failure mode.
-		if m.redisQueue != nil {
-			if payload, err := common.Marshal(event); err == nil {
-				_ = m.redisQueue.complete(string(payload))
-			}
-		}
 		m.markWorker(workerID, "idle", common.GetTimestamp())
+		m.completeEvent(event)
+	}
+}
+
+func (m *moderationCenter) completeEvent(event *moderationEvent) {
+	if event == nil {
+		return
+	}
+	if m.redisQueue != nil && event.walPayload != "" {
+		if err := m.redisQueue.complete(event.walPayload); err != nil {
+			common.SysError("moderation redis completion failed: " + err.Error())
+		}
+	}
+	if event.drainDone != nil {
+		event.drainDone()
 	}
 }
 
@@ -649,11 +700,12 @@ func (m *moderationCenter) recordResult(event *moderationEvent, result *Moderati
 	if err := model.CreateModerationIncident(incident); err != nil {
 		common.SysError("moderation create incident failed: " + err.Error())
 	}
-	// Forward to the unified enforcement layer once the rule decision is
-	// not allow. Debug events stay local — they are admin-driven and
+	// Forward to the unified enforcement layer only for block decisions;
+	// observe/flag hits are recorded as incidents but never count toward
+	// auto-ban. Debug events stay local — they are admin-driven and
 	// shouldn't bump production counters or send users emails.
 	if event.Source != "debug" && event.UserID > 0 && event.Group != "" &&
-		decision != ModerationDecisionAllow {
+		decision == ModerationDecisionBlock {
 		EnforcementHit(event.UserID, event.Group, operation_setting.EnforcementSourceModeration,
 			"moderation_"+decision)
 	}
@@ -716,10 +768,10 @@ func buildModerationInputSummary(event *moderationEvent, fullText bool) string {
 func (m *moderationCenter) processEvent(event *moderationEvent) *ModerationResult {
 	cfg := operation_setting.GetModerationSetting()
 	result := &ModerationResult{
-		RequestID:   event.RequestID,
-		Categories:  map[string]float64{},
+		RequestID:    event.RequestID,
+		Categories:   map[string]float64{},
 		AppliedTypes: map[string][]string{},
-		CompletedAt: time.Now().Unix(),
+		CompletedAt:  time.Now().Unix(),
 	}
 	if m.keyRing == nil || m.keyRing.Size() == 0 {
 		result.Error = "no api key configured"
@@ -731,7 +783,7 @@ func (m *moderationCenter) processEvent(event *moderationEvent) *ModerationResul
 		return result
 	}
 	maxAttempts := cfg.MaxRetries + 1
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		key, idx, ok := m.keyRing.NextKey()
 		if !ok {
 			result.Error = "all api keys are cooling down"
@@ -794,10 +846,13 @@ func (m *moderationCenter) callOpenAI(baseURL, key string, body []byte) (*http.R
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
+	m.mu.Lock()
 	if m.httpClient == nil {
 		m.httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
-	return m.httpClient.Do(req)
+	client := m.httpClient
+	m.mu.Unlock()
+	return client.Do(req)
 }
 
 func parseRetryAfter(h string) time.Duration {
@@ -915,9 +970,7 @@ func parseModerationResponse(body io.Reader, out *ModerationResult) error {
 				maxCategory = cat
 			}
 		}
-		for cat, types_ := range result.CategoryAppliedInputTypes {
-			out.AppliedTypes[cat] = types_
-		}
+		maps.Copy(out.AppliedTypes, result.CategoryAppliedInputTypes)
 	}
 	out.Flagged = flagged
 	out.MaxScore = maxScore
@@ -944,15 +997,18 @@ func (m *moderationCenter) runDebugSweeper() {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
-		now := time.Now().Unix()
-		m.debugStore.Range(func(key, value any) bool {
-			entry, ok := value.(*moderationDebugEntry)
-			if !ok || entry == nil || entry.ExpiresAt <= now {
-				m.debugStore.Delete(key)
-			}
-			return true
-		})
+		m.sweepDebugResults(time.Now().Unix())
 	}
+}
+
+func (m *moderationCenter) sweepDebugResults(now int64) {
+	m.debugStore.Range(func(key, value any) bool {
+		entry, ok := value.(*moderationDebugEntry)
+		if !ok || entry == nil || entry.ExpiresAt <= now {
+			m.debugStore.CompareAndDelete(key, value)
+		}
+		return true
+	})
 }
 
 // ModerationOverview powers the admin overview card in the new tab.

@@ -1,6 +1,6 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 // 额度展示类型
 const (
@@ -38,34 +38,36 @@ func init() {
 }
 
 func GetGeneralSetting() *GeneralSetting {
-	return &generalSetting
+	setting := config.MustSnapshot[GeneralSetting]("general_setting")
+	return &setting
 }
 
 // IsCurrencyDisplay 是否以货币形式展示（美元或人民币）
 func IsCurrencyDisplay() bool {
-	return generalSetting.QuotaDisplayType != QuotaDisplayTypeTokens
+	return GetGeneralSetting().QuotaDisplayType != QuotaDisplayTypeTokens
 }
 
 // IsCNYDisplay 是否以人民币展示
 func IsCNYDisplay() bool {
-	return generalSetting.QuotaDisplayType == QuotaDisplayTypeCNY
+	return GetGeneralSetting().QuotaDisplayType == QuotaDisplayTypeCNY
 }
 
 // GetQuotaDisplayType 返回额度展示类型
 func GetQuotaDisplayType() string {
-	return generalSetting.QuotaDisplayType
+	return GetGeneralSetting().QuotaDisplayType
 }
 
 // GetCurrencySymbol 返回当前展示类型对应符号
 func GetCurrencySymbol() string {
-	switch generalSetting.QuotaDisplayType {
+	setting := GetGeneralSetting()
+	switch setting.QuotaDisplayType {
 	case QuotaDisplayTypeUSD:
 		return "$"
 	case QuotaDisplayTypeCNY:
 		return "¥"
 	case QuotaDisplayTypeCustom:
-		if generalSetting.CustomCurrencySymbol != "" {
-			return generalSetting.CustomCurrencySymbol
+		if setting.CustomCurrencySymbol != "" {
+			return setting.CustomCurrencySymbol
 		}
 		return "¤"
 	default:
@@ -75,14 +77,15 @@ func GetCurrencySymbol() string {
 
 // GetUsdToCurrencyRate 返回 1 USD = X <currency> 的 X（TOKENS 不适用）
 func GetUsdToCurrencyRate(usdToCny float64) float64 {
-	switch generalSetting.QuotaDisplayType {
+	setting := GetGeneralSetting()
+	switch setting.QuotaDisplayType {
 	case QuotaDisplayTypeUSD:
 		return 1
 	case QuotaDisplayTypeCNY:
 		return usdToCny
 	case QuotaDisplayTypeCustom:
-		if generalSetting.CustomCurrencyExchangeRate > 0 {
-			return generalSetting.CustomCurrencyExchangeRate
+		if setting.CustomCurrencyExchangeRate > 0 {
+			return setting.CustomCurrencyExchangeRate
 		}
 		return 1
 	default:

@@ -8,18 +8,18 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/claude"
-	"github.com/QuantumNous/new-api/relay/channel/gemini"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/claude"
+	"eflow.local/new-api/relay/channel/gemini"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/setting/reasoning"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -57,15 +57,17 @@ type Adaptor struct {
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
-	// Vertex AI does not support functionResponse.id; keep it stripped here for consistency.
+	// Vertex AI's generateContent schema does not expose the Gemini API's
+	// function-call identity fields. Strip both sides at this provider boundary.
 	if model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
-		removeFunctionResponseID(request)
+		removeFunctionCallIDs(request)
 	}
 	geminiAdaptor := gemini.Adaptor{}
 	return geminiAdaptor.ConvertGeminiRequest(c, info, request)
 }
 
-func removeFunctionResponseID(request *dto.GeminiChatRequest) {
+// removeFunctionCallIDs eflow: 同时去掉 functionCall.id 与 functionResponse.id（上游 0ed497f06）。
+func removeFunctionCallIDs(request *dto.GeminiChatRequest) {
 	if request == nil {
 		return
 	}
@@ -77,10 +79,10 @@ func removeFunctionResponseID(request *dto.GeminiChatRequest) {
 			}
 			for j := range request.Contents[i].Parts {
 				part := &request.Contents[i].Parts[j]
-				if part.FunctionResponse == nil {
-					continue
+				if part.FunctionCall != nil {
+					part.FunctionCall.ID = ""
 				}
-				if len(part.FunctionResponse.ID) > 0 {
+				if part.FunctionResponse != nil && len(part.FunctionResponse.ID) > 0 {
 					part.FunctionResponse.ID = nil
 				}
 			}
@@ -89,7 +91,7 @@ func removeFunctionResponseID(request *dto.GeminiChatRequest) {
 
 	if len(request.Requests) > 0 {
 		for i := range request.Requests {
-			removeFunctionResponseID(&request.Requests[i])
+			removeFunctionCallIDs(&request.Requests[i])
 		}
 	}
 }
@@ -149,17 +151,20 @@ func (a *Adaptor) getRequestUrl(info *relaycommon.RelayInfo, modelName, suffix s
 		} else {
 			keyPrefix = "?"
 		}
+		// An API key carries no project. Without a configured project ID the URL
+		// keeps the express-mode form, which has no region in its path.
+		projectID := strings.TrimSpace(info.ChannelOtherSettings.VertexProjectID)
 		if a.RequestMode == RequestModeGemini {
 			return fmt.Sprintf(
 				"%s%skey=%s",
-				BuildGoogleModelURL(info.ChannelBaseUrl, DefaultAPIVersion, "", region, modelName, suffix),
+				BuildGoogleModelURL(info.ChannelBaseUrl, DefaultAPIVersion, projectID, region, modelName, suffix),
 				keyPrefix,
 				info.ApiKey,
 			), nil
 		} else if a.RequestMode == RequestModeClaude {
 			return fmt.Sprintf(
 				"%s%skey=%s",
-				BuildAnthropicModelURL(info.ChannelBaseUrl, DefaultAPIVersion, "", region, modelName, suffix),
+				BuildAnthropicModelURL(info.ChannelBaseUrl, DefaultAPIVersion, projectID, region, modelName, suffix),
 				keyPrefix,
 				info.ApiKey,
 			), nil
@@ -177,10 +182,10 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 			if strings.Contains(info.UpstreamModelName, "-thinking-") {
 				parts := strings.Split(info.UpstreamModelName, "-thinking-")
 				info.UpstreamModelName = parts[0]
-			} else if strings.HasSuffix(info.UpstreamModelName, "-thinking") { // 旧的适配
-				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-thinking")
-			} else if strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
-				info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-nothinking")
+			} else if before, ok := strings.CutSuffix(info.UpstreamModelName, "-thinking"); ok { // 旧的适配
+				info.UpstreamModelName = before
+			} else if before, ok := strings.CutSuffix(info.UpstreamModelName, "-nothinking"); ok {
+				info.UpstreamModelName = before
 			} else if baseModel, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
 				info.UpstreamModelName = baseModel
 			}
@@ -302,6 +307,9 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		geminiRequest, err := service.ConvertOpenAIRequestToGemini(c, info, request)
 		if err != nil {
 			return nil, err
+		}
+		if model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
+			removeFunctionCallIDs(geminiRequest)
 		}
 		c.Set("request_model", request.Model)
 		return geminiRequest, nil

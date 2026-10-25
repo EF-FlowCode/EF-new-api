@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
 import { Plus, Shield, Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { cn } from '@/lib/utils'
 import {
   createEmptyRiskControlHeaderRule,
   normalizeRiskControlHeaderRule,
@@ -40,7 +40,8 @@ export function RiskControlHeadersEditor({ value, onChange }: Props) {
   const { t } = useTranslation()
 
   const rules = useMemo<RiskControlHeaderRule[]>(
-    () => (Array.isArray(value) ? value.map(normalizeRiskControlHeaderRule) : []),
+    () =>
+      Array.isArray(value) ? value.map(normalizeRiskControlHeaderRule) : [],
     [value]
   )
 

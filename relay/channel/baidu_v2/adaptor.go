@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -79,8 +79,8 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
-	if strings.HasSuffix(info.UpstreamModelName, "-search") {
-		info.UpstreamModelName = strings.TrimSuffix(info.UpstreamModelName, "-search")
+	if before, ok := strings.CutSuffix(info.UpstreamModelName, "-search"); ok {
+		info.UpstreamModelName = before
 		request.Model = info.UpstreamModelName
 		if len(request.WebSearch) == 0 {
 			toMap := request.ToMap()

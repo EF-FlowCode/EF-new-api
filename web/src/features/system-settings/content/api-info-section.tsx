@@ -145,9 +145,8 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
         value: checked,
       })
       setIsEnabled(checked)
-      toast.success(t('Setting saved'))
     } catch {
-      toast.error(t('Failed to update setting'))
+      // useUpdateOption owns the error notification.
     }
   }
 
@@ -235,9 +234,8 @@ export function ApiInfoSection({ enabled, data }: ApiInfoSectionProps) {
         value: JSON.stringify(apiInfoList),
       })
       setHasChanges(false)
-      toast.success(t('API info saved successfully'))
     } catch {
-      toast.error(t('Failed to save API info'))
+      // useUpdateOption owns the error notification.
     }
   }
 

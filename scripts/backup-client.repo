@@ -1,0 +1,7 @@
+[mysql84-full-client]
+name=MySQL 8.4 full client
+enabled=1
+baseurl=https://repo.mysql.com/yum/mysql-8.4-community/el/9/$basearch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-mysql
+module_hotfixes=true

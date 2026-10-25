@@ -20,7 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { testDeploymentConnectionWithKey } from '@/features/models/api'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const schema = z.object({
   enabled: z.boolean(),
@@ -39,7 +39,7 @@ export function IoNetDeploymentSettingsSection({
   }
 }) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm<Values>({
     resolver: zodResolver(schema),
@@ -80,9 +80,7 @@ export function IoNetDeploymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await updateOptions.mutateAsync(updates)
 
     form.reset(values)
   }
@@ -138,7 +136,7 @@ export function IoNetDeploymentSettingsSection({
                   <Switch
                     checked={field.value}
                     onCheckedChange={(v) => field.onChange(v)}
-                    disabled={updateOption.isPending || isSubmitting}
+                    disabled={updateOptions.isPending || isSubmitting}
                   />
                 </FormControl>
               </FormItem>
@@ -166,7 +164,7 @@ export function IoNetDeploymentSettingsSection({
                         type='button'
                         variant='secondary'
                         onClick={handleTestConnection}
-                        disabled={testState.loading || updateOption.isPending}
+                        disabled={testState.loading || updateOptions.isPending}
                         className='shrink-0'
                       >
                         {testState.loading ? (
@@ -238,9 +236,9 @@ export function IoNetDeploymentSettingsSection({
 
           <Button
             type='submit'
-            disabled={!isDirty || updateOption.isPending || isSubmitting}
+            disabled={!isDirty || updateOptions.isPending || isSubmitting}
           >
-            {updateOption.isPending || isSubmitting
+            {updateOptions.isPending || isSubmitting
               ? t('Saving...')
               : t('Save io.net settings')}
           </Button>

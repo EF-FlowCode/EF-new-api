@@ -7,15 +7,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/claude"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/claude"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/setting/reasoning"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -93,10 +94,19 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 	return request, nil
 }
 
+// preserveDeepSeekThinkingSuffix eflow: 命中"保留思考后缀"名单的模型名原样发给上游（上游 6b659fd61）。
+func preserveDeepSeekThinkingSuffix(info *relaycommon.RelayInfo, modelName string) bool {
+	return model_setting.ShouldPreserveThinkingSuffix(modelName) ||
+		info != nil && model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName)
+}
+
 func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) error {
 	modelName := request.Model
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
+	}
+	if preserveDeepSeekThinkingSuffix(info, modelName) {
+		return nil
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
 	if !ok {
@@ -124,6 +134,9 @@ func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	modelName := request.Model
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
+	}
+	if preserveDeepSeekThinkingSuffix(info, modelName) {
+		return nil
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
 	if !ok {
@@ -169,6 +182,9 @@ func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request
 	modelName := request.Model
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
+	}
+	if preserveDeepSeekThinkingSuffix(info, modelName) {
+		return
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
 	if ok {

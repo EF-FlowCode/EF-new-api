@@ -4,17 +4,20 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/pkg/requestip"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/pkg/requestip"
+	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 )
 
 var timeFormat = "2006-01-02T15:04:05.000Z"
 
-var inMemoryRateLimiter common.InMemoryRateLimiter
+var inMemoryRateLimiter = &common.InMemoryRateLimiter{}
 
 var redisWindowLimitScript = redis.NewScript(`
 local key = KEYS[1]
@@ -44,10 +47,19 @@ func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark st
 func memoryRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark string) {
 	key := mark + requestip.GetClientIP(c)
 	if !inMemoryRateLimiter.Request(key, maxRequestNum, duration) {
-		c.Status(http.StatusTooManyRequests)
-		c.Abort()
+		writeRateLimited(c, duration)
 		return
 	}
+}
+
+// writeRateLimited rejects the request with a retry hint so clients can back
+// off instead of treating a temporary limit as a terminal failure.
+func writeRateLimited(c *gin.Context, retryAfterSeconds int64) {
+	if retryAfterSeconds > 0 {
+		c.Header("Retry-After", strconv.FormatInt(retryAfterSeconds, 10))
+	}
+	c.Status(http.StatusTooManyRequests)
+	c.Abort()
 }
 
 func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gin.Context) {
@@ -64,11 +76,26 @@ func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gi
 	}
 }
 
-func GlobalWebRateLimit() func(c *gin.Context) {
+// GlobalWebRateLimit limits dashboard pages and other fallback paths per IP.
+// Files that exist in the frontend build count against a separate static
+// limiter (disabled by default) instead, so lazy-loaded chunks and icons of one
+// cold page load do not use up the page budget of everyone behind the same IP.
+func GlobalWebRateLimit(frontendFS static.ServeFileSystem) func(c *gin.Context) {
+	webLimit := defNext
 	if common.GlobalWebRateLimitEnable {
-		return rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
+		webLimit = rateLimitFactory(common.GlobalWebRateLimitNum, common.GlobalWebRateLimitDuration, "GW")
 	}
-	return defNext
+	staticLimit := defNext
+	if common.GlobalStaticRateLimitEnable {
+		staticLimit = rateLimitFactory(common.GlobalStaticRateLimitNum, common.GlobalStaticRateLimitDuration, "GS")
+	}
+	return func(c *gin.Context) {
+		if frontendFS != nil && frontendFS.Exists("/", c.Request.URL.Path) {
+			staticLimit(c)
+			return
+		}
+		webLimit(c)
+	}
 }
 
 func GlobalAPIRateLimit() func(c *gin.Context) {
@@ -83,6 +110,20 @@ func CriticalRateLimit() func(c *gin.Context) {
 		return rateLimitFactory(common.CriticalRateLimitNum, common.CriticalRateLimitDuration, "CT")
 	}
 	return defNext
+}
+
+// UserCriticalRateLimit applies the critical limit per authenticated user.
+// It is intended for sensitive self-service actions where an IP-based bucket
+// can be bypassed by rotating proxy addresses.
+func UserCriticalRateLimit(scope string) func(c *gin.Context) {
+	if !common.CriticalRateLimitEnable {
+		return defNext
+	}
+	return userRateLimitFactory(
+		common.CriticalRateLimitNum,
+		common.CriticalRateLimitDuration,
+		"UC:"+scope,
+	)
 }
 
 func DownloadRateLimit() func(c *gin.Context) {
@@ -120,8 +161,7 @@ func userRateLimitFactory(maxRequestNum int, duration int64, mark string) func(c
 		}
 		key := fmt.Sprintf("%s:user:%d", mark, userId)
 		if !inMemoryRateLimiter.Request(key, maxRequestNum, duration) {
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
+			writeRateLimited(c, duration)
 			return
 		}
 	}
@@ -138,6 +178,15 @@ func redisWindowRateLimiter(c *gin.Context, maxRequestNum int, duration int64, k
 		return
 	}
 	ctx := context.Background()
+	if c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	if common.RDB == nil {
+		logger.LogError(ctx, fmt.Sprintf("rate limit check failed (key=%s): Redis client is not initialized", key))
+		c.Status(http.StatusInternalServerError)
+		c.Abort()
+		return
+	}
 	now := time.Now()
 	allowed, err := redisWindowLimitScript.Run(
 		ctx,
@@ -148,14 +197,19 @@ func redisWindowRateLimiter(c *gin.Context, maxRequestNum int, duration int64, k
 		maxRequestNum,
 	).Int()
 	if err != nil {
-		fmt.Println(err.Error())
+		logger.LogError(ctx, fmt.Sprintf("rate limit check failed (key=%s): %v", key, err))
 		c.Status(http.StatusInternalServerError)
 		c.Abort()
 		return
 	}
 	if allowed != 1 {
-		c.Status(http.StatusTooManyRequests)
-		c.Abort()
+		retryAfter := duration
+		if ttl, ttlErr := common.RDB.PTTL(ctx, key).Result(); ttlErr == nil {
+			if ttl >= 0 {
+				retryAfter = max(int64((ttl+time.Second-1)/time.Second), 1)
+			}
+		}
+		writeRateLimited(c, retryAfter)
 	}
 }
 
@@ -175,4 +229,14 @@ func SearchRateLimitWithMark(mark string) func(c *gin.Context) {
 		return defNext
 	}
 	return userRateLimitFactory(common.SearchRateLimitNum, common.SearchRateLimitDuration, mark)
+}
+
+// TaskQueryRateLimit bounds per-user task status/result polling with its own
+// generous bucket. It must run after token authentication and never feeds the
+// model request/success counters, so polling cannot starve normal relays.
+func TaskQueryRateLimit() func(c *gin.Context) {
+	if !common.TaskQueryRateLimitEnable {
+		return defNext
+	}
+	return userRateLimitFactory(common.TaskQueryRateLimitNum, common.TaskQueryRateLimitDuration, "TQ")
 }

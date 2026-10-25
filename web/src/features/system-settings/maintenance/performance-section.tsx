@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import dayjs from '@/lib/dayjs'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -28,21 +28,13 @@ import {
   FormLabel,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { StatusBadge } from '@/components/status-badge'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const perfSchema = z.object({
   'performance_setting.disk_cache_enabled': z.boolean(),
@@ -122,12 +114,9 @@ type PerformanceStats = {
 
 export function PerformanceSection(props: Props) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const [stats, setStats] = useState<PerformanceStats | null>(null)
   const [logInfo, setLogInfo] = useState<LogInfo | null>(null)
-  const [logCleanupMode, setLogCleanupMode] = useState('by_count')
-  const [logCleanupValue, setLogCleanupValue] = useState(10)
-  const [logCleanupLoading, setLogCleanupLoading] = useState(false)
 
   const form = useForm<PerfFormValues>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -140,7 +129,10 @@ export function PerformanceSection(props: Props) {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await api.get('/api/performance/stats')
+      const res = await api.get(
+        '/api/performance/stats',
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data.success) setStats(res.data.data)
     } catch {
       /* ignore */
@@ -149,7 +141,10 @@ export function PerformanceSection(props: Props) {
 
   const fetchLogInfo = useCallback(async () => {
     try {
-      const res = await api.get('/api/performance/logs')
+      const res = await api.get(
+        '/api/performance/logs',
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data.success) setLogInfo(res.data.data)
     } catch {
       /* ignore */
@@ -171,22 +166,26 @@ export function PerformanceSection(props: Props) {
       toast.info(t('No changes to save'))
       return
     }
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({
         key,
         value: value as string | number | boolean,
-      })
-    }
-    toast.success(t('Saved successfully'))
+      }))
+    )
     fetchStats()
   }
 
   const clearDiskCache = async () => {
     try {
-      const res = await api.delete('/api/performance/disk_cache')
+      const res = await api.delete(
+        '/api/performance/disk_cache',
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data.success) {
         toast.success(t('Disk cache cleared'))
         fetchStats()
+      } else {
+        toast.error(res.data.message || t('Cleanup failed'))
       }
     } catch {
       toast.error(t('Cleanup failed'))
@@ -195,10 +194,16 @@ export function PerformanceSection(props: Props) {
 
   const resetStats = async () => {
     try {
-      const res = await api.post('/api/performance/reset_stats')
+      const res = await api.post(
+        '/api/performance/reset_stats',
+        undefined,
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data.success) {
         toast.success(t('Statistics reset'))
         fetchStats()
+      } else {
+        toast.error(res.data.message || t('Reset failed'))
       }
     } catch {
       toast.error(t('Reset failed'))
@@ -207,42 +212,19 @@ export function PerformanceSection(props: Props) {
 
   const forceGC = async () => {
     try {
-      const res = await api.post('/api/performance/gc')
+      const res = await api.post(
+        '/api/performance/gc',
+        undefined,
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data.success) {
         toast.success(t('GC executed'))
         fetchStats()
+      } else {
+        toast.error(res.data.message || t('GC execution failed'))
       }
     } catch {
       toast.error(t('GC execution failed'))
-    }
-  }
-
-  const cleanupLogFiles = async () => {
-    if (!logCleanupValue || isNaN(logCleanupValue) || logCleanupValue < 1) {
-      toast.error(t('Please enter a valid number'))
-      return
-    }
-    setLogCleanupLoading(true)
-    try {
-      const res = await api.delete(
-        `/api/performance/logs?mode=${logCleanupMode}&value=${logCleanupValue}`
-      )
-      if (res.data.success) {
-        const { deleted_count, freed_bytes } = res.data.data
-        toast.success(
-          t('Cleaned up {{count}} log files, freed {{size}}', {
-            count: deleted_count,
-            size: formatBytes(freed_bytes),
-          })
-        )
-      } else {
-        toast.error(res.data.message || t('Cleanup failed'))
-      }
-      fetchLogInfo()
-    } catch {
-      toast.error(t('Cleanup failed'))
-    } finally {
-      setLogCleanupLoading(false)
     }
   }
 
@@ -452,8 +434,8 @@ export function PerformanceSection(props: Props) {
             />
           </div>
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>
@@ -466,7 +448,7 @@ export function PerformanceSection(props: Props) {
           <h4 className='font-medium'>{t('Server Log Management')}</h4>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t(
-              'Manage server log files. Log files accumulate over time; regular cleanup is recommended to free disk space.'
+              'Server log files are kept permanently for auditing and cannot be deleted from the console.'
             )}
           </p>
         </div>
@@ -503,84 +485,6 @@ export function PerformanceSection(props: Props) {
                   </div>
                 )}
               </div>
-            </div>
-
-            <div className='flex flex-wrap items-end gap-3'>
-              <div className='grid gap-1.5'>
-                <Label className='text-xs'>{t('Cleanup Mode')}</Label>
-                <Select
-                  value={logCleanupMode}
-                  onValueChange={setLogCleanupMode}
-                >
-                  <SelectTrigger className='w-[160px]'>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='by_count'>
-                      {t('Retain last N files')}
-                    </SelectItem>
-                    <SelectItem value='by_days'>
-                      {t('Retain last N days')}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className='grid gap-1.5'>
-                <Label className='text-xs'>
-                  {logCleanupMode === 'by_count'
-                    ? t('Files to Retain')
-                    : t('Days to Retain')}
-                </Label>
-                <Input
-                  type='number'
-                  min={1}
-                  max={logCleanupMode === 'by_count' ? 1000 : 3650}
-                  value={logCleanupValue}
-                  onChange={(e) => setLogCleanupValue(Number(e.target.value))}
-                  className='w-[120px]'
-                />
-              </div>
-              <AlertDialog>
-                <AlertDialogTrigger asChild>
-                  <Button
-                    variant='destructive'
-                    size='sm'
-                    disabled={logCleanupLoading}
-                  >
-                    {logCleanupLoading
-                      ? t('Cleaning...')
-                      : t('Clean Up Log Files')}
-                  </Button>
-                </AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>
-                      {t('Confirm log file cleanup?')}
-                    </AlertDialogTitle>
-                    <AlertDialogDescription>
-                      {logCleanupMode === 'by_count'
-                        ? t(
-                            'Only the last {{value}} log files will be retained; the rest will be deleted.',
-                            {
-                              value: logCleanupValue,
-                            }
-                          )
-                        : t(
-                            'Log files older than {{value}} days will be deleted.',
-                            {
-                              value: logCleanupValue,
-                            }
-                          )}
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-                    <AlertDialogAction onClick={cleanupLogFiles}>
-                      {t('Confirm Cleanup')}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
             </div>
           </div>
         ) : (

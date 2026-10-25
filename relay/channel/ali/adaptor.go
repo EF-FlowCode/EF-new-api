@@ -7,16 +7,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/claude"
-	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	"eflow.local/new-api/relay/channel/claude"
+	"eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -102,25 +102,28 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		case constant.RelayModeEmbeddings:
 			// 多模态 embedding 只能走 dashscope native endpoint，
 			// OpenAI compatible mode 一律返回 model_not_supported（见 tmp/test_bailian_embed_rerank.py 实测）。
-			if isMultimodalEmbeddingModel(info.OriginModelName) {
+			if isMultimodalEmbeddingModel(embeddingModelName(info)) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/compatible-mode/v1/embeddings", info.ChannelBaseUrl)
 			}
 		case constant.RelayModeRerank:
 			fullRequestURL = fmt.Sprintf("%s/api/v1/services/rerank/text-rerank/text-rerank", info.ChannelBaseUrl)
+			if info.UpstreamModelName == "qwen3-rerank" {
+				fullRequestURL = fmt.Sprintf("%s/compatible-api/v1/reranks", info.ChannelBaseUrl)
+			}
 		case constant.RelayModeResponses:
 			fullRequestURL = fmt.Sprintf("%s/api/v2/apps/protocols/compatible-mode/v1/responses", info.ChannelBaseUrl)
 		case constant.RelayModeImagesGenerations:
-			if isSyncImageModel(info.OriginModelName) {
+			if isSyncImageModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/text2image/image-synthesis", info.ChannelBaseUrl)
 			}
 		case constant.RelayModeImagesEdits:
-			if isOldWanModel(info.OriginModelName) {
+			if isOldWanModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image2image/image-synthesis", info.ChannelBaseUrl)
-			} else if isWanModel(info.OriginModelName) {
+			} else if isWanModel(info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/image-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
@@ -145,14 +148,14 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("X-DashScope-Plugin", c.GetString("plugin"))
 	}
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
 
 		} else {
 			req.Set("X-DashScope-Async", "enable")
 		}
 	}
 	if info.RelayMode == constant.RelayModeImagesEdits {
-		if isWanModel(info.OriginModelName) {
+		if isWanModel(info.UpstreamModelName) {
 			req.Set("X-DashScope-Async", "enable")
 		}
 		req.Set("Content-Type", "application/json")
@@ -185,7 +188,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
 			a.IsSyncImageModel = true
 		}
 		aliRequest, err := oaiImage2AliImageRequest(info, request, a.IsSyncImageModel)
@@ -194,11 +197,11 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 		return aliRequest, nil
 	} else if info.RelayMode == constant.RelayModeImagesEdits {
-		if isOldWanModel(info.OriginModelName) {
+		if isOldWanModel(info.UpstreamModelName) {
 			return oaiFormEdit2WanxImageEdit(c, info, request)
 		}
-		if isSyncImageModel(info.OriginModelName) {
-			if isWanModel(info.OriginModelName) {
+		if isSyncImageModel(info.UpstreamModelName) {
+			if isWanModel(info.UpstreamModelName) {
 				a.IsSyncImageModel = false
 			} else {
 				a.IsSyncImageModel = true
@@ -224,11 +227,27 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
+	if err := request.ValidateQuery(); err != nil {
+		return nil, err
+	}
+	if request.Model != "qwen3-vl-rerank" {
+		if _, ok := request.Query.(string); !ok {
+			return nil, errors.New("text rerank requires a string query")
+		}
+		for _, doc := range request.Documents {
+			if _, ok := doc.(string); !ok {
+				return nil, errors.New("text rerank requires string documents")
+			}
+		}
+	}
+	if request.Model == "qwen3-rerank" {
+		return request, nil
+	}
 	return ConvertRerankRequest(request), nil
 }
 
 func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.EmbeddingRequest) (any, error) {
-	if isMultimodalEmbeddingModel(info.OriginModelName) {
+	if isMultimodalEmbeddingModel(embeddingModelName(info)) {
 		return ConvertMultimodalEmbeddingRequest(request)
 	}
 	return request, nil
@@ -266,7 +285,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		case constant.RelayModeRerank:
 			err, usage = RerankHandler(c, resp, info)
 		case constant.RelayModeEmbeddings:
-			if isMultimodalEmbeddingModel(info.OriginModelName) {
+			if isMultimodalEmbeddingModel(embeddingModelName(info)) {
 				err, usage = MultimodalEmbeddingHandler(c, resp, info)
 			} else {
 				adaptor := openai.Adaptor{}

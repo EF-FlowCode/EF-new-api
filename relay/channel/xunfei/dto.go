@@ -1,6 +1,6 @@
 package xunfei
 
-import "github.com/QuantumNous/new-api/dto"
+import "eflow.local/new-api/dto"
 
 type XunfeiMessage struct {
 	Role    string `json:"role"`

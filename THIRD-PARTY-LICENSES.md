@@ -10,6 +10,7 @@ Transitive dependencies should be audited before a final external release.
 
 | Area        | Scope       | Ecosystem | Dependency                                            | Version                              | License                                            |
 |-------------|-------------|-----------|-------------------------------------------------------|--------------------------------------|----------------------------------------------------|
+| backend     | test        | Go        | `github.com/openai/openai-go`                          | `v1.12.0`                            | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/Calcium-Ion/go-epay`                      | `v0.0.4`                             | Proprietary/Internal - owned by project maintainer |
 | backend     | production  | Go        | `github.com/abema/go-mp4`                             | `v1.4.1`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/andybalholm/brotli`                       | `v1.1.1`                             | MIT                                                |
@@ -24,7 +25,6 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/gin-contrib/sessions`                     | `v0.0.5`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/gin-contrib/static`                       | `v0.0.1`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/gin-gonic/gin`                            | `v1.9.1`                             | MIT                                                |
-| backend     | testing     | Go        | `github.com/glebarez/sqlite`                          | `v1.9.0`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/go-audio/aiff`                            | `v1.1.0`                             | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/go-audio/wav`                             | `v1.1.0`                             | Apache-2.0                                         |
 | backend     | production  | Go        | `github.com/go-playground/validator/v10`              | `v10.20.0`                           | MIT                                                |
@@ -34,6 +34,7 @@ Transitive dependencies should be audited before a final external release.
 | backend     | production  | Go        | `github.com/google/uuid`                              | `v1.6.0`                             | BSD-3-Clause                                       |
 | backend     | production  | Go        | `github.com/gorilla/websocket`                        | `v1.5.0`                             | BSD-2-Clause                                       |
 | backend     | production  | Go        | `github.com/grafana/pyroscope-go`                     | `v1.2.7`                             | Apache-2.0                                         |
+| server / plugin CLI | runtime | Go        | `github.com/grafana/sobek`                            | `v0.0.0-20260708062710-267a0e055bb4`   | MIT                                                |
 | backend     | production  | Go        | `github.com/jfreymuth/oggvorbis`                      | `v1.0.5`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/jinzhu/copier`                            | `v0.4.0`                             | MIT                                                |
 | backend     | production  | Go        | `github.com/joho/godotenv`                            | `v1.5.1`                             | MIT                                                |
@@ -74,11 +75,9 @@ Transitive dependencies should be audited before a final external release.
 | web         | production  | npm       | `@tanstack/react-query`                               | `5.97.0`                             | MIT                                                |
 | web         | production  | npm       | `@tanstack/react-router`                              | `1.168.23`                           | MIT                                                |
 | web         | production  | npm       | `@tanstack/react-table`                               | `8.21.3`                             | MIT                                                |
-| web         | production  | npm       | `@tanstack/react-virtual`                             | `3.13.23`                            | MIT                                                |
 | web         | production  | npm       | `@visactor/react-vchart`                              | `2.0.21`                             | MIT                                                |
 | web         | production  | npm       | `@visactor/vchart`                                    | `2.0.21`                             | MIT                                                |
 | web         | production  | npm       | `ai`                                                  | `6.0.158`                            | Apache-2.0                                         |
-| web         | production  | npm       | `auto-skeleton-react`                                 | `1.0.5`                              | MIT                                                |
 | web         | production  | npm       | `axios`                                               | `1.15.0`                             | MIT                                                |
 | web         | production  | npm       | `class-variance-authority`                            | `0.7.1`                              | Apache-2.0                                         |
 | web         | production  | npm       | `clsx`                                                | `2.1.1`                              | MIT                                                |
@@ -105,13 +104,11 @@ Transitive dependencies should be audited before a final external release.
 | web         | production  | npm       | `recharts`                                            | `3.8.0`                              | MIT                                                |
 | web         | production  | npm       | `rehype-raw`                                          | `7.0.0`                              | MIT                                                |
 | web         | production  | npm       | `remark-gfm`                                          | `4.0.1`                              | MIT                                                |
-| web         | production  | npm       | `shiki`                                               | `4.0.2`                              | MIT                                                |
 | web         | production  | npm       | `sonner`                                              | `2.0.7`                              | MIT                                                |
 | web         | production  | npm       | `sse.js`                                              | `2.8.0`                              | Apache-2.0                                         |
 | web         | production  | npm       | `streamdown`                                          | `2.5.0`                              | Apache-2.0                                         |
 | web         | production  | npm       | `tailwind-merge`                                      | `3.5.0`                              | MIT                                                |
 | web         | production  | npm       | `tailwindcss`                                         | `4.2.2`                              | MIT                                                |
-| web         | production  | npm       | `tokenlens`                                           | `1.3.1`                              | MIT                                                |
 | web         | production  | npm       | `tw-animate-css`                                      | `1.4.0`                              | MIT                                                |
 | web         | production  | npm       | `use-stick-to-bottom`                                 | `1.1.3`                              | MIT                                                |
 | web         | production  | npm       | `vaul`                                                | `1.1.2`                              | MIT                                                |
@@ -128,7 +125,6 @@ Transitive dependencies should be audited before a final external release.
 | web         | development | npm       | `@types/node`                                         | `25.6.0`                             | MIT                                                |
 | web         | development | npm       | `@types/react`                                        | `19.2.14`                            | MIT                                                |
 | web         | development | npm       | `@types/react-dom`                                    | `19.2.3`                             | MIT                                                |
-| web         | development | npm       | `@xyflow/react`                                       | `12.10.2`                            | MIT                                                |
 | web         | development | npm       | `embla-carousel-react`                                | `8.6.0`                              | MIT                                                |
 | web         | development | npm       | `eslint`                                              | `10.2.0`                             | MIT                                                |
 | web         | development | npm       | `eslint-plugin-react-hooks`                           | `7.0.1`                              | MIT                                                |

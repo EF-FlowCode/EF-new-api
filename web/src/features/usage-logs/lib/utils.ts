@@ -235,6 +235,15 @@ export function buildApiParams(config: {
   return params
 }
 
+export function getStatsSearchParams(
+  searchParams: Record<string, unknown>
+): Record<string, unknown> {
+  const statsSearchParams = { ...searchParams }
+  delete statsSearchParams.page
+  delete statsSearchParams.pageSize
+  return statsSearchParams
+}
+
 // ============================================================================
 // Data Fetching
 // ============================================================================

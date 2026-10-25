@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { estimateConversationUsage } from '../lib'
 import type { Message as MessageType } from '../types'
 
@@ -21,10 +21,7 @@ export function ContextUsageBar({
   onTrim,
 }: ContextUsageBarProps) {
   const { t } = useTranslation()
-  const usage = useMemo(
-    () => estimateConversationUsage(messages),
-    [messages]
-  )
+  const usage = useMemo(() => estimateConversationUsage(messages), [messages])
 
   if (messages.length === 0) return null
 
@@ -35,9 +32,7 @@ export function ContextUsageBar({
     if (!canTrim) return
     const keepFrom = messages.length - KEEP_RECENT
     // 保留所有 system 提示 + 最近 KEEP_RECENT 条
-    const kept = messages.filter(
-      (m, i) => m.from === 'system' || i >= keepFrom
-    )
+    const kept = messages.filter((m, i) => m.from === 'system' || i >= keepFrom)
     if (
       typeof window !== 'undefined' &&
       !window.confirm(

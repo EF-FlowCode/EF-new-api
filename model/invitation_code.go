@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting"
 	"gorm.io/gorm"
 )
 
@@ -104,7 +104,7 @@ func GetUsableInvitationCodeWithTx(tx *gorm.DB, code string) (*InvitationCode, e
 		return nil, ErrInvitationCodeRequired
 	}
 	invitationCode := &InvitationCode{}
-	query := tx.Set("gorm:query_option", "FOR UPDATE")
+	query := lockForUpdate(tx)
 	if err := query.Where("code = ?", trimmedCode).First(invitationCode).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrInvitationCodeInvalid
@@ -281,18 +281,12 @@ func GetUserInvitationCodeQuotaInfo(user *User) (*InvitationCodeQuotaInfo, error
 	policy := setting.GetInvitationCodePolicy()
 	accountAgeDays := policy.MinAccountAgeDays
 	if user.CreatedTime > 0 {
-		accountAgeDays = int((common.GetTimestamp() - user.CreatedTime) / 86400)
-		if accountAgeDays < 0 {
-			accountAgeDays = 0
-		}
+		accountAgeDays = max(int((common.GetTimestamp()-user.CreatedTime)/86400), 0)
 	}
 	limit := getUserInvitationCodeGenerateLimit(user)
 	remaining := -1
 	if limit >= 0 {
-		remaining = limit - int(used)
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining = max(limit-int(used), 0)
 	}
 
 	// 月度滑动窗口配额。policy.MonthlyGenerateQuota 取自全局策略（admin 不分组覆盖月度，
@@ -308,10 +302,7 @@ func GetUserInvitationCodeQuotaInfo(user *User) (*InvitationCodeQuotaInfo, error
 		if err != nil {
 			return nil, err
 		}
-		monthlyRemaining = monthlyLimit - int(monthlyUsed)
-		if monthlyRemaining < 0 {
-			monthlyRemaining = 0
-		}
+		monthlyRemaining = max(monthlyLimit-int(monthlyUsed), 0)
 		// 窗口里最早一条 +30d 就是下一次配额释放时刻。
 		oldest, err := oldestUserInvitationCodeCreatedTimeSince(user.Id, since)
 		if err != nil {
@@ -349,7 +340,7 @@ func GetUserInvitationCodeQuotaInfo(user *User) (*InvitationCodeQuotaInfo, error
 }
 
 func CanUserGenerateInvitationCode(user *User, quotaInfo *InvitationCodeQuotaInfo) error {
-	if !common.InvitationCodeUserGenerateEnabled {
+	if !common.GetAuthSettings().InvitationCodeUserGenerateEnabled {
 		// eflow: 客服 (role>=5) / admin (role>=10) 即使 user-gen 全局开关关闭也允许生成。
 		// 这是「客服无限生成」语义的来源——admin 无限是历史行为（走 /api/invitation_code/，
 		// 不经过本闸）；本分支让客服走 /api/user/invitation_codes 时同样不受全局闸约束。
@@ -438,6 +429,11 @@ func GenerateUserInvitationCode(user *User, opts *GenerateUserInvitationCodeOpti
 
 	codes := make([]*InvitationCode, 0, count)
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 锁住用户行串行化同一用户的并发生成；配额计数走全局 DB 读已提交数据，
+		// 前一个事务提交后才能看到它新建的邀请码，不会并发超额。
+		if err := lockForUpdate(tx).Select("id").First(&User{}, user.Id).Error; err != nil {
+			return err
+		}
 		// 配额检查只做一次：普通用户路径下 count 应=1；客服/admin 旁路 quotaInfo。
 		quotaInfo, err := GetUserInvitationCodeQuotaInfo(user)
 		if err != nil {

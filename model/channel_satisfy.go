@@ -1,8 +1,10 @@
 package model
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"slices"
+
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/ratio_setting"
 )
 
 func IsChannelEnabledForGroupModel(group string, modelName string, channelID int) bool {
@@ -62,10 +64,5 @@ func isChannelEnabledForGroupModelDB(group string, modelName string, channelID i
 }
 
 func isChannelIDInList(list []int, channelID int) bool {
-	for _, id := range list {
-		if id == channelID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, channelID)
 }

@@ -10,6 +10,7 @@ import {
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import {
   Tooltip,
   TooltipContent,
@@ -23,8 +24,10 @@ import { getLogAvatarStyle } from '../../lib/avatar-color'
 import {
   formatModelName,
   getFirstResponseTimeColor,
+  getReasoningEffortVariant,
   getResponseTimeColor,
   getTieredBillingSummary,
+  getUnresolvedTierText,
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
@@ -44,6 +47,48 @@ interface DetailSegment {
   text: string
   muted?: boolean
   danger?: boolean
+}
+
+// eflow: 管理员日志里标出计费用量不可靠的消费（logs.billing_anomaly），
+// 普通用户接口不下发该字段，因此不会渲染。
+const billingAnomalyBadges: Record<
+  number,
+  { label: string; hint: string; destructive?: boolean }
+> = {
+  1: {
+    label: 'Estimated',
+    hint: 'Upstream returned no input usage; input was billed by local estimate and may be inflated.',
+    destructive: true,
+  },
+  2: {
+    label: 'Output estimated',
+    hint: 'Input used upstream usage; output was estimated from received text (usually an interrupted stream).',
+  },
+  3: {
+    label: 'Free',
+    hint: 'Upstream delivered no usage (client left before the first event); settled at zero.',
+  },
+}
+
+function renderBillingAnomalyBadge(
+  anomaly: number | undefined,
+  t: (key: string) => string
+) {
+  const badge = anomaly ? billingAnomalyBadges[anomaly] : undefined
+  if (!badge) return null
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant={badge.destructive ? 'destructive' : 'secondary'}
+          className='w-fit'
+        >
+          {t(badge.label)}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent className='max-w-72'>{t(badge.hint)}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 function formatRatioCompact(ratio: number | undefined): string {
@@ -77,7 +122,15 @@ function buildDetailSegments(
   t: (key: string, opts?: Record<string, unknown>) => string
 ): DetailSegment[] {
   if (log.type === 6) {
-    return [{ text: t('Async task refund') }]
+    return [
+      {
+        text: t(
+          other?.usage_refund_batch_id
+            ? 'Balance returned'
+            : 'Async task refund'
+        ),
+      },
+    ]
   }
 
   if (log.type !== 2) return []
@@ -112,9 +165,21 @@ function buildDetailSegments(
     const text = prices.join(' / ')
     return showUnit ? `${text}/M` : text
   }
-  const isTieredExpr = other.billing_mode === 'tiered_expr'
+  const isExpressionBilling =
+    other.billing_mode === 'tiered_expr' || other.billing_mode === 'flat_price'
   const tieredSummary = getTieredBillingSummary(other)
-  if (isTieredExpr) {
+  if (other.billing_mode === 'batch_file') {
+    const batchEntries = [t('Batch input')]
+    if (other.input_tokens != null && Number.isFinite(other.input_tokens)) {
+      batchEntries.push(
+        `${other.input_tokens.toLocaleString()} ${t('Input Tokens')}`
+      )
+    }
+    if (other.input_price != null && Number.isFinite(other.input_price)) {
+      batchEntries.push(`${formatPriceCompact(other.input_price)}/M`)
+    }
+    segments.push({ text: batchEntries.join(' · ') })
+  } else if (isExpressionBilling) {
     if (tieredSummary) {
       const baseEntries = tieredSummary.priceEntries
         .filter((entry) => ['inputPrice', 'outputPrice'].includes(entry.field))
@@ -127,8 +192,12 @@ function buildDetailSegments(
         const tierLabel = rawLabel
           ? t(rawLabel, { defaultValue: rawLabel })
           : t('Default')
+        const modeLabel =
+          other.billing_mode === 'flat_price'
+            ? t('Fixed token price')
+            : tierLabel
         segments.push({
-          text: `${tierLabel} · ${formatPriceList(baseEntries, true)}`,
+          text: `${modeLabel} · ${formatPriceList(baseEntries, true)}`,
         })
       }
 
@@ -168,7 +237,11 @@ function buildDetailSegments(
       }
     } else {
       segments.push({
-        text: `${t('Dynamic Pricing')} · ${t('No matching results')}`,
+        text: `${t(
+          other.billing_mode === 'flat_price'
+            ? 'Fixed token price'
+            : 'Dynamic Pricing'
+        )} · ${getUnresolvedTierText(other, t)}`,
         muted: true,
       })
     }
@@ -183,14 +256,16 @@ function buildDetailSegments(
     if (other.completion_ratio != null) {
       e.push(formatPriceCompact(perSecUSD * other.completion_ratio))
     }
-    segments.push({ text: `${t('Standard')} · ${e.join(' / ')}/秒` })
+    segments.push({
+      text: `${t('Standard')} · ${e.join(' / ')}/${t('seconds')}`,
+    })
   } else if (
     other.billing_mode === 'duration_seconds' &&
     other.model_price != null
   ) {
     // eflow: 视频任务按时长计费，model_price 即每秒价。
     segments.push({
-      text: `按时长 · ${formatPriceCompact(other.model_price)}/秒`,
+      text: `${t('Billed per second')} · ${formatPriceCompact(other.model_price)}/${t('seconds')}`,
     })
   } else {
     const isPerCall = isPerCallBilling(other.model_price)
@@ -207,7 +282,7 @@ function buildDetailSegments(
         )
       }
       segments.push({
-        text: `${t('Standard')} · ${formatPriceList(baseEntries, true)}`,
+        text: `${t('Fixed token price')} · ${formatPriceList(baseEntries, true)}`,
       })
 
       if (hasAnyCacheTokens(other)) {
@@ -301,6 +376,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     columns.push(
       {
         id: 'channel',
+        accessorKey: 'channel',
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('Channel')} />
         ),
@@ -517,11 +593,38 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             <ModelBadge
               modelName={modelInfo.name}
               actualModel={modelInfo.actualModel}
+              responseModel={modelInfo.responseModel}
             />
           </div>
         )
       },
       meta: { label: t('Model'), mobileTitle: true },
+      enableSorting: false,
+    },
+
+    {
+      id: 'reasoning_effort',
+      accessorFn: (log) => {
+        const effort = parseLogOther(log.other)?.reasoning_effort
+        return typeof effort === 'string' ? effort.trim() : ''
+      },
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Reasoning Effort')} />
+      ),
+      cell: ({ row }) => {
+        const effort = row.getValue<string>('reasoning_effort')
+        if (!effort) return <span className='text-muted-foreground'>—</span>
+
+        return (
+          <StatusBadge
+            label={effort}
+            variant={getReasoningEffortVariant(effort)}
+            size='sm'
+            copyable={false}
+          />
+        )
+      },
+      meta: { label: t('Reasoning Effort') },
       enableSorting: false,
     },
 
@@ -662,7 +765,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         if (other?.billing_mode === 'audio_seconds') {
           return (
             <span className='font-mono text-xs font-medium tabular-nums'>
-              {promptTokens.toLocaleString()} 秒
+              {promptTokens.toLocaleString()} {t('seconds')}
             </span>
           )
         }
@@ -672,12 +775,18 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         ) {
           return (
             <span className='font-mono text-xs font-medium tabular-nums'>
-              {other.dur_sec} 秒
+              {other.dur_sec} {t('seconds')}
             </span>
           )
         }
+        const anomalyBadge = renderBillingAnomalyBadge(log.billing_anomaly, t)
         if (promptTokens === 0 && completionTokens === 0) {
-          return <span className='text-muted-foreground text-xs'>-</span>
+          return (
+            <div className='flex flex-col gap-0.5'>
+              <span className='text-muted-foreground text-xs'>-</span>
+              {anomalyBadge}
+            </div>
+          )
         }
 
         const cacheReadTokens = other?.cache_tokens || 0
@@ -708,6 +817,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 )}
               </div>
             )}
+            {anomalyBadge}
           </div>
         )
       },
@@ -731,6 +841,16 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             <span className='border-border/80 bg-muted/60 inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums'>
               {quotaStr}
             </span>
+            {log.usage_refund && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant='secondary'>{t('Already refunded')}</Badge>
+                </TooltipTrigger>
+                <TooltipContent className='max-w-72 break-all'>
+                  {t('Refund batch')}: {log.usage_refund.batch_id}
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
         )
       },

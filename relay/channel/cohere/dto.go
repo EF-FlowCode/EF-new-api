@@ -1,6 +1,6 @@
 package cohere
 
-import "github.com/QuantumNous/new-api/dto"
+import "eflow.local/new-api/dto"
 
 type CohereRequest struct {
 	Model       string        `json:"model"`

@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/model"
 
 	webauthn "github.com/go-webauthn/webauthn/webauthn"
 )

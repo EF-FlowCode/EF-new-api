@@ -2,13 +2,14 @@ package controller
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -174,7 +175,11 @@ func GetAdminMonitoringGroupHistory(c *gin.Context) {
 }
 
 func RefreshMonitoringData(c *gin.Context) {
-	ok := service.TriggerAggregationRefresh()
+	ok, err := service.TriggerAggregationRefresh()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": service.ErrMonitoringRefreshUnavailable.Error()})
+		return
+	}
 	if !ok {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"success": false,
@@ -225,7 +230,7 @@ func GetPublicMonitoringGroups(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
-			"data":    []interface{}{},
+			"data":    []any{},
 		})
 		return
 	}
@@ -280,13 +285,7 @@ func GetPublicMonitoringGroupHistory(c *gin.Context) {
 	}
 
 	monitoringGroups := setting.MonitoringGroups
-	found := false
-	for _, g := range monitoringGroups {
-		if g == groupName {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(monitoringGroups, groupName)
 	if !found {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,

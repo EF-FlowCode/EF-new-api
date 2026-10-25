@@ -10,21 +10,30 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
 
 func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequest, isSync bool) (*AliImageRequest, error) {
+	n, err := request.ImageCount(true)
+	if err != nil {
+		return nil, err
+	}
 	var imageRequest AliImageRequest
 	imageRequest.Model = request.Model
 	imageRequest.ResponseFormat = request.ResponseFormat
+	imageRequest.Parameters = AliImageParameters{
+		Size:      strings.ReplaceAll(request.Size, "x", "*"),
+		N:         n,
+		Watermark: request.Watermark,
+	}
 	if request.Extra != nil {
 		if val, ok := request.Extra["parameters"]; ok {
 			err := common.Unmarshal(val, &imageRequest.Parameters)
@@ -47,6 +56,7 @@ func oaiImage2AliImageRequest(info *relaycommon.RelayInfo, request dto.ImageRequ
 		}
 	}
 
+	imageRequest.Parameters.N = n
 	if strings.Contains(request.Model, "z-image") {
 		// z-image 开启prompt_extend后，按2倍计费
 		if imageRequest.Parameters.PromptExtendValue() {
@@ -278,7 +288,10 @@ func responseAli2OpenAIImage(c *gin.Context, response *AliResponse, originBody [
 }
 
 func aliImageHandler(a *Adaptor, c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*types.NewAPIError, *dto.Usage) {
-	responseFormat := c.GetString("response_format")
+	responseFormat := ""
+	if request, ok := info.Request.(*dto.ImageRequest); ok && request != nil {
+		responseFormat = request.ResponseFormat
+	}
 
 	var aliTaskResponse AliResponse
 	responseBody, err := io.ReadAll(resp.Body)

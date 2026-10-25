@@ -1,7 +1,6 @@
 /**
  * Utility functions for usage logs filters
  */
-import { LOG_CATEGORY_LABELS } from '../constants'
 import type {
   LogCategory,
   LogFilters,
@@ -57,11 +56,4 @@ export function buildSearchParams(
     default:
       return baseParams
   }
-}
-
-/**
- * Get log category display name
- */
-export function getLogCategoryLabel(category: LogCategory): string {
-  return LOG_CATEGORY_LABELS[category]
 }

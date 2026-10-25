@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -20,8 +20,12 @@ func init() {
 	Register("oidc", &OIDCProvider{})
 }
 
-// OIDCProvider implements OAuth for OIDC
-type OIDCProvider struct{}
+// OIDCProvider implements OAuth for OIDC. A request-scoped instance keeps the
+// token and user-info endpoints on the same configuration version.
+type OIDCProvider struct {
+	settings      *system_setting.OIDCSettings
+	serverAddress *string
+}
 
 type oidcOAuthResponse struct {
 	AccessToken  string `json:"access_token"`
@@ -41,11 +45,12 @@ type oidcUser struct {
 }
 
 func (p *OIDCProvider) GetName() string {
-	return system_setting.GetOIDCSettings().GetEffectiveDisplayName()
+	settings := p.oidcSettings()
+	return settings.GetEffectiveDisplayName()
 }
 
 func (p *OIDCProvider) IsEnabled() bool {
-	return system_setting.GetOIDCSettings().Enabled
+	return p.oidcSettings().Enabled
 }
 
 func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
@@ -53,10 +58,8 @@ func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Co
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-OIDC] ExchangeToken: code=%s...", code[:min(len(code), 10)])
-
-	settings := system_setting.GetOIDCSettings()
-	redirectUri := fmt.Sprintf("%s/oauth/oidc", system_setting.ServerAddress)
+	settings := p.oidcSettings()
+	redirectUri := fmt.Sprintf("%s/oauth/oidc", p.oidcServerAddress())
 	values := url.Values{}
 	values.Set("client_id", settings.ClientId)
 	values.Set("client_secret", settings.ClientSecret)
@@ -110,7 +113,7 @@ func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Co
 }
 
 func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAuthUser, error) {
-	settings := system_setting.GetOIDCSettings()
+	settings := p.oidcSettings()
 
 	logger.LogDebug(ctx, "[OAuth-OIDC] GetUserInfo: userinfo_endpoint=%s", settings.UserInfoEndpoint)
 
@@ -145,11 +148,11 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAu
 	}
 
 	if oidcUser.OpenID == "" || oidcUser.Email == "" {
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-OIDC] GetUserInfo failed: empty fields (sub=%s, email=%s)", oidcUser.OpenID, oidcUser.Email))
+		logger.LogError(ctx, fmt.Sprintf("[OAuth-OIDC] GetUserInfo failed: empty fields (sub_empty=%t, email_empty=%t)", oidcUser.OpenID == "", oidcUser.Email == ""))
 		return nil, NewOAuthError(i18n.MsgOAuthUserInfoEmpty, map[string]any{"Provider": "OIDC"})
 	}
 
-	logger.LogDebug(ctx, "[OAuth-OIDC] GetUserInfo success: sub=%s, username=%s, name=%s, email=%s", oidcUser.OpenID, oidcUser.PreferredUsername, oidcUser.Name, oidcUser.Email)
+	logger.LogDebug(ctx, "[OAuth-OIDC] GetUserInfo success: sub=%s, username=%s", oidcUser.OpenID, oidcUser.PreferredUsername)
 
 	return &OAuthUser{
 		ProviderUserID: oidcUser.OpenID,
@@ -174,4 +177,31 @@ func (p *OIDCProvider) SetProviderUserID(user *model.User, providerUserID string
 
 func (p *OIDCProvider) GetProviderPrefix() string {
 	return "oidc_"
+}
+
+func (p *OIDCProvider) ProviderUserIDColumn() string {
+	return "oidc_id"
+}
+
+func (p *OIDCProvider) forRequest() Provider {
+	settings := system_setting.GetOIDCSettings()
+	serverAddress := system_setting.GetServerAddress()
+	return &OIDCProvider{
+		settings:      settings,
+		serverAddress: &serverAddress,
+	}
+}
+
+func (p *OIDCProvider) oidcSettings() system_setting.OIDCSettings {
+	if p.settings != nil {
+		return *p.settings
+	}
+	return *system_setting.GetOIDCSettings()
+}
+
+func (p *OIDCProvider) oidcServerAddress() string {
+	if p.serverAddress != nil {
+		return *p.serverAddress
+	}
+	return system_setting.GetServerAddress()
 }

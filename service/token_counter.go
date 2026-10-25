@@ -8,13 +8,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	constant2 "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	constant2 "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -136,15 +136,12 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 			hScaled = float64(height) * r
 			patchesW := math.Ceil(wScaled / 32.0)
 			patchesH := math.Ceil(hScaled / 32.0)
-			imageTokens := int(patchesW * patchesH)
-			if imageTokens > 1536 {
-				imageTokens = 1536
-			}
-			return int(math.Round(float64(imageTokens) * multiplier)), nil
+			imageTokens := min(int(patchesW*patchesH), 1536)
+			return common.QuotaRound(float64(imageTokens) * multiplier), nil
 		}
 		// below cap
 		imageTokens := rawPatches
-		return int(math.Round(float64(imageTokens) * multiplier)), nil
+		return common.QuotaRound(float64(imageTokens) * multiplier), nil
 	}
 
 	// Tile-based calculation for 4o/4.1/4.5/o1/o3/etc.
@@ -354,17 +351,17 @@ func CountTokenInput(input any, model string) int {
 	case string:
 		return CountTextToken(v, model)
 	case []string:
-		text := ""
+		var text strings.Builder
 		for _, s := range v {
-			text += s
+			text.WriteString(s)
 		}
-		return CountTextToken(text, model)
-	case []interface{}:
-		text := ""
+		return CountTextToken(text.String(), model)
+	case []any:
+		var text strings.Builder
 		for _, item := range v {
-			text += fmt.Sprintf("%v", item)
+			text.WriteString(fmt.Sprintf("%v", item))
 		}
-		return CountTextToken(text, model)
+		return CountTextToken(text.String(), model)
 	}
 	return CountTokenInput(fmt.Sprintf("%v", input), model)
 }

@@ -1,46 +1,85 @@
 /**
  * LobeHub Icon Loader
- * Dynamically load and render icons from @lobehub/icons
+ * 按需加载并渲染 @lobehub/icons 图标：原先 `import * as LobeIcons` 会把全部约 300 个
+ * 供应商图标（含 Avatar 等依赖）打进使用它的页面；现在只同步读取图标目录（toc），
+ * 具体图标变体在首次渲染时按需加载，加载期间与失败时显示同尺寸的首字母占位。
  *
  * Supports:
  * - Basic: "OpenAI", "OpenAI.Color"
  * - Chained properties: "OpenAI.Avatar.type={'platform'}"
  * - Size parameter: getLobeIcon("OpenAI", 20)
  */
-import * as LobeIcons from '@lobehub/icons'
+import {
+  lazy,
+  Suspense,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactNode,
+} from 'react'
+import toc from '@lobehub/icons/es/toc'
+import { parseLobeIconSpec, type LobeIconVariant } from './lobe-icon-spec'
 
-/**
- * Parse a property value from string to appropriate type
- * @param raw - Raw string value
- * @returns Parsed value (boolean, number, or string)
- */
-function parseValue(raw: string | undefined | null): string | number | boolean {
-  if (raw == null) return true
+type IconComponent = ComponentType<Record<string, unknown>>
+type IconModule = { default: IconComponent }
 
-  let v = String(raw).trim()
+const ICON_IDS = new Set(toc.map((icon) => icon.id))
+const LAZY_ICONS = new Map<string, LazyExoticComponent<IconComponent>>()
 
-  // Remove curly braces
-  if (v.startsWith('{') && v.endsWith('}')) {
-    v = v.slice(1, -1).trim()
+function renderLobeIconFallback(
+  name: string,
+  size: number | string
+): ReactNode {
+  return (
+    <div
+      className='bg-muted text-muted-foreground flex items-center justify-center rounded-full text-xs font-medium'
+      style={{ width: size, height: size }}
+    >
+      {name.charAt(0).toUpperCase() || '?'}
+    </div>
+  )
+}
+
+function importIconVariant(
+  baseKey: string,
+  variant: LobeIconVariant
+): Promise<IconModule> {
+  // 只加载所选 SVG 变体，避免图标 index 顺带引入 Avatar / UI 依赖。
+  return import(
+    /* webpackInclude: /[\\/]components[\\/](Avatar|Brand|BrandColor|BrandMono|Color|Combine|Inner|Mono|Morden|Simple|Text|TextCn|TextColor)\.js$/ */
+    `@lobehub/icons/es/${baseKey}/components/${variant}.js`
+  ) as Promise<IconModule>
+}
+
+function getLazyIcon(
+  baseKey: string,
+  variant: LobeIconVariant
+): LazyExoticComponent<IconComponent> {
+  const cacheKey = `${baseKey}.${variant}`
+  let Icon = LAZY_ICONS.get(cacheKey)
+  if (!Icon) {
+    Icon = lazy(() =>
+      importIconVariant(baseKey, variant)
+        // 该图标没有所请求的变体（如没有 Color 版）时回退到基础图标。
+        .catch(() =>
+          variant === 'Mono'
+            ? Promise.reject(new Error('icon unavailable'))
+            : importIconVariant(baseKey, 'Mono')
+        )
+        .catch(
+          (): IconModule => ({
+            default: (props) =>
+              renderLobeIconFallback(
+                baseKey,
+                typeof props.size === 'number' || typeof props.size === 'string'
+                  ? props.size
+                  : 20
+              ),
+          })
+        )
+    )
+    LAZY_ICONS.set(cacheKey, Icon)
   }
-
-  // Remove quotes
-  if (
-    (v.startsWith('"') && v.endsWith('"')) ||
-    (v.startsWith("'") && v.endsWith("'"))
-  ) {
-    return v.slice(1, -1)
-  }
-
-  // Boolean
-  if (v === 'true') return true
-  if (v === 'false') return false
-
-  // Number
-  if (/^-?\d+(?:\.\d+)?$/.test(v)) return Number(v)
-
-  // Return as string
-  return v
+  return Icon
 }
 
 /**
@@ -57,90 +96,21 @@ function parseValue(raw: string | undefined | null): string | number | boolean {
 export function getLobeIcon(
   iconName: string | undefined | null,
   size: number = 20
-): React.ReactNode {
-  if (!iconName || typeof iconName !== 'string') {
-    return (
-      <div
-        className='bg-muted text-muted-foreground flex items-center justify-center rounded-full text-xs font-medium'
-        style={{ width: size, height: size }}
-      >
-        ?
-      </div>
-    )
-  }
+): ReactNode {
+  const trimmedName = typeof iconName === 'string' ? iconName.trim() : ''
+  if (!trimmedName) return renderLobeIconFallback('', size)
 
-  const trimmedName = iconName.trim()
-  if (!trimmedName) {
-    return (
-      <div
-        className='bg-muted text-muted-foreground flex items-center justify-center rounded-full text-xs font-medium'
-        style={{ width: size, height: size }}
-      >
-        ?
-      </div>
-    )
-  }
+  const spec = parseLobeIconSpec(trimmedName, size, (id) => ICON_IDS.has(id))
+  if (!spec) return renderLobeIconFallback(trimmedName, size)
 
-  // Parse component path and chained properties
-  const segments = trimmedName.split('.')
-  const baseKey = segments[0]
-  const BaseIcon = (LobeIcons as Record<string, unknown>)[baseKey] as
-    | Record<string, unknown>
-    | undefined
-
-  let IconComponent: React.ComponentType<Record<string, unknown>> | undefined
-  let propStartIndex: number
-
-  if (BaseIcon && segments.length > 1 && BaseIcon[segments[1]]) {
-    IconComponent = BaseIcon[segments[1]] as React.ComponentType<
-      Record<string, unknown>
-    >
-    propStartIndex = 2
-  } else {
-    IconComponent = (LobeIcons as Record<string, unknown>)[baseKey] as
-      | React.ComponentType<Record<string, unknown>>
-      | undefined
-    propStartIndex = segments.length > 1 && /^[A-Z]/.test(segments[1]) ? 2 : 1
-  }
-
-  // Fallback if icon not found
-  if (
-    !IconComponent ||
-    (typeof IconComponent !== 'function' && typeof IconComponent !== 'object')
-  ) {
-    const firstLetter = trimmedName.charAt(0).toUpperCase()
-    return (
-      <div
-        className='bg-muted text-muted-foreground flex items-center justify-center rounded-full text-xs font-medium'
-        style={{ width: size, height: size }}
-      >
-        {firstLetter}
-      </div>
-    )
-  }
-
-  // Parse chained properties (e.g., "type={'platform'}", "shape='square'")
-  const props: Record<string, string | number | boolean> = {}
-
-  for (let i = propStartIndex; i < segments.length; i++) {
-    const seg = segments[i]
-    if (!seg) continue
-
-    const eqIdx = seg.indexOf('=')
-    if (eqIdx === -1) {
-      props[seg.trim()] = true
-      continue
-    }
-
-    const key = seg.slice(0, eqIdx).trim()
-    const valRaw = seg.slice(eqIdx + 1).trim()
-    props[key] = parseValue(valRaw)
-  }
-
-  // Set size if not explicitly specified in the string
-  if (props.size == null && size != null) {
-    props.size = size
-  }
-
-  return <IconComponent {...props} />
+  const Icon = getLazyIcon(spec.baseKey, spec.variant)
+  const fallbackSize =
+    typeof spec.props.size === 'number' || typeof spec.props.size === 'string'
+      ? spec.props.size
+      : size
+  return (
+    <Suspense fallback={renderLobeIconFallback(spec.baseKey, fallbackSize)}>
+      <Icon {...spec.props} />
+    </Suspense>
+  )
 }

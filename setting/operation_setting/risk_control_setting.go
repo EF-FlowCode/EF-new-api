@@ -1,9 +1,10 @@
 package operation_setting
 
 import (
+	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 const (
@@ -157,8 +158,9 @@ func init() {
 }
 
 func GetRiskControlSetting() *RiskControlSetting {
-	NormalizeRiskControlSetting(&riskControlSetting)
-	return &riskControlSetting
+	setting := config.MustSnapshot[RiskControlSetting]("risk_control")
+	NormalizeRiskControlSetting(&setting)
+	return &setting
 }
 
 // IsRiskControlEnabledForGroup returns true when the global switch is on AND the
@@ -173,13 +175,7 @@ func IsRiskControlEnabledForGroup(setting *RiskControlSetting, group string) boo
 	if group == "" || group == RiskControlAutoGroup {
 		return false
 	}
-	found := false
-	for _, g := range setting.EnabledGroups {
-		if g == group {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(setting.EnabledGroups, group)
 	if !found {
 		return false
 	}

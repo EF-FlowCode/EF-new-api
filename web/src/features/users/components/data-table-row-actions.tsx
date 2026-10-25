@@ -31,6 +31,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
+import {
   manageUser,
   resetUserPasskey,
   resetUserTwoFA,
@@ -60,6 +65,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [resetPasskeyOpen, setResetPasskeyOpen] = useState(false)
   const [resetTwoFAOpen, setResetTwoFAOpen] = useState(false)
   const [bindingDialogOpen, setBindingDialogOpen] = useState(false)
+  const verification = useSecureVerification()
 
   const handleEdit = () => {
     setCurrentRow(user)
@@ -71,66 +77,86 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     setOpen('delete')
   }
 
-  const handleManage = async (action: Exclude<ManageUserAction, 'delete'>) => {
+  // Every action here needs a proof bound to this user (and action/role).
+  const runVerified = async (
+    operation: { scope: string; context: Record<string, unknown> },
+    call: (proof?: SecurityProof) => Promise<void>
+  ) => {
     try {
-      const result = await manageUser(user.id, action)
-      if (result.success) {
-        toast.success(t(getUserActionMessage(action)))
-        triggerRefresh()
-      } else {
-        toast.error(
-          result.message || t('Failed to {{action}} user', { action })
-        )
-      }
+      await verification.startVerification(call, {
+        operation,
+        description: t('Confirm your identity before changing {{username}}.', {
+          username: user.username,
+        }),
+      })
     } catch (_error) {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     }
   }
 
-  const handleSetRole = async (role: number) => {
-    try {
-      const result = await setUserRole(user.id, role)
-      if (result.success) {
-        toast.success(t(getUserActionMessage('set_role')))
-        triggerRefresh()
-      } else {
-        toast.error(result.message || t('Failed to update user role'))
+  const handleManage = (action: Exclude<ManageUserAction, 'delete'>) =>
+    runVerified(
+      { scope: 'admin.user.manage', context: { user_id: user.id, action } },
+      async (proof) => {
+        const result = await manageUser(user.id, action, proof?.proof_token)
+        if (result.success) {
+          toast.success(t(getUserActionMessage(action)))
+          triggerRefresh()
+        } else {
+          toast.error(
+            result.message || t('Failed to {{action}} user', { action })
+          )
+        }
       }
-    } catch (_error) {
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
-    }
-  }
+    )
+
+  const handleSetRole = (role: number) =>
+    runVerified(
+      {
+        scope: 'admin.user.manage',
+        context: { user_id: user.id, action: 'set_role', role },
+      },
+      async (proof) => {
+        const result = await setUserRole(user.id, role, proof?.proof_token)
+        if (result.success) {
+          toast.success(t(getUserActionMessage('set_role')))
+          triggerRefresh()
+        } else {
+          toast.error(result.message || t('Failed to update user role'))
+        }
+      }
+    )
 
   const handleResetPasskey = async () => {
-    try {
-      const result = await resetUserPasskey(user.id)
-      if (result.success) {
-        toast.success(t('Passkey reset successfully'))
-        triggerRefresh()
-      } else {
-        toast.error(result.message || t('Failed to reset Passkey'))
+    setResetPasskeyOpen(false)
+    await runVerified(
+      { scope: 'admin.user.passkey.reset', context: { user_id: user.id } },
+      async (proof) => {
+        const result = await resetUserPasskey(user.id, proof?.proof_token)
+        if (result.success) {
+          toast.success(t('Passkey reset successfully'))
+          triggerRefresh()
+        } else {
+          toast.error(result.message || t('Failed to reset Passkey'))
+        }
       }
-    } catch (_error) {
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
-    } finally {
-      setResetPasskeyOpen(false)
-    }
+    )
   }
 
   const handleResetTwoFA = async () => {
-    try {
-      const result = await resetUserTwoFA(user.id)
-      if (result.success) {
-        toast.success(t('Two-factor authentication reset'))
-        triggerRefresh()
-      } else {
-        toast.error(result.message || t('Failed to reset 2FA'))
+    setResetTwoFAOpen(false)
+    await runVerified(
+      { scope: 'admin.user.2fa.disable', context: { user_id: user.id } },
+      async (proof) => {
+        const result = await resetUserTwoFA(user.id, proof?.proof_token)
+        if (result.success) {
+          toast.success(t('Two-factor authentication reset'))
+          triggerRefresh()
+        } else {
+          toast.error(result.message || t('Failed to reset 2FA'))
+        }
       }
-    } catch (_error) {
-      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
-    } finally {
-      setResetTwoFAOpen(false)
-    }
+    )
   }
 
   const isDisabled = user.status === USER_STATUS.DISABLED
@@ -332,6 +358,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         userId={user.id}
         onUnbindSuccess={triggerRefresh}
       />
+
+      <SecureVerificationDialog {...verification.dialogProps} />
     </>
   )
 }

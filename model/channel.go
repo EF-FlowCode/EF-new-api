@@ -12,12 +12,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/service/multi_key_scheduler"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/service/multi_key_scheduler"
+	"eflow.local/new-api/service/openaicompat"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -42,7 +43,7 @@ type Channel struct {
 	Balance            float64 `json:"balance"` // in USD
 	BalanceUpdatedTime int64   `json:"balance_updated_time" gorm:"bigint"`
 	Models             string  `json:"models"`
-	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
+	Group              string  `json:"group" gorm:"type:longtext"`
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
@@ -173,7 +174,7 @@ func (c ChannelInfo) Value() (driver.Value, error) {
 }
 
 // Scan implements sql.Scanner interface
-func (c *ChannelInfo) Scan(value interface{}) error {
+func (c *ChannelInfo) Scan(value any) error {
 	bytesValue, _ := value.([]byte)
 	return common.Unmarshal(bytesValue, c)
 }
@@ -272,7 +273,6 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 			if !common.MemoryCacheEnabled {
 				_ = channel.SaveChannelInfo()
 			} else {
-				// CacheUpdateChannel(channel)
 			}
 		}()
 		// Start from the saved polling index and look for the next enabled key
@@ -280,7 +280,7 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		if start < 0 || start >= len(keys) {
 			start = 0
 		}
-		for i := 0; i < len(keys); i++ {
+		for i := range keys {
 			idx := (start + i) % len(keys)
 			if getStatus(idx) == common.ChannelStatusEnabled {
 				// update polling index for next call (point to the next position)
@@ -321,10 +321,14 @@ func (channel *Channel) GetNextEnabledKeyForModel(c *gin.Context, modelName stri
 		return "", 0, types.NewError(errors.New("no keys available"), types.ErrorCodeChannelNoAvailableKey)
 	}
 
-	// 收集 enabled 的候选 key——本函数自己读 MultiKeyStatusList 而不复用
-	// GetNextEnabledKey 内部 helper，避免持锁后再调度走重逻辑导致死锁/长延时。
-	statusList := channel.ChannelInfo.MultiKeyStatusList
+	// 收集 enabled 的候选 key：只在轮询锁内读取 MultiKeyStatusList（自动禁用
+	// key 时 handlerMultiKeyUpdate 持同一把锁改写该 map，无锁读会触发 Go 的
+	// concurrent map read and map write 致命错误）；调度评分放到锁外，避免持锁
+	// 走重逻辑。
 	candidates := make([]multi_key_scheduler.KeyCandidate, 0, len(keys))
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	statusList := channel.ChannelInfo.MultiKeyStatusList
 	for i, k := range keys {
 		status := common.ChannelStatusEnabled
 		if statusList != nil {
@@ -337,6 +341,7 @@ func (channel *Channel) GetNextEnabledKeyForModel(c *gin.Context, modelName stri
 		}
 		candidates = append(candidates, multi_key_scheduler.NewCandidate(i, k))
 	}
+	lock.Unlock()
 	if len(candidates) == 0 {
 		return "", 0, types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
 	}
@@ -399,8 +404,8 @@ func (channel *Channel) GetGroups() []string {
 	return groups
 }
 
-func (channel *Channel) GetOtherInfo() map[string]interface{} {
-	otherInfo := make(map[string]interface{})
+func (channel *Channel) GetOtherInfo() map[string]any {
+	otherInfo := make(map[string]any)
 	if channel.OtherInfo != "" {
 		err := common.Unmarshal([]byte(channel.OtherInfo), &otherInfo)
 		if err != nil {
@@ -410,7 +415,7 @@ func (channel *Channel) GetOtherInfo() map[string]interface{} {
 	return otherInfo
 }
 
-func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
+func (channel *Channel) SetOtherInfo(otherInfo map[string]any) {
 	otherInfoBytes, err := json.Marshal(otherInfo)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to marshal other info: channel_id=%d, tag=%s, name=%s, error=%v", channel.Id, channel.GetTag(), channel.Name, err))
@@ -441,11 +446,21 @@ func (channel *Channel) Save() error {
 	return DB.Save(channel).Error
 }
 
-func (channel *Channel) SaveWithoutKey() error {
+// saveStatusState 仅持久化渠道状态流拥有的字段，避免旧渠道快照覆盖并发
+// 更新的密钥、用量计数或渠道配置。
+func (channel *Channel) saveStatusState() error {
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
-	return DB.Omit("key").Save(channel).Error
+	updates := map[string]any{
+		"status":     channel.Status,
+		"other_info": channel.OtherInfo,
+	}
+	if channel.ChannelInfo.IsMultiKey {
+		updates["channel_info"] = channel.ChannelInfo
+	}
+	// The primary key on the model scopes the task-pricing hook to this channel.
+	return DB.Model(&Channel{Id: channel.Id}).Updates(updates).Error
 }
 
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
@@ -579,7 +594,7 @@ func (channel *Channel) GetBaseURL() string {
 	}
 	url := *channel.BaseURL
 	if url == "" {
-		url = constant.ChannelBaseURLs[channel.Type]
+		url = constant.GetChannelBaseURL(channel.Type)
 	}
 	return url
 }
@@ -703,26 +718,6 @@ func GetChannelPollingLock(channelId int) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// CleanupChannelPollingLocks removes locks for channels that no longer exist
-// This is optional and can be called periodically to prevent memory leaks
-func CleanupChannelPollingLocks() {
-	var activeChannelIds []int
-	DB.Model(&Channel{}).Pluck("id", &activeChannelIds)
-
-	activeChannelSet := make(map[int]bool)
-	for _, id := range activeChannelIds {
-		activeChannelSet[id] = true
-	}
-
-	channelPollingLocks.Range(func(key, value interface{}) bool {
-		channelId := key.(int)
-		if !activeChannelSet[channelId] {
-			channelPollingLocks.Delete(channelId)
-		}
-		return true
-	})
-}
-
 func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) {
 	keys := channel.GetKeys()
 	if len(keys) == 0 {
@@ -792,30 +787,37 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
+	}
 
+	// ChannelInfo 同时保存多 Key 状态与轮询游标。从首次读取到持久化全程
+	// 使用同一把渠道锁，防止两个写入者互相覆盖 JSON 快照。
+	pollingLock := GetChannelPollingLock(channelId)
+	pollingLock.Lock()
+	defer pollingLock.Unlock()
+
+	// 缓存改动推迟到数据库写入成功后再应用：读库或写库失败时缓存保持原样，
+	// 不会出现缓存里 Key 已禁用 / 渠道已下线、数据库却没变的不一致。
+	applyCache := func() {}
+	if common.MemoryCacheEnabled {
 		channelCache, _ := CacheGetChannel(channelId)
 		if channelCache == nil {
 			return false
 		}
 		if channelCache.ChannelInfo.IsMultiKey {
-			// Use per-channel lock to prevent concurrent map read/write with GetNextEnabledKey
-			beforeStatus := channelCache.Status
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
-			// 如果是多Key模式，更新缓存中的状态
-			handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
-			pollingLock.Unlock()
-			if beforeStatus != channelCache.Status {
-				CacheUpdateChannelStatus(channelId, channelCache.Status)
+			applyCache = func() {
+				beforeStatus := channelCache.Status
+				// 如果是多Key模式，更新缓存中的状态
+				handlerMultiKeyUpdate(channelCache, usingKey, status, reason)
+				if beforeStatus != channelCache.Status {
+					CacheUpdateChannelStatus(channelId, channelCache.Status)
+				}
 			}
-			//CacheUpdateChannel(channelCache)
-			//return true
 		} else {
 			// 如果缓存渠道存在，且状态已是目标状态，直接返回
 			if channelCache.Status == status {
 				return false
 			}
-			CacheUpdateChannelStatus(channelId, status)
+			applyCache = func() { CacheUpdateChannelStatus(channelId, status) }
 		}
 	}
 
@@ -833,16 +835,14 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		return false
 	} else {
 		if channel.Status == status {
+			// 数据库已是目标状态：缓存照旧跟进（与原先先改缓存的行为一致）。
+			applyCache()
 			return false
 		}
 
 		if channel.ChannelInfo.IsMultiKey {
 			beforeStatus := channel.Status
-			// Protect map writes with the same per-channel lock used by readers
-			pollingLock := GetChannelPollingLock(channelId)
-			pollingLock.Lock()
 			handlerMultiKeyUpdate(channel, usingKey, status, reason)
-			pollingLock.Unlock()
 			if beforeStatus != channel.Status {
 				shouldUpdateAbilities = true
 			}
@@ -854,17 +854,23 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 			channel.Status = status
 			shouldUpdateAbilities = true
 		}
-		err = channel.SaveWithoutKey()
+		err = channel.saveStatusState()
 		if err != nil {
+			shouldUpdateAbilities = false
 			common.SysLog(fmt.Sprintf("failed to update channel status: channel_id=%d, status=%d, error=%v", channel.Id, status, err))
 			return false
 		}
+		applyCache()
 	}
 	return true
 }
 
 func EnableChannelByTag(tag string) error {
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
+	db, err := taskPricingTagScope(tag)
+	if err != nil {
+		return err
+	}
+	err = db.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
 	}
@@ -881,7 +887,7 @@ func DisableChannelByTag(tag string) error {
 	return err
 }
 
-func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string, baseURL *string) error {
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -913,8 +919,16 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	if headerOverride != nil {
 		updateData.HeaderOverride = headerOverride
 	}
+	// eflow: 同一供应商的渠道打同一个标签，换地址时按标签一次改完
+	if baseURL != nil {
+		updateData.BaseURL = baseURL
+	}
 
-	err := DB.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
+	db, err := taskPricingTagScope(tag)
+	if err != nil {
+		return err
+	}
+	err = db.Model(&Channel{}).Where("tag = ?", tag).Updates(updateData).Error
 	if err != nil {
 		return err
 	}
@@ -950,11 +964,6 @@ func updateChannelUsedQuota(id int, quota int) {
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to update channel used quota: channel_id=%d, delta_quota=%d, error=%v", id, quota, err))
 	}
-}
-
-func DeleteChannelByStatus(status int64) (int64, error) {
-	result := DB.Where("status = ?", status).Delete(&Channel{})
-	return result.RowsAffected, result.Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
@@ -1061,7 +1070,138 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 			_ = channel.Save()           // 保存修改
 		}
 	}
+	// vLLM / SGLang always relay through their fixed route preset.
+	if preset := AdvancedCustomPreset(channel.Type); preset != nil {
+		setting.AdvancedCustom = preset
+	}
 	return setting
+}
+
+// ChannelSupportsRequestPath reports whether a channel can serve the requested
+// relay path/model. Advanced Custom is stored under the legacy Custom type in
+// this fork, so only configurations with actual relay routes are path-filtered;
+// management-only configurations continue to use legacy Custom routing.
+func ChannelSupportsRequestPath(channel *Channel, requestPath string, modelName string) bool {
+	if channel == nil {
+		return false
+	}
+	requestPath = normalizeChannelRequestPath(requestPath)
+	if requestPath == "/v1/batches" {
+		return ChannelSupportsKnowledgeBatch(channel, modelName)
+	}
+	// Advanced Custom already has an explicit route matcher; ordinary channels
+	// use the optional allow-list override, else their type's capability.
+	if !constant.SupportsAdvancedCustomRoutes(channel.Type) {
+		if configured, supported := channelSupportsConfiguredEndpoint(channel, requestPath); configured {
+			return supported
+		}
+		return channelTypeSupportsRequestPath(channel, requestPath, modelName)
+	}
+	if requestPath == "" {
+		return true
+	}
+	config := channel.GetOtherSettings().AdvancedCustom
+	if config == nil || !config.HasRelayRoutes() {
+		return true
+	}
+	return config.SupportsPathForModel(requestPath, strings.TrimSpace(modelName))
+}
+
+// channelSupportsConfiguredEndpoint applies the optional per-channel endpoint
+// allow-list. An absent list, an empty list, or a list containing no known
+// endpoint types keeps the legacy behavior so existing channels are unaffected.
+func channelSupportsConfiguredEndpoint(channel *Channel, requestPath string) (configured, supported bool) {
+	settings := channel.GetOtherSettings()
+	if len(settings.SupportedEndpointTypes) == 0 {
+		return false, true
+	}
+
+	endpointType := requestPathEndpointType(requestPath)
+	if endpointType == "" {
+		return false, true
+	}
+
+	known := false
+	for _, configuredType := range settings.SupportedEndpointTypes {
+		configuredType = strings.TrimSpace(strings.ToLower(configuredType))
+		if configuredType == "" || !isKnownRequestEndpointType(configuredType) {
+			continue
+		}
+		known = true
+		if configuredType == endpointType {
+			return true, true
+		}
+	}
+	if !known {
+		return false, true
+	}
+	return true, false
+}
+
+// channelTypeSupportsRequestPath filters by what the channel type's adaptor
+// can convert. A channel enabled for the global Chat→Responses policy relays
+// Chat and Messages through Responses, so those follow its Responses support.
+func channelTypeSupportsRequestPath(channel *Channel, requestPath string, modelName string) bool {
+	endpointType := constant.EndpointType(requestPathEndpointType(requestPath))
+	if endpointType == "" {
+		return true
+	}
+	if endpointType == constant.EndpointTypeOpenAI || endpointType == constant.EndpointTypeAnthropic {
+		if openaicompat.ShouldChatCompletionsUseResponsesGlobal(channel.Id, channel.Type, strings.TrimSpace(modelName)) {
+			endpointType = constant.EndpointTypeOpenAIResponse
+		}
+	}
+	return constant.ChannelTypeSupportsRequestEndpoint(channel.Type, endpointType)
+}
+
+func requestPathEndpointType(requestPath string) string {
+	switch {
+	case requestPath == "/v1/chat/completions", requestPath == "/v1/completions":
+		return string(constant.EndpointTypeOpenAI)
+	case requestPath == "/v1/responses":
+		return string(constant.EndpointTypeOpenAIResponse)
+	case requestPath == "/v1/responses/compact":
+		return string(constant.EndpointTypeOpenAIResponseCompact)
+	case requestPath == "/v1/messages":
+		return string(constant.EndpointTypeAnthropic)
+	case requestPath == "/v1/embeddings":
+		return string(constant.EndpointTypeEmbeddings)
+	case requestPath == "/v1/rerank":
+		return string(constant.EndpointTypeJinaRerank)
+	case requestPath == "/v1/images/generations", requestPath == "/v1/images/edits":
+		return string(constant.EndpointTypeImageGeneration)
+	case strings.HasPrefix(requestPath, "/v1beta/models/"), strings.HasPrefix(requestPath, "/v1/models/"):
+		return string(constant.EndpointTypeGemini)
+	case requestPath == "/v1/alpha/search":
+		return "openai-alpha-search"
+	default:
+		return ""
+	}
+}
+
+func isKnownRequestEndpointType(endpointType string) bool {
+	switch endpointType {
+	case string(constant.EndpointTypeOpenAI), string(constant.EndpointTypeOpenAIResponse),
+		string(constant.EndpointTypeOpenAIResponseCompact), string(constant.EndpointTypeAnthropic),
+		string(constant.EndpointTypeGemini), string(constant.EndpointTypeJinaRerank),
+		string(constant.EndpointTypeImageGeneration), string(constant.EndpointTypeEmbeddings),
+		"openai-alpha-search":
+		return true
+	default:
+		return false
+	}
+}
+
+// normalizeChannelRequestPath converts the externally visible request path to
+// the canonical relay path used by Advanced Custom routes. Playground routes
+// are mounted below /pg but are exposed to channels as their corresponding
+// /v1 endpoint; query parameters never participate in route matching.
+func normalizeChannelRequestPath(requestPath string) string {
+	requestPath = strings.TrimSpace(strings.Split(requestPath, "?")[0])
+	if strings.HasPrefix(requestPath, "/pg/") {
+		requestPath = "/v1" + strings.TrimPrefix(requestPath, "/pg")
+	}
+	return requestPath
 }
 
 func (channel *Channel) SetOtherSettings(setting dto.ChannelOtherSettings) {
@@ -1073,8 +1213,8 @@ func (channel *Channel) SetOtherSettings(setting dto.ChannelOtherSettings) {
 	channel.OtherSettings = string(settingBytes)
 }
 
-func (channel *Channel) GetParamOverride() map[string]interface{} {
-	paramOverride := make(map[string]interface{})
+func (channel *Channel) GetParamOverride() map[string]any {
+	paramOverride := make(map[string]any)
 	if channel.ParamOverride != nil && *channel.ParamOverride != "" {
 		err := common.Unmarshal([]byte(*channel.ParamOverride), &paramOverride)
 		if err != nil {
@@ -1084,8 +1224,8 @@ func (channel *Channel) GetParamOverride() map[string]interface{} {
 	return paramOverride
 }
 
-func (channel *Channel) GetHeaderOverride() map[string]interface{} {
-	headerOverride := make(map[string]interface{})
+func (channel *Channel) GetHeaderOverride() map[string]any {
+	headerOverride := make(map[string]any)
 	if channel.HeaderOverride != nil && *channel.HeaderOverride != "" {
 		err := common.Unmarshal([]byte(*channel.HeaderOverride), &headerOverride)
 		if err != nil {
@@ -1115,8 +1255,10 @@ func BatchSetChannelTag(ids []int, tag *string) error {
 		return err
 	}
 
-	// update ability status
-	channels, err := GetChannelsByIds(ids)
+	// update ability status: read inside the transaction so abilities are
+	// rebuilt from the new tag rather than the committed old one.
+	var channels []*Channel
+	err = tx.Where("id in (?)", ids).Find(&channels).Error
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -1186,4 +1328,14 @@ func CountChannelsGroupByType() (map[int64]int64, error) {
 		counts[r.Type] = r.Count
 	}
 	return counts, nil
+}
+
+// taskPricingTagScope names a tag's channels for the task-pricing AfterUpdate
+// hook, so a tag write validates only those channels.
+func taskPricingTagScope(tag string) (*gorm.DB, error) {
+	ids := []int{}
+	if err := DB.Model(&Channel{}).Where("tag = ?", tag).Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return DB.Set(taskPricingChannelIDsSetting, ids), nil
 }

@@ -10,12 +10,22 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { GroupBadge } from '@/components/group-badge'
 import { DEFAULT_TOKEN_UNIT, QUOTA_TYPE_VALUES } from '../constants'
-import { parseTags } from '../lib/filters'
-import { isTokenBasedModel } from '../lib/model-helpers'
+import { formatTierConditionSummary } from '../lib/billing-expr'
+import {
+  getDimensionalPricingSummary,
+  isDimensionalPricingModel,
+} from '../lib/dimensional-price'
 import {
   getDynamicDisplayGroupRatio,
   getDynamicPricingSummary,
 } from '../lib/dynamic-price'
+import { parseTags } from '../lib/filters'
+import {
+  getFlatTokenPriceEntries,
+  isFlatTokenPriceModel,
+  parseFlatTokenPriceExpr,
+} from '../lib/flat-token-price'
+import { isTokenBasedModel, resolveModelIcon } from '../lib/model-helpers'
 import {
   formatPrice,
   formatRequestPrice,
@@ -31,6 +41,13 @@ import type { PricingModel, TokenUnit } from '../types'
 // 动态计费（billing_mode === 'tiered_expr'）没有单一标量，返回 Infinity
 // 让它在 asc 时垫底、desc 时排前。
 function priceSortKey(model: PricingModel): number {
+  if (model.knowledge?.prices) return model.knowledge.prices.input
+  if (isFlatTokenPriceModel(model)) {
+    if (!model.billing_mode || model.billing_mode === 'ratio')
+      return model.model_ratio * 2
+    const prices = parseFlatTokenPriceExpr(model.billing_expr || '')
+    return prices ? Number(prices.inputPrice) : Number.POSITIVE_INFINITY
+  }
   if (model.billing_mode === 'tiered_expr') {
     return Number.POSITIVE_INFINITY
   }
@@ -114,13 +131,12 @@ export function usePricingColumns(
       ),
       cell: ({ row }) => {
         const model = row.original
-        const vendorIcon = model.vendor_icon
-          ? getLobeIcon(model.vendor_icon, 14)
-          : null
+        const modelIconKey = resolveModelIcon(model)
+        const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 14) : null
 
         return (
           <div className='flex min-w-[200px] items-center gap-2'>
-            {vendorIcon}
+            {modelIcon}
             <span className='truncate font-mono text-sm font-medium'>
               {model.model_name}
             </span>
@@ -136,10 +152,15 @@ export function usePricingColumns(
       meta: { label: t('Type') },
       header: t('Type'),
       cell: ({ row }) => {
-        const isTokenBased = row.original.quota_type === QUOTA_TYPE_VALUES.TOKEN
+        const model = row.original
+        const isTokenBased = model.quota_type === QUOTA_TYPE_VALUES.TOKEN
         return (
           <span className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-            {isTokenBased ? t('Token') : t('Request')}
+            {isDimensionalPricingModel(model)
+              ? t('Second')
+              : isTokenBased
+                ? t('Token')
+                : t('Request')}
           </span>
         )
       },
@@ -156,6 +177,15 @@ export function usePricingColumns(
       ),
       cell: ({ row }) => {
         const model = row.original
+        const dimensionalSummary = getDimensionalPricingSummary(model, {
+          showRechargePrice,
+          priceRate,
+          usdExchangeRate,
+          groupRatioMultiplier: getDynamicDisplayGroupRatio(
+            model,
+            selectedGroup
+          ),
+        })
         const dynamicSummary = getDynamicPricingSummary(model, {
           tokenUnit,
           showRechargePrice,
@@ -166,18 +196,52 @@ export function usePricingColumns(
             selectedGroup
           ),
         })
+        const flatPriceEntries = getFlatTokenPriceEntries(model, {
+          selectedGroup,
+          tokenUnit,
+          showRechargePrice,
+          priceRate,
+          usdExchangeRate,
+          groupRatioMultiplier: getDynamicDisplayGroupRatio(
+            model,
+            selectedGroup
+          ),
+        })
+
+        if (dimensionalSummary) {
+          return (
+            <div className='min-w-[190px] space-y-1'>
+              {dimensionalSummary.rows.map((priceRow) => (
+                <div
+                  key={priceRow.key}
+                  className='flex items-baseline justify-between gap-3'
+                >
+                  <span className='text-muted-foreground text-xs font-medium'>
+                    {priceRow.label}
+                  </span>
+                  <span className='font-mono text-sm tabular-nums'>
+                    {stripTrailingZeros(priceRow.formattedUnitPrice)}
+                    <span className='text-muted-foreground/50 ml-1 text-[10px]'>
+                      / {t('Second')}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )
+        }
 
         if (dynamicSummary) {
           if (dynamicSummary.isSpecialExpression) {
             return (
-              <div className='min-w-[200px] max-w-[320px]'>
-                <div className='text-amber-700 text-xs font-medium dark:text-amber-300'>
+              <div className='max-w-[320px] min-w-[200px]'>
+                <div className='text-xs font-medium text-amber-700 dark:text-amber-300'>
                   {t('Special billing expression')}
                 </div>
                 <div className='text-muted-foreground text-[11px]'>
                   {t('Unable to parse structured pricing')}
                 </div>
-                <code className='text-muted-foreground/70 mt-1 line-clamp-2 block break-all font-mono text-[10px] leading-relaxed'>
+                <code className='text-muted-foreground/70 mt-1 line-clamp-2 block font-mono text-[10px] leading-relaxed break-all'>
                   {dynamicSummary.rawExpression}
                 </code>
               </div>
@@ -190,6 +254,53 @@ export function usePricingColumns(
               <span className='text-muted-foreground text-xs'>
                 {t('Dynamic Pricing')}
               </span>
+            )
+          }
+
+          if (dynamicSummary.tierRows.length > 1) {
+            return (
+              <div className='flex min-w-[220px] flex-col gap-1.5'>
+                {dynamicSummary.tierRows.slice(0, 2).map((tierRow, index) => {
+                  const entryMap = new Map(
+                    tierRow.entries.map((entry) => [entry.field, entry])
+                  )
+                  const input = entryMap.get('inputPrice')
+                  const output = entryMap.get('outputPrice')
+                  const condition = formatTierConditionSummary(
+                    tierRow.tier.conditions,
+                    t,
+                    tierRow.tier.paramConditions
+                  )
+
+                  return (
+                    <div
+                      key={tierRow.tier.label || index}
+                      className='flex items-center justify-between gap-3'
+                    >
+                      <div className='min-w-0'>
+                        <div className='truncate text-xs font-medium'>
+                          {tierRow.tier.label || t('Default')}
+                        </div>
+                        <div className='text-muted-foreground/50 truncate text-[10px]'>
+                          {condition || t('Default')}
+                        </div>
+                      </div>
+                      <span className='shrink-0 font-mono text-xs tabular-nums'>
+                        {input ? stripTrailingZeros(input.formatted) : '—'}
+                        <span className='text-muted-foreground/40 mx-1'>/</span>
+                        {output ? stripTrailingZeros(output.formatted) : '—'}
+                      </span>
+                    </div>
+                  )
+                })}
+                <div className='text-muted-foreground/50 text-[10px]'>
+                  {t('Input')} / {t('Output')} · / {tokenUnitLabel} tokens
+                  {dynamicSummary.tierRows.length > 2 &&
+                    ` · +${t('{{count}} tiers', {
+                      count: dynamicSummary.tierRows.length - 2,
+                    })}`}
+                </div>
+              </div>
             )
           }
 
@@ -211,6 +322,48 @@ export function usePricingColumns(
                   ` · ${t('{{count}} tiers', {
                     count: dynamicSummary.tierCount,
                   })}`}
+              </div>
+            </div>
+          )
+        }
+
+        if (flatPriceEntries.length > 0) {
+          if (model.knowledge)
+            return (
+              <div className='min-w-[180px] space-y-1'>
+                {flatPriceEntries.map((entry) => (
+                  <div
+                    key={entry.key}
+                    className='flex items-baseline justify-between gap-3'
+                  >
+                    <span className='text-muted-foreground text-xs'>
+                      {t(entry.shortLabel)}
+                    </span>
+                    <span className='font-mono text-sm tabular-nums'>
+                      {entry.formatted}
+                      <span className='text-muted-foreground ml-1 text-xs'>
+                        / {tokenUnitLabel}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )
+          const input = flatPriceEntries.find(
+            (entry) => entry.field === 'inputPrice'
+          )
+          const output = flatPriceEntries.find(
+            (entry) => entry.field === 'outputPrice'
+          )
+          return (
+            <div className='min-w-[180px]'>
+              <span className='font-mono text-sm tabular-nums'>
+                {input ? stripTrailingZeros(input.formatted) : '—'}
+                <span className='text-muted-foreground/40 mx-1'>/</span>
+                {output ? stripTrailingZeros(output.formatted) : '—'}
+              </span>
+              <div className='text-muted-foreground/50 text-[10px]'>
+                {t('Input')} / {t('Output')} · / {tokenUnitLabel} tokens
               </div>
             </div>
           )
@@ -304,6 +457,16 @@ export function usePricingColumns(
             selectedGroup
           ),
         })
+        const flatCacheEntries = getFlatTokenPriceEntries(model, {
+          tokenUnit,
+          showRechargePrice,
+          priceRate,
+          usdExchangeRate,
+          groupRatioMultiplier: getDynamicDisplayGroupRatio(
+            model,
+            selectedGroup
+          ),
+        }).filter((entry) => entry.variable.group === 'cache')
 
         if (dynamicSummary) {
           if (dynamicSummary.isSpecialExpression) {
@@ -314,18 +477,76 @@ export function usePricingColumns(
             )
           }
 
-          const cacheEntry = dynamicSummary.entries.find(
-            (entry) => entry.field === 'cacheReadPrice'
+          const cacheFields = dynamicSummary.priceFields.filter(
+            (entry) => entry.variable.group === 'cache'
           )
-          if (!cacheEntry) {
+          if (cacheFields.length === 0) {
             return <span className='text-muted-foreground/30 text-xs'>—</span>
           }
 
+          const tierRows = dynamicSummary.tierRows.slice(
+            0,
+            dynamicSummary.tierRows.length > 1 ? 2 : 1
+          )
+
           return (
-            <div className='min-w-[80px]'>
-              <span className='font-mono text-sm tabular-nums'>
-                {stripTrailingZeros(cacheEntry.formatted)}
-              </span>
+            <div className='flex min-w-[150px] flex-col gap-1.5'>
+              {tierRows.map((tierRow, index) => {
+                const entryMap = new Map(
+                  tierRow.entries.map((entry) => [entry.field, entry])
+                )
+                return (
+                  <div
+                    key={tierRow.tier.label || index}
+                    className='flex items-center justify-between gap-3'
+                  >
+                    {dynamicSummary.tierRows.length > 1 && (
+                      <span className='text-muted-foreground max-w-24 truncate text-[10px]'>
+                        {tierRow.tier.label || t('Default')}
+                      </span>
+                    )}
+                    <span className='ml-auto shrink-0 font-mono text-xs tabular-nums'>
+                      {cacheFields.map((field, fieldIndex) => {
+                        const entry = entryMap.get(field.field)
+                        return (
+                          <span key={field.field}>
+                            {fieldIndex > 0 && (
+                              <span className='text-muted-foreground/40 mx-1'>
+                                /
+                              </span>
+                            )}
+                            {entry ? stripTrailingZeros(entry.formatted) : '—'}
+                          </span>
+                        )
+                      })}
+                    </span>
+                  </div>
+                )
+              })}
+              <div className='text-muted-foreground/50 text-[10px]'>
+                {cacheFields.map((field) => t(field.shortLabel)).join(' / ')} ·
+                / {tokenUnitLabel}
+              </div>
+            </div>
+          )
+        }
+
+        if (flatCacheEntries.length > 0) {
+          return (
+            <div className='flex min-w-[170px] flex-col gap-1'>
+              {flatCacheEntries.map((entry) => (
+                <div
+                  key={entry.field}
+                  className='flex items-baseline justify-between gap-3'
+                >
+                  <span className='text-muted-foreground text-[10px]'>
+                    {t(entry.shortLabel)}
+                  </span>
+                  <span className='font-mono text-xs tabular-nums'>
+                    {stripTrailingZeros(entry.formatted)}
+                  </span>
+                </div>
+              ))}
               <div className='text-muted-foreground/50 text-[10px]'>
                 / {tokenUnitLabel}
               </div>
@@ -335,27 +556,61 @@ export function usePricingColumns(
 
         const isTokenBased = isTokenBasedModel(model)
 
-        if (!isTokenBased || model.cache_ratio == null) {
+        if (
+          !isTokenBased ||
+          (model.cache_ratio == null && model.create_cache_ratio == null)
+        ) {
           return <span className='text-muted-foreground/30 text-xs'>—</span>
         }
 
-        const cachedPrice = stripTrailingZeros(
-          formatPrice(
-            model,
-            'cache',
-            tokenUnit,
-            showRechargePrice,
-            priceRate,
-            usdExchangeRate,
-            selectedGroup
-          )
-        )
+        const cacheEntries = [
+          model.cache_ratio != null
+            ? {
+                key: 'read',
+                label: t('Cache Read'),
+                value: formatPrice(
+                  model,
+                  'cache',
+                  tokenUnit,
+                  showRechargePrice,
+                  priceRate,
+                  usdExchangeRate,
+                  selectedGroup
+                ),
+              }
+            : null,
+          model.create_cache_ratio != null
+            ? {
+                key: 'write',
+                label: t('Cache Write'),
+                value: formatPrice(
+                  model,
+                  'create_cache',
+                  tokenUnit,
+                  showRechargePrice,
+                  priceRate,
+                  usdExchangeRate,
+                  selectedGroup
+                ),
+              }
+            : null,
+        ].filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
         return (
-          <div className='min-w-[80px]'>
-            <span className='font-mono text-sm tabular-nums'>
-              {cachedPrice}
-            </span>
+          <div className='flex min-w-[150px] flex-col gap-1'>
+            {cacheEntries.map((entry) => (
+              <div
+                key={entry.key}
+                className='flex items-baseline justify-between gap-3'
+              >
+                <span className='text-muted-foreground text-[10px]'>
+                  {entry.label}
+                </span>
+                <span className='font-mono text-xs tabular-nums'>
+                  {stripTrailingZeros(entry.value)}
+                </span>
+              </div>
+            ))}
             <div className='text-muted-foreground/50 text-[10px]'>
               / {tokenUnitLabel}
             </div>

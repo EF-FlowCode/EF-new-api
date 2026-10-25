@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/oauth"
+	"eflow.local/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -534,10 +536,28 @@ func UnbindCustomOAuth(c *gin.Context) {
 		return
 	}
 
+	// eflow: 不允许解绑账号唯一的登录方式（上游 0973dc2b8 意图），在消费凭证前检查。
+	if remaining, err := model.OtherSignInMethodCount(userId, providerId); err != nil {
+		common.ApiError(c, err)
+		return
+	} else if remaining == 0 {
+		writeSecurityStatusError(c, http.StatusOK, "LAST_LOGIN_METHOD", model.ErrLastLoginMethod.Error())
+		return
+	}
+	proofContext, err := common.Marshal(service.AccountUnbindingContext{ProviderID: providerId})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccountUnbind, Context: proofContext}) == nil {
+		return
+	}
+
 	if err := model.DeleteUserOAuthBinding(userId, providerId); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	recordUserSecurityAudit(c, userId, "user.binding_unbind", map[string]any{"provider_id": providerId})
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -567,8 +587,11 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 
 	providerIdStr := c.Param("provider_id")
 	providerId, err := strconv.Atoi(providerIdStr)
-	if err != nil {
+	if err != nil || providerId <= 0 {
 		common.ApiErrorMsg(c, "invalid provider id")
+		return
+	}
+	if requireAdminUserProof(c, service.VerificationScopeAdminUserBindingClear, service.AdminUserBindingContext{UserID: userId, ProviderID: providerId}) == nil {
 		return
 	}
 

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -9,10 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/setting/ratio_setting"
+
+	"gorm.io/gorm"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
@@ -21,16 +23,39 @@ var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
+		// Pricing endpoint capabilities are derived from channel settings even
+		// when channel selection uses the database directly.
+		InvalidatePricingCache()
 		return
 	}
+	if err := refreshChannelCache(); err != nil {
+		common.SysError("failed to sync channels from database: " + err.Error())
+		return
+	}
+	common.SysLog("channels synced from database")
+}
+
+func refreshChannelCache() error {
 	newChannelId2channel := make(map[int]*Channel)
 	var channels []*Channel
-	DB.Find(&channels)
+	var abilities []*Ability
+	// Channels and abilities are written by separate commits; read both from
+	// one snapshot so a refresh never pairs new channels with old abilities.
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Find(&channels).Error; err != nil {
+			return fmt.Errorf("load channels: %w", err)
+		}
+		if err := tx.Find(&abilities).Error; err != nil {
+			return fmt.Errorf("load abilities: %w", err)
+		}
+		return nil
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return err
+	}
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 	}
-	var abilities []*Ability
-	DB.Find(&abilities)
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -43,10 +68,15 @@ func InitChannelCache() {
 		if channel.Status != common.ChannelStatusEnabled {
 			continue // skip disabled channels
 		}
-		groups := strings.Split(channel.Group, ",")
-		for _, group := range groups {
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
+		groups := strings.SplitSeq(channel.Group, ",")
+		for group := range groups {
+			if newGroup2model2channels[group] == nil {
+				// A channel group without abilities (edit in flight or a failed
+				// ability rebuild) must not panic the whole process.
+				newGroup2model2channels[group] = make(map[string][]int)
+			}
+			models := strings.SplitSeq(channel.Models, ",")
+			for model := range models {
 				if _, ok := newGroup2model2channels[group][model]; !ok {
 					newGroup2model2channels[group][model] = make([]int, 0)
 				}
@@ -83,21 +113,47 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channelSyncLock.Unlock()
-	common.SysLog("channels synced from database")
+	// Channel settings include Advanced Custom route capabilities. Invalidate
+	// the derived pricing/endpoint cache only after releasing the channel lock;
+	// pricing refresh may take a read lock on this cache.
+	InvalidatePricingCache()
+	return nil
 }
 
 func SyncChannelCache(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
 		common.SysLog("syncing channels from database")
-		InitChannelCache()
+		syncChannelCacheOnce()
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+// syncChannelCacheOnce keeps the background loop alive: a panic here used to
+// terminate the process because the loop runs in a bare goroutine.
+func syncChannelCacheOnce() {
+	defer func() {
+		if r := recover(); r != nil {
+			common.SysError(fmt.Sprintf("channel cache sync panic: %v", r))
+		}
+	}()
+	InitChannelCache()
+}
+
+// GetRandomSatisfiedChannel keeps the legacy three-argument call shape while
+// accepting the optional request path used by the upstream API.
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath ...string) (*Channel, error) {
+	path := ""
+	if len(requestPath) > 0 {
+		path = requestPath[0]
+	}
+	return GetRandomSatisfiedChannelForRequest(group, model, retry, path)
+}
+
+// GetRandomSatisfiedChannelForRequest is the path-aware channel-cache lookup.
+func GetRandomSatisfiedChannelForRequest(group string, model string, retry int, requestPath string, filters ...func(*Channel) bool) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannelForRequest(group, model, retry, requestPath, filters...)
 	}
 
 	channelSyncLock.RLock()
@@ -105,11 +161,13 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 
 	// First, try to find channels with the exact model name.
 	channels := group2model2channels[group][model]
+	channels = filterChannelsByRequestPath(channels, requestPath, model, filters...)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = group2model2channels[group][normalizedModel]
+		channels = filterChannelsByRequestPath(channels, requestPath, model, filters...)
 	}
 
 	if len(channels) == 0 {
@@ -137,6 +195,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
 
+	if retry < 0 {
+		retry = 0
+	}
 	if retry >= len(uniquePriorities) {
 		retry = len(uniquePriorities) - 1
 	}
@@ -191,6 +252,29 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	return nil, errors.New("channel not found")
 }
 
+func filterChannelsByRequestPath(channelIDs []int, requestPath string, modelName string, filters ...func(*Channel) bool) []int {
+	if (requestPath == "" && len(filters) == 0) || len(channelIDs) == 0 {
+		return channelIDs
+	}
+	filtered := make([]int, 0, len(channelIDs))
+	for _, channelID := range channelIDs {
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			if len(filters) > 0 {
+				continue
+			}
+			// Preserve stale IDs so the caller retains the existing database
+			// consistency error instead of silently reporting no channel.
+			filtered = append(filtered, channelID)
+			continue
+		}
+		if ChannelSupportsRequestPath(channel, requestPath, modelName) && channelPassesFilters(channel, filters) {
+			filtered = append(filtered, channelID)
+		}
+	}
+	return filtered
+}
+
 func CacheGetChannel(id int) (*Channel, error) {
 	if !common.MemoryCacheEnabled {
 		return GetChannelById(id, true)
@@ -203,6 +287,28 @@ func CacheGetChannel(id int) (*Channel, error) {
 		return nil, fmt.Errorf("渠道# %d，已不存在", id)
 	}
 	return c, nil
+}
+
+// CacheSelectEnabledChannels returns, ordered by id, the enabled cached
+// channels accepted by keep, projected to the routing columns task plugins read
+// (id, type, status, models, model_mapping). ok is false when the memory cache
+// is off or has not loaded, so callers can fall back to the database.
+func CacheSelectEnabledChannels(keep func(*Channel) bool) (channels []Channel, ok bool) {
+	if !common.MemoryCacheEnabled {
+		return nil, false
+	}
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	if channelsIDM == nil {
+		return nil, false
+	}
+	for _, ch := range channelsIDM {
+		if ch.Status == common.ChannelStatusEnabled && keep(ch) {
+			channels = append(channels, Channel{Id: ch.Id, Type: ch.Type, Status: ch.Status, Models: ch.Models, ModelMapping: ch.ModelMapping})
+		}
+	}
+	sort.Slice(channels, func(i, j int) bool { return channels[i].Id < channels[j].Id })
+	return channels, true
 }
 
 func CacheGetChannelInfo(id int) (*ChannelInfo, error) {
@@ -246,24 +352,4 @@ func CacheUpdateChannelStatus(id int, status int) {
 			}
 		}
 	}
-}
-
-func CacheUpdateChannel(channel *Channel) {
-	if !common.MemoryCacheEnabled {
-		return
-	}
-	channelSyncLock.Lock()
-	defer channelSyncLock.Unlock()
-	if channel == nil {
-		return
-	}
-
-	if channelsIDM == nil {
-		channelsIDM = make(map[int]*Channel)
-	}
-	if oldChannel, ok := channelsIDM[channel.Id]; ok {
-		logger.LogDebug(nil, "CacheUpdateChannel before: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, oldChannel.ChannelInfo.MultiKeyPollingIndex)
-	}
-	channelsIDM[channel.Id] = channel
-	logger.LogDebug(nil, "CacheUpdateChannel after: id=%d, name=%s, status=%d, polling_index=%d", channel.Id, channel.Name, channel.Status, channel.ChannelInfo.MultiKeyPollingIndex)
 }

@@ -4,19 +4,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/internal/testconfig"
 	"github.com/gin-gonic/gin"
 )
 
 func TestGetClientIPDefaultsToRemoteAddr(t *testing.T) {
-	oldCfg := *operation_setting.GetRiskControlSetting()
-	defer func() {
-		*operation_setting.GetRiskControlSetting() = oldCfg
-	}()
-
-	cfg := operation_setting.GetRiskControlSetting()
-	cfg.TrustedIPHeaderEnabled = false
-	cfg.TrustedIPHeader = "X-Real-IP"
+	testconfig.Set(t, "risk_control", map[string]string{
+		"trusted_ip_header_enabled": "false",
+		"trusted_ip_header":         "X-Real-IP",
+	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -32,14 +28,10 @@ func TestGetClientIPDefaultsToRemoteAddr(t *testing.T) {
 }
 
 func TestGetClientIPUsesTrustedHeaderWhenEnabled(t *testing.T) {
-	oldCfg := *operation_setting.GetRiskControlSetting()
-	defer func() {
-		*operation_setting.GetRiskControlSetting() = oldCfg
-	}()
-
-	cfg := operation_setting.GetRiskControlSetting()
-	cfg.TrustedIPHeaderEnabled = true
-	cfg.TrustedIPHeader = "CF-Connecting-IP"
+	testconfig.Set(t, "risk_control", map[string]string{
+		"trusted_ip_header_enabled": "true",
+		"trusted_ip_header":         "CF-Connecting-IP",
+	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -55,14 +47,10 @@ func TestGetClientIPUsesTrustedHeaderWhenEnabled(t *testing.T) {
 }
 
 func TestGetClientIPParsesForwardedStyleHeader(t *testing.T) {
-	oldCfg := *operation_setting.GetRiskControlSetting()
-	defer func() {
-		*operation_setting.GetRiskControlSetting() = oldCfg
-	}()
-
-	cfg := operation_setting.GetRiskControlSetting()
-	cfg.TrustedIPHeaderEnabled = true
-	cfg.TrustedIPHeader = "X-Forwarded-For"
+	testconfig.Set(t, "risk_control", map[string]string{
+		"trusted_ip_header_enabled": "true",
+		"trusted_ip_header":         "X-Forwarded-For",
+	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -78,14 +66,10 @@ func TestGetClientIPParsesForwardedStyleHeader(t *testing.T) {
 }
 
 func TestGetClientIPFallsBackWhenTrustedHeaderInvalid(t *testing.T) {
-	oldCfg := *operation_setting.GetRiskControlSetting()
-	defer func() {
-		*operation_setting.GetRiskControlSetting() = oldCfg
-	}()
-
-	cfg := operation_setting.GetRiskControlSetting()
-	cfg.TrustedIPHeaderEnabled = true
-	cfg.TrustedIPHeader = "X-Real-IP"
+	testconfig.Set(t, "risk_control", map[string]string{
+		"trusted_ip_header_enabled": "true",
+		"trusted_ip_header":         "X-Real-IP",
+	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -101,14 +85,10 @@ func TestGetClientIPFallsBackWhenTrustedHeaderInvalid(t *testing.T) {
 }
 
 func TestDiagnoseRequestRecommendsTrustedHeader(t *testing.T) {
-	oldCfg := *operation_setting.GetRiskControlSetting()
-	defer func() {
-		*operation_setting.GetRiskControlSetting() = oldCfg
-	}()
-
-	cfg := operation_setting.GetRiskControlSetting()
-	cfg.TrustedIPHeaderEnabled = false
-	cfg.TrustedIPHeader = "X-Real-IP"
+	testconfig.Set(t, "risk_control", map[string]string{
+		"trusted_ip_header_enabled": "false",
+		"trusted_ip_header":         "X-Real-IP",
+	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -132,14 +112,10 @@ func TestDiagnoseRequestRecommendsTrustedHeader(t *testing.T) {
 }
 
 func TestDiagnoseRequestRecommendsRemoteAddrWhenPublic(t *testing.T) {
-	oldCfg := *operation_setting.GetRiskControlSetting()
-	defer func() {
-		*operation_setting.GetRiskControlSetting() = oldCfg
-	}()
-
-	cfg := operation_setting.GetRiskControlSetting()
-	cfg.TrustedIPHeaderEnabled = false
-	cfg.TrustedIPHeader = "X-Real-IP"
+	testconfig.Set(t, "risk_control", map[string]string{
+		"trusted_ip_header_enabled": "false",
+		"trusted_ip_header":         "X-Real-IP",
+	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

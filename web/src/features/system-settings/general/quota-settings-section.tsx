@@ -26,7 +26,7 @@ import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const quotaSchema = z.object({
   QuotaForNewUser: z.coerce.number().min(0),
@@ -53,7 +53,7 @@ export function QuotaSettingsSection({
   defaultValues,
 }: QuotaSettingsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const { form, handleSubmit, isDirty, isSubmitting } =
     useSettingsForm<QuotaFormValues>({
@@ -64,12 +64,12 @@ export function QuotaSettingsSection({
       >,
       defaultValues,
       onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
-          await updateOption.mutateAsync({
-            key,
-            value: value as string | number | boolean,
-          })
-        }
+        const updates = Object.entries(changedFields).map(([key, value]) => ({
+          key,
+          value: value as string | number | boolean,
+        }))
+        if (updates.length === 0) return
+        await updateOptions.mutateAsync(updates)
       },
     })
 
@@ -174,7 +174,7 @@ export function QuotaSettingsSection({
                         <Switch
                           checked={field.value}
                           onCheckedChange={field.onChange}
-                          disabled={updateOption.isPending}
+                          disabled={updateOptions.isPending}
                         />
                       </FormControl>
                     </FormItem>
@@ -203,7 +203,7 @@ export function QuotaSettingsSection({
                         <Switch
                           checked={field.value}
                           onCheckedChange={field.onChange}
-                          disabled={updateOption.isPending}
+                          disabled={updateOptions.isPending}
                         />
                       </FormControl>
                     </FormItem>
@@ -344,9 +344,9 @@ export function QuotaSettingsSection({
             </p>
             <Button
               type='submit'
-              disabled={updateOption.isPending || isSubmitting || !isDirty}
+              disabled={updateOptions.isPending || isSubmitting || !isDirty}
             >
-              {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+              {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
             </Button>
           </div>
         </form>

@@ -23,9 +23,10 @@ type Props = {
   onChange: (value: string) => void
 }
 
-const DEFAULT_POLICY: Required<
-  Omit<Policy, 'group_quotas' | 'role_quotas'>
-> & { group_quotas: Record<string, number>; role_quotas: Record<string, number> } = {
+const DEFAULT_POLICY: Required<Omit<Policy, 'group_quotas' | 'role_quotas'>> & {
+  group_quotas: Record<string, number>
+  role_quotas: Record<string, number>
+} = {
   min_account_age_days: 7,
   default_generate_quota: 5,
   monthly_generate_quota: 0,
@@ -130,7 +131,12 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
       <div className='space-y-2'>
         <div className='flex items-center justify-between'>
           <Label className='text-sm font-medium'>原始 JSON</Label>
-          <Button type='button' size='sm' variant='outline' onClick={exitRawMode}>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            onClick={exitRawMode}
+          >
             <ChevronRight className='mr-1 h-3 w-3 rotate-90' />
             回到可视化
           </Button>
@@ -146,8 +152,8 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
           <p className='text-destructive text-xs'>{rawError}</p>
         ) : null}
         <p className='text-muted-foreground text-xs'>
-          手动编辑 JSON 字段，可改 group_quotas / role_quotas 等字典类型。
-          有效 JSON 会即时同步到表单。
+          手动编辑 JSON 字段，可改 group_quotas / role_quotas 等字典类型。 有效
+          JSON 会即时同步到表单。
         </p>
       </div>
     )
@@ -159,7 +165,12 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
         <div className='text-destructive text-sm'>
           当前 JSON 格式无效，无法用可视化编辑。请切到 raw 模式修正。
         </div>
-        <Button type='button' size='sm' variant='outline' onClick={enterRawMode}>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={enterRawMode}
+        >
           打开原始 JSON 编辑
         </Button>
       </div>
@@ -177,8 +188,13 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
           <Input
             type='number'
             min={0}
-            value={get('min_account_age_days', DEFAULT_POLICY.min_account_age_days)}
-            onChange={(e) => updateField('min_account_age_days', e.target.value)}
+            value={get(
+              'min_account_age_days',
+              DEFAULT_POLICY.min_account_age_days
+            )}
+            onChange={(e) =>
+              updateField('min_account_age_days', e.target.value)
+            }
           />
           <p className='text-muted-foreground text-xs'>
             注册满 N 天才能自助生成邀请码。0 = 不限。
@@ -217,7 +233,8 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
             }
           />
           <p className='text-muted-foreground text-xs'>
-            近 30 天滑动窗口内最多生成几条。<strong>1 = 每月最多 1 条</strong>。0 = 不限。
+            近 30 天滑动窗口内最多生成几条。<strong>1 = 每月最多 1 条</strong>
+            。0 = 不限。
           </p>
         </div>
 
@@ -231,7 +248,8 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
             onChange={(e) => updateField('min_topup_money', e.target.value)}
           />
           <p className='text-muted-foreground text-xs'>
-            按 topup.money 累计求和（仅成功订单）。<strong>0 = 不限</strong>；&gt;0 时用户必须累计充值满该金额才能生成邀请码。
+            按 topup.money 累计求和（仅成功订单）。<strong>0 = 不限</strong>
+            ；&gt;0 时用户必须累计充值满该金额才能生成邀请码。
           </p>
         </div>
 
@@ -276,7 +294,12 @@ export function InvitationCodePolicyVisualEditor({ value, onChange }: Props) {
         <p className='text-muted-foreground text-xs'>
           按分组 / 角色定制配额请用 raw JSON 编辑 group_quotas / role_quotas。
         </p>
-        <Button type='button' size='sm' variant='outline' onClick={enterRawMode}>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={enterRawMode}
+        >
           <ChevronDown className='mr-1 h-3 w-3' />
           打开原始 JSON
         </Button>

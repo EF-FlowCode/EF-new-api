@@ -2,14 +2,10 @@ package controller
 
 import (
 	"fmt"
-	"io"
-	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
 )
 
 func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) (string, error) {
@@ -21,49 +17,7 @@ func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) 
 		return ensureAPIKey(url, apiKey), nil
 	}
 
-	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
-	}
-
-	adaptor := relay.GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channel.Type)))
-	if adaptor == nil {
-		return "", fmt.Errorf("gemini task adaptor not found")
-	}
-
-	if apiKey == "" {
-		return "", fmt.Errorf("api key not available for task")
-	}
-
-	proxy := channel.GetSetting().Proxy
-	resp, err := adaptor.FetchTask(baseURL, apiKey, map[string]any{
-		"task_id": task.GetUpstreamTaskID(),
-		"action":  task.Action,
-	}, proxy)
-	if err != nil {
-		return "", fmt.Errorf("fetch task failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read task response failed: %w", err)
-	}
-
-	taskInfo, parseErr := adaptor.ParseTaskResult(body)
-	if parseErr == nil && taskInfo != nil && taskInfo.RemoteUrl != "" {
-		return ensureAPIKey(taskInfo.RemoteUrl, apiKey), nil
-	}
-
-	if url := extractGeminiVideoURLFromPayload(body); url != "" {
-		return ensureAPIKey(url, apiKey), nil
-	}
-
-	if parseErr != nil {
-		return "", fmt.Errorf("parse task result failed: %w", parseErr)
-	}
-
-	return "", fmt.Errorf("gemini video url not found")
+	return "", fmt.Errorf("stored Gemini video URL is missing; explicit plugin adoption is required to query the provider")
 }
 
 func extractGeminiVideoURLFromTaskData(task *model.Task) string {
@@ -156,46 +110,7 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 		return url, nil
 	}
 
-	baseURL := constant.ChannelBaseURLs[channel.Type]
-	if channel.GetBaseURL() != "" {
-		baseURL = channel.GetBaseURL()
-	}
-
-	adaptor := relay.GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channel.Type)))
-	if adaptor == nil {
-		return "", fmt.Errorf("vertex task adaptor not found")
-	}
-
-	key := getVertexTaskKey(channel, task)
-	if key == "" {
-		return "", fmt.Errorf("vertex key not available for task")
-	}
-
-	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
-		"task_id": task.GetUpstreamTaskID(),
-		"action":  task.Action,
-	}, channel.GetSetting().Proxy)
-	if err != nil {
-		return "", fmt.Errorf("fetch task failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read task response failed: %w", err)
-	}
-
-	taskInfo, parseErr := adaptor.ParseTaskResult(body)
-	if parseErr == nil && taskInfo != nil && strings.TrimSpace(taskInfo.Url) != "" {
-		return taskInfo.Url, nil
-	}
-	if url := extractVertexVideoURLFromPayload(body); url != "" {
-		return url, nil
-	}
-	if parseErr != nil {
-		return "", fmt.Errorf("parse task result failed: %w", parseErr)
-	}
-	return "", fmt.Errorf("vertex video url not found")
+	return "", fmt.Errorf("stored Vertex video URL is missing; explicit plugin adoption is required to query the provider")
 }
 
 func isTaskProxyContentURL(url string, taskID string) bool {
@@ -203,25 +118,6 @@ func isTaskProxyContentURL(url string, taskID string) bool {
 		return false
 	}
 	return strings.Contains(url, "/v1/videos/"+taskID+"/content")
-}
-
-func getVertexTaskKey(channel *model.Channel, task *model.Task) string {
-	if task != nil {
-		if key := strings.TrimSpace(task.PrivateData.Key); key != "" {
-			return key
-		}
-	}
-	if channel == nil {
-		return ""
-	}
-	keys := channel.GetKeys()
-	for _, key := range keys {
-		key = strings.TrimSpace(key)
-		if key != "" {
-			return key
-		}
-	}
-	return strings.TrimSpace(channel.Key)
 }
 
 func extractVertexVideoURLFromTaskData(task *model.Task) string {

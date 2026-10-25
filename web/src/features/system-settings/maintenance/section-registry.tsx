@@ -1,3 +1,4 @@
+import { UsageRefunds } from '@/features/usage-refunds'
 import type { MaintenanceSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import {
@@ -14,6 +15,12 @@ import { SidebarModulesSection } from './sidebar-modules-section'
 import { UpdateCheckerSection } from './update-checker-section'
 
 const MAINTENANCE_SECTIONS = [
+  {
+    id: 'usage-refunds',
+    titleKey: 'Batch balance return',
+    descriptionKey: 'Usage compensation',
+    build: (_settings: MaintenanceSettings) => <UsageRefunds />,
+  },
   {
     id: 'update-checker',
     titleKey: 'System maintenance',

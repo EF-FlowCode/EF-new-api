@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/logger"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -169,41 +170,26 @@ func CreateRefundTicket(params CreateRefundTicketParams) (*Ticket, *TicketRefund
 		return nil, nil, nil, ErrTicketRefundContactEmpty
 	}
 
-	// 预检用户当前可用余额。直接读 DB，确保不被缓存/批量更新延迟误导。
-	var userQuota int
-	if err := DB.Model(&User{}).Where("id = ?", params.UserId).
-		Select("quota").Find(&userQuota).Error; err != nil {
-		return nil, nil, nil, err
-	}
-	if params.RefundQuota > userQuota {
-		return nil, nil, nil, ErrTicketRefundQuotaExceed
-	}
-
-	// 先扣除余额（db=true 跳过 BatchUpdate，立即落库）。
-	if err := DecreaseUserQuota(params.UserId, params.RefundQuota, true); err != nil {
-		return nil, nil, nil, err
-	}
-	quotaDeducted := true
-	defer func() {
-		// 事务后半段如果失败，补偿性退还已扣金额，避免用户资产凭空消失。
-		if quotaDeducted {
-			return
-		}
-		if err := IncreaseUserQuota(params.UserId, params.RefundQuota, true); err != nil {
-			common.SysError(fmt.Sprintf(
-				"refund create failed and quota refund also failed, user_id=%d, quota=%d, err=%v",
-				params.UserId, params.RefundQuota, err))
-		} else {
-			_ = InvalidateUserCache(params.UserId)
-		}
-	}()
-
 	var (
 		ticket  *Ticket
 		refund  *TicketRefund
 		message *TicketMessage
 	)
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 锁住用户行后校验并扣减：并发提交的多笔申请串行化，余额不会被扣成负数。
+		var user User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "quota").
+			First(&user, "id = ?", params.UserId).Error; err != nil {
+			return err
+		}
+		userQuota := user.Quota
+		if params.RefundQuota > userQuota {
+			return ErrTicketRefundQuotaExceed
+		}
+		if err := adjustUserQuotaTx(tx, params.UserId, params.RefundQuota); err != nil {
+			return ErrTicketRefundQuotaExceed
+		}
+
 		subject := strings.TrimSpace(params.Subject)
 		if subject == "" {
 			subject = fmt.Sprintf("退款申请（%s）", logger.LogQuota(params.RefundQuota))
@@ -257,7 +243,6 @@ func CreateRefundTicket(params CreateRefundTicketParams) (*Ticket, *TicketRefund
 		return nil
 	})
 	if err != nil {
-		quotaDeducted = false // 触发 defer 退款
 		return nil, nil, nil, err
 	}
 	_ = InvalidateUserCache(params.UserId)
@@ -269,7 +254,7 @@ func CreateRefundTicket(params CreateRefundTicketParams) (*Ticket, *TicketRefund
 
 // SumUserPendingRefundQuota 汇总用户当前处于 Pending 状态的退款工单累计申请额度。
 //
-// 注意：这笔钱在退款工单提交时已通过 DecreaseUserQuota 从 user.quota 中**扣除**，
+// 注意：这笔钱在退款工单提交时已在同一事务内从 user.quota 中**扣除**，
 // 并不是账户层面意义上的"冻结"。此处数字仅供管理员审计参考（"这位用户还有 X 额度在等审核"），
 // 切勿把它再加回到可用余额上。对应字段 TicketRefund.RefundQuota（与 FrozenQuota 同值，取任一即可）。
 func SumUserPendingRefundQuota(userId int) (int64, error) {
@@ -440,12 +425,12 @@ func UpdateRefundStatus(params UpdateRefundStatusParams) (*TicketRefund, *Ticket
 	// 3) 业务数据状态流转（工单/退款记录）；失败则补偿账户变更。
 	now := common.GetTimestamp()
 	txErr := DB.Transaction(func(tx *gorm.DB) error {
-		refundUpdates := map[string]interface{}{
+		refundUpdates := map[string]any{
 			"refund_status":  params.RefundStatus,
 			"processed_time": now,
 			"frozen_quota":   0,
 		}
-		ticketUpdates := map[string]interface{}{
+		ticketUpdates := map[string]any{
 			"updated_time": now,
 			"admin_id":     params.AdminId,
 		}
@@ -495,7 +480,7 @@ func UpdateRefundStatus(params UpdateRefundStatusParams) (*TicketRefund, *Ticket
 	_ = InvalidateUserCache(userId)
 
 	// 4) 写审计日志（账户变更 + 工单动作）。
-	adminInfo := map[string]interface{}{"admin_id": params.AdminId}
+	adminInfo := map[string]any{"admin_id": params.AdminId}
 	switch params.RefundStatus {
 	case RefundStatusRefunded:
 		var logContent string

@@ -3,7 +3,7 @@ package controller
 import (
 	"net/http"
 
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )

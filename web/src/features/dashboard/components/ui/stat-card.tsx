@@ -21,9 +21,7 @@ export function StatCard(props: StatCardProps) {
           <Icon className='text-muted-foreground/60 size-3.5 shrink-0' />
           <span className='line-clamp-2 leading-snug'>{props.title}</span>
         </div>
-        {props.action && (
-          <div className='shrink-0'>{props.action}</div>
-        )}
+        {props.action && <div className='shrink-0'>{props.action}</div>}
       </div>
 
       {props.loading ? (

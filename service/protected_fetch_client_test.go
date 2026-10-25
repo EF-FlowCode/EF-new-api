@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/internal/testconfig"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,20 +41,16 @@ func testConn(t *testing.T) net.Conn {
 
 func configureSSRFTestFetchSetting(t *testing.T) {
 	t.Helper()
-	fetchSetting := system_setting.GetFetchSetting()
-	original := *fetchSetting
-	t.Cleanup(func() {
-		*fetchSetting = original
+	testconfig.Set(t, "fetch_setting", map[string]string{
+		"enable_ssrf_protection":     "true",
+		"allow_private_ip":           "false",
+		"domain_filter_mode":         "false",
+		"ip_filter_mode":             "false",
+		"domain_list":                "[]",
+		"ip_list":                    "[]",
+		"allowed_ports":              `["80","443"]`,
+		"apply_ip_filter_for_domain": "true",
 	})
-
-	fetchSetting.EnableSSRFProtection = true
-	fetchSetting.AllowPrivateIp = false
-	fetchSetting.DomainFilterMode = false
-	fetchSetting.IpFilterMode = false
-	fetchSetting.DomainList = nil
-	fetchSetting.IpList = nil
-	fetchSetting.AllowedPorts = []string{"80", "443"}
-	fetchSetting.ApplyIPFilterForDomain = true
 }
 
 func mustParseURL(t *testing.T, rawURL string) *url.URL {
@@ -195,17 +191,16 @@ func TestProtectedFetchDialerSkipsResolvedIPCheckWhenDisabled(t *testing.T) {
 }
 
 func TestGetSSRFProtectedHTTPClientFallsBackToDefaultClientWhenProtectionDisabled(t *testing.T) {
-	fetchSetting := system_setting.GetFetchSetting()
-	originalFetchSetting := *fetchSetting
 	originalHTTPClient := httpClient
 	originalProtectedClient := ssrfProtectedHTTPClient
 	t.Cleanup(func() {
-		*fetchSetting = originalFetchSetting
 		httpClient = originalHTTPClient
 		ssrfProtectedHTTPClient = originalProtectedClient
 	})
 
-	fetchSetting.EnableSSRFProtection = false
+	testconfig.Set(t, "fetch_setting", map[string]string{
+		"enable_ssrf_protection": "false",
+	})
 	expected := &http.Client{}
 	httpClient = expected
 	ssrfProtectedHTTPClient = &http.Client{}
@@ -240,6 +235,45 @@ func TestProtectedFetchRoundTripperUsesConfiguredProxy(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.Equal(t, []string{"127.0.0.1:3128"}, dialed)
+}
+
+func TestProtectedFetchRoundTripperRejectsDomainProxyWhenIPBindingIsRequired(t *testing.T) {
+	testconfig.Set(t, "fetch_setting", map[string]string{
+		"enable_ssrf_protection":     "true",
+		"allow_private_ip":           "true",
+		"domain_filter_mode":         "false",
+		"ip_filter_mode":             "false",
+		"domain_list":                "[]",
+		"ip_list":                    "[]",
+		"allowed_ports":              `["80","443"]`,
+		"apply_ip_filter_for_domain": "true",
+	})
+	proxyURL := mustParseURL(t, "http://127.0.0.1:3128")
+	var dialed []string
+	client := newProtectedFetchHTTPClientWithProxy(
+		staticSSRFResolver{},
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialed = append(dialed, address)
+			return nil, errors.New("proxy should not be dialed")
+		},
+		staticProtection(&common.SSRFProtection{
+			AllowPrivateIp:         true,
+			DomainFilterMode:       false,
+			IpFilterMode:           false,
+			ApplyIPFilterForDomain: true,
+		}),
+		func(req *http.Request) (*url.URL, error) {
+			return proxyURL, nil
+		},
+	)
+	req, err := http.NewRequest(http.MethodGet, "http://localhost/resource", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Contains(t, err.Error(), "cannot be enforced through an HTTP proxy")
+	require.Empty(t, dialed)
 }
 
 func TestProtectedFetchRoundTripperRejectsPrivateTargetBeforeProxy(t *testing.T) {

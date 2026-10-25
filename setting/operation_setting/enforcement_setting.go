@@ -1,9 +1,10 @@
 package operation_setting
 
 import (
+	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 const (
@@ -80,15 +81,15 @@ type EnforcementSetting struct {
 }
 
 var enforcementSetting = EnforcementSetting{
-	Enabled:                     false,
-	EmailOnHit:                  false,
-	EmailOnAutoBan:              false,
-	CountWindowHours:            24,
-	BanThreshold:                0,
-	BanThresholdPerSource:       map[string]int{},
-	EnabledSources:              []string{EnforcementSourceRiskDistribution, EnforcementSourceModeration},
-	EmailHitTemplate:            DefaultEnforcementHitTemplate,
-	EmailBanTemplate:            DefaultEnforcementBanTemplate,
+	Enabled:               false,
+	EmailOnHit:            false,
+	EmailOnAutoBan:        false,
+	CountWindowHours:      24,
+	BanThreshold:          0,
+	BanThresholdPerSource: map[string]int{},
+	EnabledSources:        []string{EnforcementSourceRiskDistribution, EnforcementSourceModeration},
+	EmailHitTemplate:      DefaultEnforcementHitTemplate,
+	EmailBanTemplate:      DefaultEnforcementBanTemplate,
 	EmailHitSubject:       "您的账户触发了平台风控策略",
 	EmailBanSubject:       "您的账户已被自动封禁",
 	HitEmailWindowMinutes: 10,
@@ -211,8 +212,9 @@ func init() {
 }
 
 func GetEnforcementSetting() *EnforcementSetting {
-	NormalizeEnforcementSetting(&enforcementSetting)
-	return &enforcementSetting
+	setting := config.MustSnapshot[EnforcementSetting]("enforcement")
+	NormalizeEnforcementSetting(&setting)
+	return &setting
 }
 
 // IsEnforcementSourceEnabled centralises the gate every engine consults
@@ -222,12 +224,7 @@ func IsEnforcementSourceEnabled(setting *EnforcementSetting, source string) bool
 	if setting == nil || !setting.Enabled {
 		return false
 	}
-	for _, s := range setting.EnabledSources {
-		if s == source {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(setting.EnabledSources, source)
 }
 
 // EffectiveEnforcementBanThreshold resolves the threshold for a source,

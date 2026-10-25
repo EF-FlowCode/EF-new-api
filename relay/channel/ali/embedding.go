@@ -4,14 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,14 +27,22 @@ func isMultimodalEmbeddingModel(modelName string) bool {
 		strings.Contains(m, "vl-embedding")
 }
 
+func embeddingModelName(info *relaycommon.RelayInfo) string {
+	if info.UpstreamModelName != "" {
+		return info.UpstreamModelName
+	}
+	return info.OriginModelName
+}
+
 // ---------- dashscope 多模态 embedding 请求 / 响应结构 ----------
 
 // AliMultimodalContent 是 dashscope contents 数组中的一个元素，
 // text / image / video 三个字段最多设置一个。
 type AliMultimodalContent struct {
-	Text  string `json:"text,omitempty"`
-	Image string `json:"image,omitempty"`
-	Video string `json:"video,omitempty"`
+	Text        string   `json:"text,omitempty"`
+	Image       string   `json:"image,omitempty"`
+	Video       string   `json:"video,omitempty"`
+	MultiImages []string `json:"multi_images,omitempty"`
 }
 
 type AliMultimodalEmbeddingInput struct {
@@ -41,7 +50,10 @@ type AliMultimodalEmbeddingInput struct {
 }
 
 type AliMultimodalEmbeddingParameters struct {
-	// 预留，dashscope 当前没有强制需要传的参数；后续如果开放维度配置可以在此扩展。
+	Dimension    *int     `json:"dimension,omitempty"`
+	FPS          *float64 `json:"fps,omitempty"`
+	Instruct     string   `json:"instruct,omitempty"`
+	EnableFusion *bool    `json:"enable_fusion,omitempty"`
 }
 
 type AliMultimodalEmbeddingRequest struct {
@@ -81,6 +93,21 @@ type AliMultimodalEmbeddingResponse struct {
 //
 // 也兼容 dashscope 风格的裸 dict（{"image":"...", "text":"...", "video":"..."}）直传。
 func ConvertMultimodalEmbeddingRequest(req dto.EmbeddingRequest) (*AliMultimodalEmbeddingRequest, error) {
+	if req.EncodingFormat != "" && req.EncodingFormat != "float" {
+		return nil, errors.New("native multimodal embedding supports encoding_format=float only")
+	}
+	if req.Dimensions != nil && *req.Dimensions <= 0 {
+		return nil, errors.New("dimensions must be positive")
+	}
+	if req.FPS != nil && (*req.FPS < 0 || *req.FPS > 1 || math.IsNaN(*req.FPS) || math.IsInf(*req.FPS, 0)) {
+		return nil, errors.New("fps must be between 0 and 1")
+	}
+	if req.EnableFusion != nil && req.Model != "qwen3-vl-embedding" {
+		return nil, errors.New("enable_fusion is supported only by qwen3-vl-embedding")
+	}
+	if req.Dimensions != nil && (req.Model == "tongyi-embedding-vision-plus" || req.Model == "tongyi-embedding-vision-flash" || req.Model == "multimodal-embedding-v1") {
+		return nil, errors.New("this model has fixed dimensions")
+	}
 	if req.Input == nil {
 		return nil, errors.New("embedding input is required for multimodal embedding model")
 	}
@@ -94,8 +121,9 @@ func ConvertMultimodalEmbeddingRequest(req dto.EmbeddingRequest) (*AliMultimodal
 	}
 
 	return &AliMultimodalEmbeddingRequest{
-		Model: req.Model,
-		Input: AliMultimodalEmbeddingInput{Contents: contents},
+		Model:      req.Model,
+		Input:      AliMultimodalEmbeddingInput{Contents: contents},
+		Parameters: &AliMultimodalEmbeddingParameters{Dimension: req.Dimensions, FPS: req.FPS, Instruct: req.Instruct, EnableFusion: req.EnableFusion},
 	}, nil
 }
 
@@ -152,6 +180,21 @@ func convertOneContent(item any) (AliMultimodalContent, error) {
 		if vid, ok := m["video"].(string); ok {
 			c.Video = vid
 		}
+		if images, ok := m["multi_images"].([]any); ok {
+			for _, image := range images {
+				url, ok := image.(string)
+				if !ok || url == "" {
+					return c, errors.New("multi_images must contain nonempty image URLs")
+				}
+				c.MultiImages = append(c.MultiImages, url)
+			}
+		}
+		if images, ok := m["multi_images"].([]string); ok {
+			c.MultiImages = images
+		}
+		if c.Text == "" && c.Image == "" && c.Video == "" && len(c.MultiImages) == 0 {
+			return c, errors.New("empty multimodal content")
+		}
 		return c, nil
 	}
 
@@ -188,6 +231,9 @@ func hasDashscopeShape(m map[string]any) bool {
 	// 没有 "type" 字段、却含有 text / image / video 至少一个 string，视为 dashscope 原生
 	if _, hasType := m["type"]; hasType {
 		return false
+	}
+	if _, ok := m["multi_images"]; ok {
+		return true
 	}
 	for _, k := range []string{"text", "image", "video"} {
 		if _, ok := m[k].(string); ok {
@@ -245,29 +291,23 @@ func MultimodalEmbeddingHandler(c *gin.Context, resp *http.Response, info *relay
 		})
 	}
 
-	// 三种 usage 形态归一化（见 tmp/probe_raw_response.py 实测）：
-	//   - multimodal-embedding-v1:   InputTokens(text) + ImageTokens, 无 TotalTokens
-	//   - tongyi-embedding-vision-*: InputTokens 已经是合计, OutputTokens 单算
-	//   - qwen3-vl-embedding:        TotalTokens 直接可用
-	total := aliResp.Usage.TotalTokens
-	if total == 0 {
-		total = aliResp.Usage.InputTokens + aliResp.Usage.ImageTokens
+	// Qwen VL and legacy v1 report text-only input_tokens; vision input
+	// already includes images. total_tokens, when present, takes precedence.
+	modelName := info.UpstreamModelName
+	if modelName == "" {
+		modelName = info.OriginModelName
 	}
-	prompt := total - aliResp.Usage.OutputTokens
-	if prompt < 0 {
-		prompt = total
-	}
-	usage := dto.Usage{
-		PromptTokens:     prompt,
-		CompletionTokens: aliResp.Usage.OutputTokens,
-		TotalTokens:      total,
+	textOnlyInput := modelName == "multimodal-embedding-v1" || modelName == "qwen2.5-vl-embedding" || modelName == "qwen3-vl-embedding"
+	usage, usageErr := service.KnowledgeUsage(c, info, responseBody, textOnlyInput)
+	if usageErr != nil {
+		return types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
 	}
 
 	openaiResp := dto.EmbeddingResponse{
 		Object: "list",
 		Data:   data,
 		Model:  info.UpstreamModelName,
-		Usage:  usage,
+		Usage:  *usage,
 	}
 
 	jsonResponse, err := common.Marshal(openaiResp)
@@ -277,5 +317,5 @@ func MultimodalEmbeddingHandler(c *gin.Context, resp *http.Response, info *relay
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	_, _ = c.Writer.Write(jsonResponse)
-	return nil, &usage
+	return nil, usage
 }

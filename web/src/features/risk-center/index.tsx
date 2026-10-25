@@ -1,9 +1,9 @@
-import { useTranslation } from 'react-i18next'
 import { ShieldAlert } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DistributionTab } from './components/distribution-tab'
-import { ModerationTab } from './components/moderation-tab'
 import { EnforcementTab } from './components/enforcement-tab'
+import { ModerationTab } from './components/moderation-tab'
 
 export function RiskCenter() {
   const { t } = useTranslation()

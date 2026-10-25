@@ -3,13 +3,14 @@ package model
 import (
 	"bytes"
 	"database/sql/driver"
+	"eflow.local/new-api/pkg/billingexpr"
 	"encoding/json"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	commonRelay "github.com/QuantumNous/new-api/relay/common"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	commonRelay "eflow.local/new-api/relay/common"
 )
 
 type TaskStatus string
@@ -19,7 +20,7 @@ func (t TaskStatus) ToVideoStatus() string {
 	switch t {
 	case TaskStatusQueued, TaskStatusSubmitted:
 		status = dto.VideoStatusQueued
-	case TaskStatusInProgress:
+	case TaskStatusInProgress, TaskStatusBillingPending:
 		status = dto.VideoStatusInProgress
 	case TaskStatusSuccess:
 		status = dto.VideoStatusCompleted
@@ -32,34 +33,40 @@ func (t TaskStatus) ToVideoStatus() string {
 }
 
 const (
-	TaskStatusNotStart   TaskStatus = "NOT_START"
-	TaskStatusSubmitted             = "SUBMITTED"
-	TaskStatusQueued                = "QUEUED"
-	TaskStatusInProgress            = "IN_PROGRESS"
-	TaskStatusFailure               = "FAILURE"
-	TaskStatusSuccess               = "SUCCESS"
-	TaskStatusUnknown               = "UNKNOWN"
+	TaskStatusNotStart       TaskStatus = "NOT_START"
+	TaskStatusSubmitted                 = "SUBMITTED"
+	TaskStatusQueued                    = "QUEUED"
+	TaskStatusInProgress                = "IN_PROGRESS"
+	TaskStatusFailure                   = "FAILURE"
+	TaskStatusSuccess                   = "SUCCESS"
+	TaskStatusUnknown                   = "UNKNOWN"
+	TaskStatusBillingPending            = "BILLING_PENDING"
 )
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
-	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
-	UserId     int                   `json:"user_id" gorm:"index"`
-	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
-	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason string                `json:"fail_reason"`
-	SubmitTime int64                 `json:"submit_time" gorm:"index"`
-	StartTime  int64                 `json:"start_time" gorm:"index"`
-	FinishTime int64                 `json:"finish_time" gorm:"index"`
-	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	Revision        uint64                `json:"-" gorm:"not null;default:0"`
+	BatchLeaseUntil int64                 `json:"-" gorm:"not null;default:0"`
+	ID              int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	CreatedAt       int64                 `json:"created_at" gorm:"index"`
+	UpdatedAt       int64                 `json:"updated_at"`
+	TaskID          string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
+	Platform        constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UserId          int                   `json:"user_id" gorm:"index"`
+	Group           string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	ChannelId       int                   `json:"channel_id" gorm:"index"`
+	Quota           int                   `json:"quota"`
+	Action          string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status          TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason      string                `json:"fail_reason"`
+	SubmitTime      int64                 `json:"submit_time" gorm:"index"`
+	StartTime       int64                 `json:"start_time" gorm:"index"`
+	FinishTime      int64                 `json:"finish_time" gorm:"index"`
+	Progress        string                `json:"progress" gorm:"type:varchar(20);index"`
+	Properties      Properties            `json:"properties" gorm:"type:json"`
+	Username        string                `json:"username,omitempty" gorm:"-"`
+	// ChannelDisabled is set only by public reads that serve a terminal result
+	// after its channel/binding was disabled; never persisted.
+	ChannelDisabled bool `json:"-" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -80,7 +87,7 @@ type Properties struct {
 	OriginModelName   string `json:"origin_model_name,omitempty"`
 }
 
-func (m *Properties) Scan(val interface{}) error {
+func (m *Properties) Scan(val any) error {
 	bytesValue, _ := val.([]byte)
 	if len(bytesValue) == 0 {
 		*m = Properties{}
@@ -97,12 +104,57 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
-	Key            string `json:"key,omitempty"`
-	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
-	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	Plugin         *TaskPluginIdentity  `json:"plugin,omitempty"`
+	PluginContext  *TaskPluginContext   `json:"plugin_context,omitempty"`
+	KnowledgeBatch *KnowledgeBatchState `json:"knowledge_batch,omitempty"`
+	Key            string               `json:"key,omitempty"`
+	UpstreamTaskID string               `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	ResultURL      string               `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+}
+
+// PluginContext retains protocol state and validated observations separately
+// from immutable source identity and host-owned financial fields.
+type TaskPluginContext struct {
+	PublicProtocol         string                       `json:"public_protocol,omitempty"`
+	NativePath             string                       `json:"native_path,omitempty"`
+	NativeMethod           string                       `json:"native_method,omitempty"`
+	PublicMode             string                       `json:"public_mode,omitempty"`
+	PublicBackground       bool                         `json:"public_background,omitempty"`
+	PriceRule              json.RawMessage              `json:"price_rule,omitempty"`
+	TokenBilling           *TaskPluginTokenBilling      `json:"token_billing,omitempty"`
+	CompletionTokens       *int                         `json:"completion_tokens,omitempty"`
+	Expression             *billingexpr.BillingSnapshot `json:"expression,omitempty"`
+	State                  map[string]any               `json:"state,omitempty"`
+	Usage                  map[string]any               `json:"usage,omitempty"`
+	Billing                *TaskPluginBilling           `json:"billing,omitempty"`
+	CompletionUsage        map[string]any               `json:"completion_usage,omitempty"`
+	CompletionUsageInvalid bool                         `json:"completion_usage_invalid,omitempty"`
+	CompletionReady        bool                         `json:"completion_ready,omitempty"`
+	BillingPendingReason   string                       `json:"billing_pending_reason,omitempty"`
+	BillingRetryAfter      int64                        `json:"billing_retry_after,omitempty"`
+}
+
+// Versioned authority for new plugin tasks' optional completion-token pricing.
+// ModelRatio is the legacy quota-per-token coefficient, not a USD expression.
+// A present disabled snapshot must not fall back to subsequently configured prices.
+type TaskPluginTokenBilling struct {
+	Version         int      `json:"version"`
+	Mode            string   `json:"mode"`
+	ModelRatio      float64  `json:"model_ratio,omitempty"`
+	GroupRatio      *float64 `json:"group_ratio,omitempty"`
+	OtherMultiplier float64  `json:"other_multiplier,omitempty"`
+}
+
+// All monetary inputs are captured before submission. Completion hooks supply
+// observations only; neither live pricing settings nor scripts supply prices.
+type TaskPluginBilling struct {
+	Version          int                `json:"version"`
+	Mode             string             `json:"mode"`
+	BaseQuota        int                `json:"base_quota"`
+	ResolutionRatios map[string]float64 `json:"resolution_ratios,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -139,12 +191,18 @@ func GenerateTaskID() string {
 	return "task_" + key
 }
 
-func (p *TaskPrivateData) Scan(val interface{}) error {
+func (p *TaskPrivateData) Scan(val any) error {
 	bytesValue, _ := val.([]byte)
 	if len(bytesValue) == 0 {
+		*p = TaskPrivateData{}
 		return nil
 	}
-	return common.Unmarshal(bytesValue, p)
+	var decoded TaskPrivateData
+	if err := common.Unmarshal(bytesValue, &decoded); err != nil {
+		return err
+	}
+	*p = decoded
+	return nil
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
@@ -289,8 +347,9 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 
 func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	var tasks []*Task
-	err := DB.Where("progress != ?", "100%").
-		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+	err := DB.Where("platform != ?", KnowledgeBatchPlatform).Where("progress != ?", "100%").
+		Where(pollableTaskCondition).
+		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess, TaskStatusBillingPending, TaskStatusSubmitting, TaskStatusSubmitUnknown}).
 		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
 		Limit(limit).
@@ -301,29 +360,21 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
+// Filter before LIMIT so retired, unadopted tasks cannot starve other workers.
+// MySQL is the sole supported database; a JSON object marks plugin identity.
+const pollableTaskCondition = "(platform NOT IN ('1','17','24','35','36','41','45','50','51','52','54','55','1001','suno') OR JSON_TYPE(JSON_EXTRACT(private_data, '$.plugin')) = 'OBJECT')"
+
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.Where("platform != ?", KnowledgeBatchPlatform).Where(pollableTaskCondition).
+		Where("(status != ? OR COALESCE(JSON_EXTRACT(private_data, '$.plugin_context.billing_retry_after'), 0) <= ?)", TaskStatusBillingPending, time.Now().Unix()).
+		Where("status NOT IN ?", []TaskStatus{TaskStatusSubmitting, TaskStatusSubmitUnknown}).Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("updated_at, id").Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
 	return tasks
-}
-
-func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
-	if taskId == "" {
-		return nil, false, nil
-	}
-	var task *Task
-	var err error
-	err = DB.Where("task_id = ?", taskId).First(&task).Error
-	exist, err := RecordExist(err)
-	if err != nil {
-		return nil, false, err
-	}
-	return task, exist, err
 }
 
 func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
@@ -356,6 +407,9 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 }
 
 func (Task *Task) Insert() error {
+	if Task.PrivateData.Plugin != nil {
+		return ErrTaskPluginIdentity
+	}
 	var err error
 	err = DB.Create(Task).Error
 	return err
@@ -407,36 +461,16 @@ func (Task *Task) Update() error {
 // falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
 // zero rows, which silently bypasses the CAS guard.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	previous := t.Revision
+	t.Revision++
+	result := DB.Model(t).Where("status = ? AND revision = ?", fromStatus, previous).Select("*").Updates(t)
+	if result.Error != nil || result.RowsAffected == 0 {
+		t.Revision = previous
+	}
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
-}
-
-// TaskBulkUpdate performs an unconditional bulk UPDATE by upstream task_id strings.
-// Same caveats as TaskBulkUpdateByID — no CAS guard.
-func TaskBulkUpdate(taskIds []string, params map[string]any) error {
-	if len(taskIds) == 0 {
-		return nil
-	}
-	return DB.Model(&Task{}).
-		Where("task_id in (?)", taskIds).
-		Updates(params).Error
-}
-
-// TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.
-// WARNING: This function has NO CAS (Compare-And-Swap) guard — it will overwrite
-// any concurrent status changes. DO NOT use in billing/quota lifecycle flows
-// (e.g., timeout, success, failure transitions that trigger refunds or settlements).
-// For status transitions that involve billing, use Task.UpdateWithStatus() instead.
-func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	return DB.Model(&Task{}).
-		Where("id in (?)", ids).
-		Updates(params).Error
 }
 
 type TaskQuotaUsage struct {

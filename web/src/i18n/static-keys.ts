@@ -24,8 +24,12 @@ export const STATIC_I18N_KEYS = [
 
   // Pricing constants
   'Name',
-  'Price: Low to High',
-  'Price: High to Low',
+  'Input Price: Low to High',
+  'Input Price: High to Low',
+  'Output Price: Low to High',
+  'Output Price: High to Low',
+  'Per-request Price: Low to High',
+  'Per-request Price: High to Low',
   'All Models',
   'Token-based',
   'Per Request',
@@ -156,11 +160,7 @@ export const STATIC_I18N_KEYS = [
   'Confirm settings and finish setup',
 
   // Setup wizard — database step
-  'SQLite stores all data in a single file. Make sure that file is persisted when running in containers.',
   'MySQL is a production-ready relational database. Keep your credentials secure.',
-  'PostgreSQL offers advanced reliability and data integrity for production workloads.',
-  'Custom database driver detected.',
-  'The setup wizard will use this database during initialization.',
 
   // Setup wizard — usage mode step
   'External operations',

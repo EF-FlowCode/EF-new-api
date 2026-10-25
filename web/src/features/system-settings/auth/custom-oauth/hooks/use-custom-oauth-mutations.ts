@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { getRequestErrorMessage } from '@/lib/api'
 import {
   createCustomOAuthProvider,
   updateCustomOAuthProvider,
@@ -31,8 +32,10 @@ export function useCreateProvider() {
         invalidate.onSuccess()
       }
     },
-    onError: (error: Error) => {
-      toast.error(error.message || i18next.t('Failed to create provider'))
+    onError: (error: unknown) => {
+      toast.error(
+        getRequestErrorMessage(error, i18next.t('Failed to create provider'))
+      )
     },
   })
 }
@@ -54,8 +57,10 @@ export function useUpdateProvider() {
         invalidate.onSuccess()
       }
     },
-    onError: (error: Error) => {
-      toast.error(error.message || i18next.t('Failed to update provider'))
+    onError: (error: unknown) => {
+      toast.error(
+        getRequestErrorMessage(error, i18next.t('Failed to update provider'))
+      )
     },
   })
 }
@@ -71,8 +76,10 @@ export function useDeleteProvider() {
         invalidate.onSuccess()
       }
     },
-    onError: (error: Error) => {
-      toast.error(error.message || i18next.t('Failed to delete provider'))
+    onError: (error: unknown) => {
+      toast.error(
+        getRequestErrorMessage(error, i18next.t('Failed to delete provider'))
+      )
     },
   })
 }
@@ -85,9 +92,12 @@ export function useDiscoverEndpoints() {
         toast.success(i18next.t('OIDC endpoints discovered successfully'))
       }
     },
-    onError: (error: Error) => {
+    onError: (error: unknown) => {
       toast.error(
-        error.message || i18next.t('Failed to discover OIDC endpoints')
+        getRequestErrorMessage(
+          error,
+          i18next.t('Failed to discover OIDC endpoints')
+        )
       )
     },
   })

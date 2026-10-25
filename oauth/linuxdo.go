@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,7 +24,9 @@ func init() {
 }
 
 // LinuxDOProvider implements OAuth for Linux DO
-type LinuxDOProvider struct{}
+type LinuxDOProvider struct {
+	settings *system_setting.LegacyOAuthSettings
+}
 
 type linuxdoUser struct {
 	Id         int    `json:"id"`
@@ -39,7 +42,7 @@ func (p *LinuxDOProvider) GetName() string {
 }
 
 func (p *LinuxDOProvider) IsEnabled() bool {
-	return common.LinuxDOOAuthEnabled
+	return p.legacyOAuthSettings().LinuxDOOAuthEnabled
 }
 
 func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
@@ -47,11 +50,10 @@ func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	logger.LogDebug(ctx, "[OAuth-LinuxDO] ExchangeToken: code=%s...", code[:min(len(code), 10)])
-
 	// Get access token using Basic auth
 	tokenEndpoint := common.GetEnvOrDefaultString("LINUX_DO_TOKEN_ENDPOINT", "https://connect.linux.do/oauth2/token")
-	credentials := common.LinuxDOClientId + ":" + common.LinuxDOClientSecret
+	settings := p.legacyOAuthSettings()
+	credentials := settings.LinuxDOClientId + ":" + settings.LinuxDOClientSecret
 	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(credentials))
 
 	// Get redirect URI from request
@@ -143,16 +145,6 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo: id=%d, username=%s, name=%s, trust_level=%d, active=%v, silenced=%v",
 		linuxdoUser.Id, linuxdoUser.Username, linuxdoUser.Name, linuxdoUser.TrustLevel, linuxdoUser.Active, linuxdoUser.Silenced)
 
-	// Check trust level
-	if linuxdoUser.TrustLevel < common.LinuxDOMinimumTrustLevel {
-		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo: trust level too low (required=%d, current=%d)",
-			common.LinuxDOMinimumTrustLevel, linuxdoUser.TrustLevel))
-		return nil, &TrustLevelError{
-			Required: common.LinuxDOMinimumTrustLevel,
-			Current:  linuxdoUser.TrustLevel,
-		}
-	}
-
 	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo success: id=%d, username=%s", linuxdoUser.Id, linuxdoUser.Username)
 
 	return &OAuthUser{
@@ -165,6 +157,20 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 			"silenced":    linuxdoUser.Silenced,
 		},
 	}, nil
+}
+
+func (p *LinuxDOProvider) ValidateNewUser(ctx context.Context, user *OAuthUser) error {
+	settings := p.legacyOAuthSettings()
+	trustLevel, _ := user.Extra["trust_level"].(int)
+	if trustLevel >= settings.LinuxDOMinimumTrustLevel {
+		return nil
+	}
+	logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] registration trust level too low (required=%d, current=%d)",
+		settings.LinuxDOMinimumTrustLevel, trustLevel))
+	return &TrustLevelError{
+		Required: settings.LinuxDOMinimumTrustLevel,
+		Current:  trustLevel,
+	}
 }
 
 func (p *LinuxDOProvider) IsUserIDTaken(providerUserID string) bool {
@@ -182,6 +188,22 @@ func (p *LinuxDOProvider) SetProviderUserID(user *model.User, providerUserID str
 
 func (p *LinuxDOProvider) GetProviderPrefix() string {
 	return "linuxdo_"
+}
+
+func (p *LinuxDOProvider) ProviderUserIDColumn() string {
+	return "linux_do_id"
+}
+
+func (p *LinuxDOProvider) forRequest() Provider {
+	settings := system_setting.GetLegacyOAuthSettings()
+	return &LinuxDOProvider{settings: &settings}
+}
+
+func (p *LinuxDOProvider) legacyOAuthSettings() system_setting.LegacyOAuthSettings {
+	if p.settings != nil {
+		return *p.settings
+	}
+	return system_setting.GetLegacyOAuthSettings()
 }
 
 // TrustLevelError indicates the user's trust level is too low

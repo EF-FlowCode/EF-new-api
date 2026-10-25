@@ -8,12 +8,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	geminichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/gemini_chat"
-	oaichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_chat"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	geminichat "eflow.local/new-api/relaykit/relayconvert/internal/gemini_chat"
+	oaichat "eflow.local/new-api/relaykit/relayconvert/internal/oai_chat"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
 
 type ResponseConverterFunc func(c context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error)
@@ -70,10 +70,11 @@ type responseConverterRoute struct {
 }
 
 type ResponseStreamOptions struct {
-	ID           string
-	Model        string
-	Created      int64
-	IncludeUsage bool
+	EmitSequenceNumber bool
+	ID                 string
+	Model              string
+	Created            int64
+	IncludeUsage       bool
 }
 
 type ResponseStreamState struct {
@@ -398,6 +399,34 @@ func (s *ResponseStreamState) SetUsage(usage *dto.Usage) {
 			typed.Usage = UsageFromChatUsage(usage)
 		case *ResponsesToChatStreamState:
 			typed.Usage = usage
+		}
+	}
+}
+
+// DroppedToolDeltas reports how many late tool-call deltas the Chat →
+// Responses step ignored, so the host can log them.
+func (s *ResponseStreamState) DroppedToolDeltas() int {
+	if s == nil {
+		return 0
+	}
+	dropped := 0
+	for _, state := range s.stepStates {
+		if typed, ok := state.(*ChatToResponsesStreamState); ok && typed != nil {
+			dropped += typed.DroppedToolDeltas
+		}
+	}
+	return dropped
+}
+
+// MarkIncomplete forwards an interrupted-stream marker to every step state
+// that can report it (currently Chat → Responses).
+func (s *ResponseStreamState) MarkIncomplete(reason string) {
+	if s == nil {
+		return
+	}
+	for _, state := range s.stepStates {
+		if typed, ok := state.(interface{ MarkIncomplete(string) }); ok {
+			typed.MarkIncomplete(reason)
 		}
 	}
 }
@@ -792,7 +821,7 @@ func usageFromClaudeResponse(resp *dto.ClaudeResponse) *dto.Usage {
 	return nil
 }
 
-func convertOAIChatResponseToOAIResponses(_ context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
+func convertOAIChatResponseToOAIResponses(_ context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error) {
 	chatResponse, err := asOAIChatResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -801,7 +830,7 @@ func convertOAIChatResponseToOAIResponses(_ context.Context, _ convmeta.Meta, re
 	if id == "" {
 		id = fmt.Sprintf("resp_%s", kitutil.GetUUID())
 	}
-	return ChatCompletionsResponseToResponsesResponse(chatResponse, id)
+	return oaichat.ChatCompletionsResponseToResponsesResponseWithTools(chatResponse, id, convmeta.ResponsesToolsOf(info))
 }
 
 func convertOAIResponsesResponseToOAIChat(_ context.Context, _ convmeta.Meta, response any) (any, *dto.Usage, error) {
@@ -822,13 +851,14 @@ func newOAIChatToOAIResponsesStreamState(options ResponseStreamOptions) any {
 		id = fmt.Sprintf("resp_%s", kitutil.GetUUID())
 	}
 	state := NewChatToResponsesStreamState(id, strings.TrimSpace(options.Model))
+	state.EmitSequenceNumber = options.EmitSequenceNumber
 	if options.Created != 0 {
 		state.Created = options.Created
 	}
 	return state
 }
 
-func convertOAIChatStreamResponseToOAIResponses(_ context.Context, _ convmeta.Meta, response any, state any) ([]any, *dto.Usage, error) {
+func convertOAIChatStreamResponseToOAIResponses(_ context.Context, info convmeta.Meta, response any, state any) ([]any, *dto.Usage, error) {
 	chatResponse, err := asOAIChatStreamResponse(response)
 	if err != nil {
 		return nil, nil, err
@@ -837,6 +867,7 @@ func convertOAIChatStreamResponseToOAIResponses(_ context.Context, _ convmeta.Me
 	if !ok || streamState == nil {
 		return nil, nil, errors.New("OAI chat to OAI responses stream state is required")
 	}
+	streamState.Tools = convmeta.ResponsesToolsOf(info)
 	events, err := ChatCompletionsStreamChunkToResponsesEvents(chatResponse, streamState)
 	if err != nil {
 		return nil, nil, err
@@ -844,11 +875,12 @@ func convertOAIChatStreamResponseToOAIResponses(_ context.Context, _ convmeta.Me
 	return streamValuesFromAny(events), streamState.Usage, nil
 }
 
-func finalizeOAIChatStreamResponseToOAIResponses(_ context.Context, _ convmeta.Meta, state any) ([]any, *dto.Usage, error) {
+func finalizeOAIChatStreamResponseToOAIResponses(_ context.Context, info convmeta.Meta, state any) ([]any, *dto.Usage, error) {
 	streamState, ok := state.(*ChatToResponsesStreamState)
 	if !ok || streamState == nil {
 		return nil, nil, errors.New("OAI chat to OAI responses stream state is required")
 	}
+	streamState.Tools = convmeta.ResponsesToolsOf(info)
 	events := FinalizeChatCompletionsStreamToResponses(streamState)
 	return streamValuesFromAny(events), streamState.Usage, nil
 }

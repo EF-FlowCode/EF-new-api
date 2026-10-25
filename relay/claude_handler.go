@@ -7,16 +7,17 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/setting/reasoning"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	kitreasoning "eflow.local/new-api/relaykit/relayconvert/reasoning"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/setting/reasoning"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,7 +42,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForInfo(info)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
@@ -57,10 +58,18 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			strings.HasPrefix(request.Model, "claude-opus-4-7") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-8")) {
 		request.Model = baseModel
-		request.Thinking = &dto.Thinking{
-			Type: "adaptive",
+		// eflow: 推理后缀会改写 thinking，但 block_binding 是会话控制而不是推理设置，
+		// 保留客户端原值，网关不自行添加（上游 767a82b87）。
+		var clientBlockBinding json.RawMessage
+		if request.Thinking != nil {
+			clientBlockBinding = request.Thinking.BlockBinding
 		}
-		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
+		request.Thinking = &dto.Thinking{
+			Type:         "adaptive",
+			BlockBinding: clientBlockBinding,
+		}
+		// Known models get the nearest effort level they accept (上游 036ba376d).
+		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, kitreasoning.ClaudeEffort(baseModel, effortLevel)))
 		if strings.HasPrefix(request.Model, "claude-opus-4-7") ||
 			strings.HasPrefix(request.Model, "claude-opus-4-8") {
 			// Opus 4.7/4.8 reject non-default temperature/top_p/top_k with 400
@@ -149,7 +158,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return newApiErr
 		}
 
-		if retryErr := service.StreamAbortRetryError(info); retryErr != nil {
+		if retryErr := service.StreamAbortRetryError(c, info); retryErr != nil {
 			return retryErr
 		}
 
@@ -163,7 +172,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, request)
 		if err != nil {
@@ -190,13 +199,12 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)
-		body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		defer closer.Close()
 		jsonData = nil
-		info.UpstreamRequestBodySize = size
 		requestBody = body
 	}
 
@@ -225,7 +233,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return newAPIError
 	}
 
-	if retryErr := service.StreamAbortRetryError(info); retryErr != nil {
+	if retryErr := service.StreamAbortRetryError(c, info); retryErr != nil {
 		return retryErr
 	}
 

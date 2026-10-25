@@ -1,6 +1,6 @@
 package system_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type LegalSettings struct {
 	UserAgreement string `json:"user_agreement"`
@@ -17,5 +17,6 @@ func init() {
 }
 
 func GetLegalSettings() *LegalSettings {
-	return &defaultLegalSettings
+	setting := config.MustSnapshot[LegalSettings]("legal")
+	return &setting
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { Send } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useTicketAttachments } from '../hooks/use-ticket-attachments'
@@ -9,7 +9,10 @@ import { AttachmentPicker } from './attachment-picker'
 type Props = {
   disabled?: boolean
   loading?: boolean
-  onSubmit: (content: string, attachmentIds: number[]) => Promise<boolean | void>
+  onSubmit: (
+    content: string,
+    attachmentIds: number[]
+  ) => Promise<boolean | void>
   placeholder?: string
   submitLabel?: string
 }

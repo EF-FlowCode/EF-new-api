@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -122,15 +122,17 @@ func logHelper(ctx context.Context, level string, msg string) {
 func LogQuota(quota int) string {
 	// 新逻辑：根据额度展示类型输出
 	q := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
+	quotaPerUnit := common.GetQuotaPerUnit()
+	setting := operation_setting.GetGeneralSetting()
+	switch setting.QuotaDisplayType {
 	case operation_setting.QuotaDisplayTypeCNY:
-		usd := q / common.QuotaPerUnit
-		cny := usd * operation_setting.USDExchangeRate
+		usd := q / quotaPerUnit
+		cny := usd * operation_setting.GetEpayConfig().USDExchangeRate
 		return fmt.Sprintf("¥%.6f 额度", cny)
 	case operation_setting.QuotaDisplayTypeCustom:
-		usd := q / common.QuotaPerUnit
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
+		usd := q / quotaPerUnit
+		rate := setting.CustomCurrencyExchangeRate
+		symbol := setting.CustomCurrencySymbol
 		if symbol == "" {
 			symbol = "¤"
 		}
@@ -142,21 +144,23 @@ func LogQuota(quota int) string {
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d 点额度", quota)
 	default: // USD
-		return fmt.Sprintf("＄%.6f 额度", q/common.QuotaPerUnit)
+		return fmt.Sprintf("＄%.6f 额度", q/quotaPerUnit)
 	}
 }
 
 func FormatQuota(quota int) string {
 	q := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
+	quotaPerUnit := common.GetQuotaPerUnit()
+	setting := operation_setting.GetGeneralSetting()
+	switch setting.QuotaDisplayType {
 	case operation_setting.QuotaDisplayTypeCNY:
-		usd := q / common.QuotaPerUnit
-		cny := usd * operation_setting.USDExchangeRate
+		usd := q / quotaPerUnit
+		cny := usd * operation_setting.GetEpayConfig().USDExchangeRate
 		return fmt.Sprintf("¥%.6f", cny)
 	case operation_setting.QuotaDisplayTypeCustom:
-		usd := q / common.QuotaPerUnit
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
+		usd := q / quotaPerUnit
+		rate := setting.CustomCurrencyExchangeRate
+		symbol := setting.CustomCurrencySymbol
 		if symbol == "" {
 			symbol = "¤"
 		}
@@ -168,7 +172,7 @@ func FormatQuota(quota int) string {
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d", quota)
 	default:
-		return fmt.Sprintf("＄%.6f", q/common.QuotaPerUnit)
+		return fmt.Sprintf("＄%.6f", q/quotaPerUnit)
 	}
 }
 

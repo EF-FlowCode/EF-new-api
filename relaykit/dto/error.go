@@ -3,8 +3,8 @@ package dto
 import (
 	"encoding/json"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
 
 //type OpenAIError struct {

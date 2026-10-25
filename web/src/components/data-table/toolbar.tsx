@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
 import { type Table } from '@tanstack/react-table'
-import { SlidersHorizontal } from 'lucide-react'
+import { Search, SlidersHorizontal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,10 @@ type DataTableToolbarProps<TData> = {
   hasAdditionalFilters?: boolean
   /** Callback when reset button is clicked (for clearing additional filters) */
   onReset?: () => void
+  /** Server-side search can be committed explicitly instead of on every keystroke. */
+  searchMode?: 'instant' | 'manual'
+  /** Apply additional search fields together with the main search field. */
+  onSearch?: () => void
 }
 
 export function DataTableToolbar<TData>({
@@ -44,6 +48,8 @@ export function DataTableToolbar<TData>({
   additionalSearch,
   hasAdditionalFilters = false,
   onReset,
+  searchMode = 'instant',
+  onSearch,
 }: DataTableToolbarProps<TData>) {
   const { t } = useTranslation()
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
@@ -57,20 +63,74 @@ export function DataTableToolbar<TData>({
     table.getState().columnFilters.length + (hasAdditionalFilters ? 1 : 0)
   const hasFilterContent = filters.length > 0 || additionalSearch != null
 
+  const committedSearchValue = searchKey
+    ? ((table.getColumn(searchKey)?.getFilterValue() as string) ?? '')
+    : (table.getState().globalFilter ?? '')
+  const [manualSearchDraft, setManualSearchDraft] = useState(() => ({
+    committedValue: committedSearchValue,
+    searchMode,
+    value: committedSearchValue,
+  }))
+  const draftSearchValue =
+    manualSearchDraft.committedValue === committedSearchValue &&
+    manualSearchDraft.searchMode === searchMode
+      ? manualSearchDraft.value
+      : committedSearchValue
+  const setDraftSearchValue = (value: string) => {
+    setManualSearchDraft({
+      committedValue: committedSearchValue,
+      searchMode,
+      value,
+    })
+  }
+
+  const applySearch = () => {
+    if (searchMode === 'manual') {
+      if (searchKey) {
+        table.getColumn(searchKey)?.setFilterValue(draftSearchValue)
+      } else {
+        table.setGlobalFilter(draftSearchValue)
+      }
+    }
+    onSearch?.()
+  }
+
   const searchInput = searchKey ? (
     <Input
       placeholder={resolvedSearchPlaceholder}
-      value={(table.getColumn(searchKey)?.getFilterValue() as string) ?? ''}
-      onChange={(event) =>
-        table.getColumn(searchKey)?.setFilterValue(event.target.value)
-      }
+      value={searchMode === 'manual' ? draftSearchValue : committedSearchValue}
+      onChange={(event) => {
+        if (searchMode === 'manual') {
+          setDraftSearchValue(event.target.value)
+        } else {
+          table.getColumn(searchKey)?.setFilterValue(event.target.value)
+        }
+      }}
+      onKeyDown={(event) => {
+        if (searchMode === 'manual' && event.key === 'Enter') {
+          event.preventDefault()
+          applySearch()
+        }
+      }}
       className='h-9 w-full sm:h-8 sm:w-[150px] lg:w-[250px]'
     />
   ) : (
     <Input
       placeholder={resolvedSearchPlaceholder}
-      value={table.getState().globalFilter ?? ''}
-      onChange={(event) => table.setGlobalFilter(event.target.value)}
+      value={searchMode === 'manual' ? draftSearchValue : committedSearchValue}
+      onChange={(event) => {
+        if (searchMode === 'manual') {
+          setDraftSearchValue(event.target.value)
+        } else {
+          table.setGlobalFilter(event.target.value)
+        }
+      }}
+      onKeyDown={(event) => {
+        if (searchMode === 'manual' && event.key === 'Enter') {
+          event.preventDefault()
+          applySearch()
+        }
+      }}
       className='h-9 w-full sm:h-8 sm:w-[150px] lg:w-[250px]'
     />
   )
@@ -95,6 +155,7 @@ export function DataTableToolbar<TData>({
       onClick={() => {
         table.resetColumnFilters()
         table.setGlobalFilter('')
+        if (searchMode === 'manual') setDraftSearchValue('')
         onReset?.()
       }}
       className='h-8 px-2 lg:px-3'
@@ -109,6 +170,18 @@ export function DataTableToolbar<TData>({
       <div className='flex items-center gap-1.5 sm:gap-2'>
         {/* Search input */}
         {customSearch !== undefined ? customSearch : searchInput}
+
+        {searchMode === 'manual' && customSearch === undefined && (
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-9 shrink-0 sm:h-8'
+            onClick={applySearch}
+          >
+            <Search className='size-3.5' />
+            {t('Search')}
+          </Button>
+        )}
 
         {/* Desktop: filters inline */}
         {additionalSearch && (

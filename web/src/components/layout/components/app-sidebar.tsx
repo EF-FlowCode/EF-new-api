@@ -1,13 +1,16 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
+import { Megaphone, Search, Shield } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { Search, Shield } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
-import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { useLayout } from '@/context/layout-provider'
+import { useNotifications } from '@/hooks/use-notifications'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 import { useSidebarData } from '@/hooks/use-sidebar-data'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Sidebar,
   SidebarContent,
@@ -17,6 +20,7 @@ import {
   SidebarRail,
   useSidebar,
 } from '@/components/ui/sidebar'
+import { NotificationPopover } from '@/components/notification-popover'
 import {
   getNavGroupsForPath,
   isInWorkspace,
@@ -77,14 +81,14 @@ function SidebarSearch({
   const { state } = useSidebar()
   if (state === 'collapsed') return null
   return (
-    <div className='relative px-2 py-2'>
+    <div className='relative px-2 py-1.5'>
       <Search className='text-muted-foreground pointer-events-none absolute start-4 top-1/2 size-4 -translate-y-1/2' />
       <SidebarInput
         type='search'
         placeholder={t('Search menu...')}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className='h-9 ps-8 text-sm'
+        className='h-8 ps-8 text-xs'
       />
     </div>
   )
@@ -100,20 +104,84 @@ function AdminEntryButton() {
   const { state } = useSidebar()
   const collapsed = state === 'collapsed'
   return (
-    <div className='p-2'>
+    <Button
+      asChild
+      variant='outline'
+      size={collapsed ? 'icon' : 'sm'}
+      className={collapsed ? 'w-full' : 'w-full justify-start gap-2'}
+      title={t('Admin')}
+    >
+      <Link to='/channels'>
+        <Shield className='size-4 shrink-0' />
+        {!collapsed && <span>{t('Admin')}</span>}
+      </Link>
+    </Button>
+  )
+}
+
+// 每次页面加载最多自动展开一次（侧栏在路由切换时会重新挂载）。
+let announcementsAutoOpened = false
+
+/**
+ * eflow: 侧栏左下角"公告"入口，样式与"管理员"入口一致，点开为上游样式的气泡面板。
+ * 有未读的通知或公告时，桌面端自动展开一次并全部标记已读；手机端侧栏收起时只显示未读数。
+ */
+function AnnouncementEntry() {
+  const { t } = useTranslation()
+  const { state, isMobile } = useSidebar()
+  const collapsed = state === 'collapsed' && !isMobile
+  const notifications = useNotifications()
+  const { loading, unreadCount, unreadNoticeCount, openPopover } = notifications
+
+  useEffect(() => {
+    if (announcementsAutoOpened || isMobile || loading || unreadCount === 0) {
+      return
+    }
+    announcementsAutoOpened = true
+    openPopover(unreadNoticeCount > 0 ? 'notice' : 'announcements', {
+      markAll: true,
+    })
+  }, [isMobile, loading, unreadCount, unreadNoticeCount, openPopover])
+
+  const unreadLabel = unreadCount > 99 ? '99+' : String(unreadCount)
+
+  return (
+    <NotificationPopover
+      open={notifications.popoverOpen}
+      onOpenChange={notifications.setPopoverOpen}
+      activeTab={notifications.activeTab}
+      onTabChange={notifications.setActiveTab}
+      notice={notifications.notice}
+      announcements={notifications.announcements}
+      loading={notifications.loading}
+      side={isMobile ? 'top' : 'right'}
+      align='end'
+    >
       <Button
-        asChild
         variant='outline'
         size={collapsed ? 'icon' : 'sm'}
-        className={collapsed ? 'w-full' : 'w-full justify-start gap-2'}
-        title={t('Admin')}
+        className={cn(
+          'relative',
+          collapsed ? 'w-full' : 'w-full justify-start gap-2'
+        )}
+        title={t('Announcements')}
+        aria-label={t('Announcements')}
       >
-        <Link to='/channels'>
-          <Shield className='size-4 shrink-0' />
-          {!collapsed && <span>{t('Admin')}</span>}
-        </Link>
+        <Megaphone className='size-4 shrink-0' />
+        {!collapsed && <span>{t('Announcements')}</span>}
+        {unreadCount > 0 &&
+          (collapsed ? (
+            <span className='bg-destructive absolute top-1 right-1 size-2 rounded-full' />
+          ) : (
+            <Badge
+              variant='destructive'
+              className='ms-auto h-5 min-w-5 justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums'
+            >
+              {unreadLabel}
+            </Badge>
+          ))}
       </Button>
-    </div>
+    </NotificationPopover>
   )
 }
 
@@ -187,6 +255,7 @@ export function AppSidebar() {
   )
 
   // eflow: 主侧栏 Footer 入口
+  //   - 所有人：「公告」入口（原右上角铃铛挪到这里）
   //   - 访客：Sign in 按钮（原状）
   //   - 登录 + SUPPORT+ + 当前在主 workspace：「管理员」快捷按钮 + 菜单搜索
   //   - 登录 + 已在 admin workspace：仅菜单搜索（避免按钮自指）
@@ -196,8 +265,7 @@ export function AppSidebar() {
     pathname,
     WORKSPACE_IDS.SYSTEM_SETTINGS
   )
-  const showAdminEntry =
-    !isGuest && role >= ROLE.SUPPORT && !inAdminWorkspace
+  const showAdminEntry = !isGuest && role >= ROLE.SUPPORT && !inAdminWorkspace
 
   return (
     <Sidebar collapsible={collapsible} variant={variant}>
@@ -216,18 +284,17 @@ export function AppSidebar() {
         )}
       </SidebarContent>
       <SidebarFooter>
-        {isGuest ? (
-          <div className='p-2'>
+        <div className='flex flex-col gap-2 p-2'>
+          <AnnouncementEntry />
+          {isGuest ? (
             <Button asChild className='w-full'>
               <Link to='/sign-in'>{t('Sign in')}</Link>
             </Button>
-          </div>
-        ) : (
-          <>
-            {showAdminEntry && <AdminEntryButton />}
-            <SidebarSearch value={query} onChange={setQuery} />
-          </>
-        )}
+          ) : (
+            showAdminEntry && <AdminEntryButton />
+          )}
+        </div>
+        {!isGuest && <SidebarSearch value={query} onChange={setQuery} />}
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

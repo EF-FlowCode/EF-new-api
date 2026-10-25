@@ -8,13 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/attachment"
-	"github.com/QuantumNous/new-api/setting/system_setting"
-	"github.com/bytedance/gopkg/util/gopool"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	gopool "eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service/attachment"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/system_setting"
 )
 
 const ticketContentPreviewMaxLen = 500
@@ -94,8 +95,8 @@ func buildTicketIntro(ticket *model.Ticket, message *model.TicketMessage, isAdmi
 	return "这是你工单的最新进展。"
 }
 
-func ticketLink() string {
-	base := strings.TrimRight(system_setting.ServerAddress, "/")
+func ticketLink(serverAddress string) string {
+	base := strings.TrimRight(serverAddress, "/")
 	if base == "" {
 		return ""
 	}
@@ -103,7 +104,7 @@ func ticketLink() string {
 }
 
 // buildTicketVars 准备工单邮件的所有占位变量。所有 value 都已转义为安全 HTML。
-func buildTicketVars(ticket *model.Ticket, message *model.TicketMessage, isAdmin bool, heading string) map[string]string {
+func buildTicketVars(ticket *model.Ticket, message *model.TicketMessage, isAdmin bool, heading, serverAddress string) map[string]string {
 	createdAt := time.Unix(ticket.CreatedTime, 0).Format("2006-01-02 15:04:05")
 	typeLabel := html.EscapeString(ticketTypeLabel(ticket.Type))
 	priorityLabel := html.EscapeString(ticketPriorityLabel(ticket.Priority))
@@ -142,7 +143,7 @@ func buildTicketVars(ticket *model.Ticket, message *model.TicketMessage, isAdmin
 
 	return map[string]string{
 		"system_name":           html.EscapeString(common.SystemNameOrDefault()),
-		"server_address":        html.EscapeString(strings.TrimRight(system_setting.ServerAddress, "/")),
+		"server_address":        html.EscapeString(strings.TrimRight(serverAddress, "/")),
 		"heading":               html.EscapeString(heading),
 		"intro":                 html.EscapeString(buildTicketIntro(ticket, message, isAdmin)),
 		"ticket_id":             fmt.Sprintf("%d", ticket.Id),
@@ -157,7 +158,7 @@ func buildTicketVars(ticket *model.Ticket, message *model.TicketMessage, isAdmin
 		"info_table":            common.RenderInfoTableHTML(rows),
 		"content_preview":       previewHTML,
 		"content_preview_block": common.RenderPreviewBlockHTML("内容预览", previewHTML),
-		"action_url":            html.EscapeString(ticketLink()),
+		"action_url":            html.EscapeString(ticketLink(serverAddress)),
 		"action_label":          html.EscapeString(actionLabel),
 	}
 }
@@ -165,18 +166,20 @@ func buildTicketVars(ticket *model.Ticket, message *model.TicketMessage, isAdmin
 // NotifyTicketCreatedToAdmin 异步通知管理员：用户创建了新工单。
 // 若工单已完成自动分配，邮件中会附带"已分配给客服 xxx"一行；否则提示"待认领"。
 func NotifyTicketCreatedToAdmin(ticket *model.Ticket, message *model.TicketMessage) {
+	notificationSettings := common.GetTicketNotificationSettings()
+	serverAddress := system_setting.GetServerAddress()
 	if ticket == nil {
 		return
 	}
-	if !common.TicketNotifyEnabled {
+	if !notificationSettings.Enabled {
 		return
 	}
-	recipients := parseAdminEmails(common.TicketAdminEmail)
+	recipients := parseAdminEmails(notificationSettings.AdminEmail)
 	if len(recipients) == 0 {
 		return
 	}
 	gopool.Go(func() {
-		vars := buildTicketVars(ticket, message, true, "新工单")
+		vars := buildTicketVars(ticket, message, true, "新工单", serverAddress)
 		// 叠加分配信息：已分配 -> 显示客服名；未分配 -> "待认领"
 		vars["assignee_line"] = html.EscapeString(buildAssigneeLine(ticket))
 		subject, body := RenderEmailByKey(constant.EmailTemplateKeyTicketCreatedAdmin, vars)
@@ -198,10 +201,12 @@ func NotifyTicketCreatedToAdmin(ticket *model.Ticket, message *model.TicketMessa
 //
 // 抄送管理员是为了让整个工单流转对管理员透明，无需额外配置邮箱（客服用自己的邮箱）。
 func NotifyTicketAssigned(ticket *model.Ticket, assigneeId int) {
+	notificationSettings := common.GetTicketNotificationSettings()
+	serverAddress := system_setting.GetServerAddress()
 	if ticket == nil || assigneeId <= 0 {
 		return
 	}
-	if !common.TicketNotifyEnabled {
+	if !notificationSettings.Enabled {
 		return
 	}
 	gopool.Go(func() {
@@ -214,7 +219,7 @@ func NotifyTicketAssigned(ticket *model.Ticket, assigneeId int) {
 		assigneeEmail := ResolveUserNotificationEmail(assignee, assigneeSetting)
 
 		heading := "你有一条新的工单待处理"
-		vars := buildTicketVars(ticket, nil, true, heading)
+		vars := buildTicketVars(ticket, nil, true, heading, serverAddress)
 		vars["assignee_line"] = html.EscapeString(buildAssigneeLine(ticket))
 		vars["intro"] = html.EscapeString(fmt.Sprintf(
 			"工单 #%d「%s」已分配给你，请及时处理。",
@@ -238,7 +243,7 @@ func NotifyTicketAssigned(ticket *model.Ticket, assigneeId int) {
 		}
 
 		// 同时抄送管理员列表，正文里会包含"已分配给客服 xxx"这一行
-		recipients := parseAdminEmails(common.TicketAdminEmail)
+		recipients := parseAdminEmails(notificationSettings.AdminEmail)
 		for _, to := range recipients {
 			if to == assigneeEmail {
 				continue
@@ -319,10 +324,13 @@ func deliverInvoiceTicketEmail(recipient, subject, body string, atts []common.Em
 // 附件总大小 > TicketReplyAttachmentMaxBytes 时自动回退到不带附件的标准路径，避免邮件被
 // SMTP 服务端拒收。
 func NotifyTicketReplyToUser(ticket *model.Ticket, message *model.TicketMessage) {
+	notificationSettings := common.GetTicketNotificationSettings()
+	attachmentSettings := setting.GetTicketAttachmentSettings()
+	serverAddress := system_setting.GetServerAddress()
 	if ticket == nil || message == nil {
 		return
 	}
-	if !common.TicketNotifyEnabled {
+	if !notificationSettings.Enabled {
 		return
 	}
 	gopool.Go(func() {
@@ -338,15 +346,15 @@ func NotifyTicketReplyToUser(ticket *model.Ticket, message *model.TicketMessage)
 			return
 		}
 		isInvoice := ticket.Type == model.TicketTypeInvoice
-		vars := buildTicketVars(ticket, message, false, "你的工单有新回复")
+		vars := buildTicketVars(ticket, message, false, "你的工单有新回复", serverAddress)
 		subject, body := RenderEmailByKey(constant.EmailTemplateKeyTicketReplyUser, vars)
 		if subject == "" || body == "" {
 			return
 		}
 
 		// 尝试加载附件 → 直接发邮件路径。任何一步失败都回退到标准路径。
-		if common.TicketReplyAttachmentEnabled {
-			if atts := loadReplyEmailAttachments(message.Id, ticket.Id); len(atts) > 0 {
+		if notificationSettings.ReplyAttachmentEnabled {
+			if atts := loadReplyEmailAttachments(message.Id, ticket.Id, notificationSettings, attachmentSettings); len(atts) > 0 {
 				if err := common.SendEmailWithAttachments(subject, userEmail, body, atts); err != nil {
 					common.SysLog(fmt.Sprintf("failed to send ticket reply email with attachments to user %d (ticket=%d): %s", user.Id, ticket.Id, err.Error()))
 					// 失败时仍走标准通知路径，让用户至少收到通知
@@ -375,11 +383,11 @@ func NotifyTicketReplyToUser(ticket *model.Ticket, message *model.TicketMessage)
 // drainAttachmentsForEmail 把一组附件记录读成内存字节流，准备塞进邮件 multipart。
 // 返回 nil 表示"无可发附件 / 存储不可用 / 总体积超 TicketReplyAttachmentMaxBytes"，
 // 调用方应回退到不带附件的发送路径。logTag 仅用于日志区分调用场景。
-func drainAttachmentsForEmail(records []*model.TicketAttachment, ticketId int, logTag string) []common.EmailAttachment {
+func drainAttachmentsForEmail(records []*model.TicketAttachment, ticketId int, logTag string, notificationSettings common.TicketNotificationSettings, attachmentSettings setting.TicketAttachmentSettings) []common.EmailAttachment {
 	if len(records) == 0 {
 		return nil
 	}
-	storage, err := attachment.Current()
+	storage, err := attachment.CurrentWithSettings(attachmentSettings)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("%s: storage backend unavailable (ticket=%d): %s", logTag, ticketId, err.Error()))
 		return nil
@@ -400,8 +408,8 @@ func drainAttachmentsForEmail(records []*model.TicketAttachment, ticketId int, l
 			continue
 		}
 		totalBytes += int64(len(data))
-		if common.TicketReplyAttachmentMaxBytes > 0 && totalBytes > common.TicketReplyAttachmentMaxBytes {
-			common.SysLog(fmt.Sprintf("%s: total attachment size %d exceeds limit %d, falling back to text-only (ticket=%d)", logTag, totalBytes, common.TicketReplyAttachmentMaxBytes, ticketId))
+		if notificationSettings.ReplyAttachmentMaxBytes > 0 && totalBytes > notificationSettings.ReplyAttachmentMaxBytes {
+			common.SysLog(fmt.Sprintf("%s: total attachment size %d exceeds limit %d, falling back to text-only (ticket=%d)", logTag, totalBytes, notificationSettings.ReplyAttachmentMaxBytes, ticketId))
 			return nil
 		}
 		out = append(out, common.EmailAttachment{
@@ -417,24 +425,24 @@ func drainAttachmentsForEmail(records []*model.TicketAttachment, ticketId int, l
 }
 
 // loadReplyEmailAttachments 加载某条工单回复消息上的附件。
-func loadReplyEmailAttachments(messageId, ticketId int) []common.EmailAttachment {
+func loadReplyEmailAttachments(messageId, ticketId int, notificationSettings common.TicketNotificationSettings, attachmentSettings setting.TicketAttachmentSettings) []common.EmailAttachment {
 	records, err := model.GetAttachmentsByMessageIds([]int{messageId})
 	if err != nil {
 		common.SysLog(fmt.Sprintf("ticket reply email: failed to list attachments (message=%d ticket=%d): %s", messageId, ticketId, err.Error()))
 		return nil
 	}
-	return drainAttachmentsForEmail(records, ticketId, "ticket reply email")
+	return drainAttachmentsForEmail(records, ticketId, "ticket reply email", notificationSettings, attachmentSettings)
 }
 
 // loadInvoiceEmailAttachments 加载该工单上所有"客服上传"的附件（即发票文件），
 // 供开票通知邮件随附。ownerUserId 为工单提交者，用来排除用户自己上传的文件。
-func loadInvoiceEmailAttachments(ticketId, ownerUserId int) []common.EmailAttachment {
+func loadInvoiceEmailAttachments(ticketId, ownerUserId int, notificationSettings common.TicketNotificationSettings, attachmentSettings setting.TicketAttachmentSettings) []common.EmailAttachment {
 	records, err := model.GetStaffAttachmentsByTicket(ticketId, ownerUserId)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("invoice issued email: failed to list staff attachments (ticket=%d): %s", ticketId, err.Error()))
 		return nil
 	}
-	return drainAttachmentsForEmail(records, ticketId, "invoice issued email")
+	return drainAttachmentsForEmail(records, ticketId, "invoice issued email", notificationSettings, attachmentSettings)
 }
 
 // NotifyInvoiceIssuedToUser 异步通知用户：发票已开具。
@@ -448,10 +456,13 @@ func loadInvoiceEmailAttachments(ticketId, ownerUserId int) []common.EmailAttach
 //
 // 附件加载失败/超限时回退为纯文本通知，确保"已开具"这一事实至少触达用户。
 func NotifyInvoiceIssuedToUser(ticket *model.Ticket, prevStatus int) {
+	notificationSettings := common.GetTicketNotificationSettings()
+	attachmentSettings := setting.GetTicketAttachmentSettings()
+	serverAddress := system_setting.GetServerAddress()
 	if ticket == nil {
 		return
 	}
-	if !common.TicketNotifyEnabled {
+	if !notificationSettings.Enabled {
 		return
 	}
 	gopool.Go(func() {
@@ -466,8 +477,8 @@ func NotifyInvoiceIssuedToUser(ticket *model.Ticket, prevStatus int) {
 			return
 		}
 
-		vars := buildTicketVars(ticket, nil, false, TicketStatusReasonInvoiceIssued)
-		atts := loadInvoiceEmailAttachments(ticket.Id, ticket.UserId)
+		vars := buildTicketVars(ticket, nil, false, TicketStatusReasonInvoiceIssued, serverAddress)
+		atts := loadInvoiceEmailAttachments(ticket.Id, ticket.UserId, notificationSettings, attachmentSettings)
 		if len(atts) > 0 {
 			vars["intro"] = html.EscapeString(fmt.Sprintf(
 				"你申请的发票已开具，发票文件见本邮件附件。工单「%s」已标记为已解决。",
@@ -498,18 +509,20 @@ func NotifyInvoiceIssuedToUser(ticket *model.Ticket, prevStatus int) {
 
 // NotifyTicketReplyToAdmin 异步通知管理员：用户在已有工单中追加了回复
 func NotifyTicketReplyToAdmin(ticket *model.Ticket, message *model.TicketMessage) {
+	notificationSettings := common.GetTicketNotificationSettings()
+	serverAddress := system_setting.GetServerAddress()
 	if ticket == nil || message == nil {
 		return
 	}
-	if !common.TicketNotifyEnabled {
+	if !notificationSettings.Enabled {
 		return
 	}
-	recipients := parseAdminEmails(common.TicketAdminEmail)
+	recipients := parseAdminEmails(notificationSettings.AdminEmail)
 	if len(recipients) == 0 {
 		return
 	}
 	gopool.Go(func() {
-		vars := buildTicketVars(ticket, message, true, "工单有新回复")
+		vars := buildTicketVars(ticket, message, true, "工单有新回复", serverAddress)
 		subject, body := RenderEmailByKey(constant.EmailTemplateKeyTicketReplyAdmin, vars)
 		if subject == "" || body == "" {
 			return
@@ -545,10 +558,12 @@ func NotifyIfTicketStatusChanged(ticket *model.Ticket, prevStatus int, reason st
 // prevStatus 为状态变更前的工单主状态（Ticket.Status）；若传入 0 或与当前相同，则邮件中不显示 "→"。
 // reason 用于区分触发场景，会拼接到邮件抬头，便于用户快速识别是"人工调整"、"发票已开具"还是"退款已到账"等。
 func NotifyTicketStatusChangedToUser(ticket *model.Ticket, prevStatus int, reason string) {
+	notificationSettings := common.GetTicketNotificationSettings()
+	serverAddress := system_setting.GetServerAddress()
 	if ticket == nil {
 		return
 	}
-	if !common.TicketNotifyEnabled {
+	if !notificationSettings.Enabled {
 		return
 	}
 	// 状态未发生实际变更时，不再发送邮件，避免骚扰。
@@ -572,7 +587,7 @@ func NotifyTicketStatusChangedToUser(ticket *model.Ticket, prevStatus int, reaso
 		if r := strings.TrimSpace(reason); r != "" {
 			heading = r
 		}
-		vars := buildTicketVars(ticket, nil, false, heading)
+		vars := buildTicketVars(ticket, nil, false, heading, serverAddress)
 		vars["intro"] = html.EscapeString(fmt.Sprintf("你的工单「%s」状态已更新为「%s」。",
 			strings.TrimSpace(ticket.Subject), ticketStatusLabel(ticket.Status)))
 		vars["status_change"] = html.EscapeString(buildStatusChangeDesc(prevStatus, ticket.Status))
@@ -619,4 +634,3 @@ func parseAdminEmails(raw string) []string {
 	}
 	return emails
 }
-

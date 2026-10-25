@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"eflow.local/new-api/pkg/billingexpr"
 )
 
 // ---------------------------------------------------------------------------
@@ -640,7 +640,7 @@ func TestFuzz_NonNegativeResults(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 
 	for _, exprStr := range exprs {
-		for i := 0; i < 500; i++ {
+		for range 500 {
 			params := billingexpr.TokenParams{
 				P:    math.Round(rng.Float64() * 1000000),
 				C:    math.Round(rng.Float64() * 500000),
@@ -663,7 +663,7 @@ func TestFuzz_NonNegativeResults(t *testing.T) {
 func TestFuzz_SettlementConsistency(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
 
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		estParams := billingexpr.TokenParams{
 			P:  math.Round(rng.Float64() * 500000),
 			C:  math.Round(rng.Float64() * 100000),

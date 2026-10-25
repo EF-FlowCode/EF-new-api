@@ -3,41 +3,35 @@ package model
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/internal/testconfig"
+	"eflow.local/new-api/setting/operation_setting"
 )
 
 func TestShouldIssueAffiliateReward(t *testing.T) {
-	originalEnabled := common.AffiliateEnabled
-	payment := operation_setting.GetPaymentSetting()
-	originalConfirmed := payment.ComplianceConfirmed
-	originalVersion := payment.ComplianceTermsVersion
-	t.Cleanup(func() {
-		common.AffiliateEnabled = originalEnabled
-		payment.ComplianceConfirmed = originalConfirmed
-		payment.ComplianceTermsVersion = originalVersion
+	testconfig.Set(t, "payment_setting", map[string]string{
+		"compliance_confirmed":     "true",
+		"compliance_terms_version": operation_setting.CurrentComplianceTermsVersion,
 	})
 
-	payment.ComplianceConfirmed = true
-	payment.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
-
-	common.AffiliateEnabled = true
-	if !shouldIssueAffiliateReward(1) {
+	enabled := common.UserQuotaSettings{AffiliateEnabled: true}
+	disabled := common.UserQuotaSettings{AffiliateEnabled: false}
+	if !shouldIssueAffiliateReward(1, enabled) {
 		t.Fatal("enabled referral program should issue rewards")
 	}
 
-	common.AffiliateEnabled = false
-	if shouldIssueAffiliateReward(1) {
+	if shouldIssueAffiliateReward(1, disabled) {
 		t.Fatal("disabled referral program must not issue rewards")
 	}
 
-	common.AffiliateEnabled = true
-	if shouldIssueAffiliateReward(0) {
+	if shouldIssueAffiliateReward(0, enabled) {
 		t.Fatal("missing inviter must not issue rewards")
 	}
 
-	payment.ComplianceConfirmed = false
-	if shouldIssueAffiliateReward(1) {
+	testconfig.Update(t, "payment_setting", map[string]string{
+		"compliance_confirmed": "false",
+	})
+	if shouldIssueAffiliateReward(1, enabled) {
 		t.Fatal("unconfirmed payment compliance must not issue rewards")
 	}
 }

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
 
 func UsageFromGeminiMetadata(metadata *dto.GeminiUsageMetadata, fallbackPromptTokens int) *dto.Usage {
@@ -69,7 +69,10 @@ func UsageFromGeminiMetadata(metadata *dto.GeminiUsageMetadata, fallbackPromptTo
 		usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 	}
 
-	if usage.PromptTokens > 0 && usage.PromptTokensDetails.TextTokens == 0 && usage.PromptTokensDetails.AudioTokens == 0 {
+	if usage.PromptTokens > 0 &&
+		usage.PromptTokensDetails.TextTokens == 0 &&
+		usage.PromptTokensDetails.AudioTokens == 0 &&
+		usage.PromptTokensDetails.ImageTokens == 0 {
 		usage.PromptTokensDetails.TextTokens = usage.PromptTokens
 	}
 

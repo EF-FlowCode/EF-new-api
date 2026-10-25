@@ -13,8 +13,10 @@ import { useAuthStore } from '@/stores/auth-store'
 import { getStatus } from '@/lib/api'
 import '@/lib/dayjs'
 import { applyFaviconToDom } from '@/lib/dom-utils'
-import { applyPwaManifest } from '@/lib/pwa-manifest'
 import { handleServerError } from '@/lib/handle-server-error'
+import { isMaintenanceError } from '@/lib/maintenance'
+import { applyPwaManifest } from '@/lib/pwa-manifest'
+import { MaintenanceNotice } from '@/components/maintenance-notice'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
 import { ThemeProvider } from './context/theme-provider'
@@ -31,6 +33,7 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: (failureCount, error) => {
+        if (isMaintenanceError(error)) return false
         // eslint-disable-next-line no-console
         if (import.meta.env.DEV) console.log({ failureCount, error })
 
@@ -58,15 +61,15 @@ const queryClient = new QueryClient({
     },
   },
   queryCache: new QueryCache({
-    onError: (error) => {
+    onError: (error, query) => {
       if (error instanceof AxiosError) {
         if (error.response?.status === 401) {
-          toast.error(i18next.t('Session expired!'))
+          // The API interceptor already reported the expired session.
           useAuthStore.getState().auth.reset()
           const redirect = `${router.history.location.href}`
           router.navigate({ to: '/sign-in', search: { redirect } })
         }
-        if (error.response?.status === 500) {
+        if (error.response?.status === 500 && !query.meta?.handlesServerError) {
           toast.error(i18next.t('Internal Server Error!'))
           router.navigate({ to: '/500' })
         }
@@ -129,7 +132,7 @@ const rootElement = document.getElementById('root')!
         if (s?.logo) applyFaviconToDom(s.logo as string)
         applyPwaManifest(
           s?.system_name as string | undefined,
-          s?.logo as string | undefined,
+          s?.logo as string | undefined
         )
       })
       .catch(() => {
@@ -148,6 +151,7 @@ if (!rootElement.innerHTML) {
           <FontProvider>
             <DirectionProvider>
               <RouterProvider router={router} />
+              <MaintenanceNotice />
             </DirectionProvider>
           </FontProvider>
         </ThemeProvider>
@@ -155,6 +159,7 @@ if (!rootElement.innerHTML) {
     </StrictMode>
   )
 }
+window.__newApiResourceRecovery?.ready()
 
 // PWA: register the installable-only service worker (production only, so it
 // never interferes with the dev HMR socket). The SW does no caching — see

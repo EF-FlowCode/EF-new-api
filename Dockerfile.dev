@@ -1,8 +1,9 @@
 # Backend-only build for frontend development
 # Skips frontend build, uses a placeholder for //go:embed web/dist
 
-FROM golang:1.26.1-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 
+ARG BUILD_VERSION=v0.0.0
 ENV GO111MODULE=on CGO_ENABLED=0
 ARG TARGETOS
 ARG TARGETARCH
@@ -12,6 +13,7 @@ ENV GOEXPERIMENT=greenteagc
 WORKDIR /build
 
 ADD go.mod go.sum ./
+COPY relaykit/go.mod relaykit/go.sum ./relaykit/
 RUN go mod download
 
 COPY . .
@@ -19,7 +21,9 @@ COPY . .
 RUN mkdir -p web/dist && \
     echo '<!doctype html><html><head><title>dev</title></head><body>use frontend dev server</body></html>' > web/dist/index.html
 
-RUN go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
+RUN VERSION_FROM_FILE="$(tr -d '\r\n' < VERSION)" \
+    && RESOLVED_VERSION="${VERSION_FROM_FILE:-${BUILD_VERSION:-v0.0.0}}" \
+    && go build -ldflags "-s -w -X 'eflow.local/new-api/common.Version=${RESOLVED_VERSION}'" -o new-api
 
 FROM debian:bookworm-slim
 

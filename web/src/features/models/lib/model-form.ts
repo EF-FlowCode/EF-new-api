@@ -57,7 +57,7 @@ export function transformModelToFormDefaults(model: Model): ModelFormValues {
     description: model.description || '',
     icon: model.icon || '',
     tags: parseTagsFromUtils(model.tags),
-    vendor_id: model.vendor_id,
+    vendor_id: model.vendor_id ?? 0,
     endpoints: model.endpoints || '',
     name_rule: model.name_rule || 0,
     status: model.status === 1,

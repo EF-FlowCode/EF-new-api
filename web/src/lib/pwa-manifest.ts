@@ -118,7 +118,7 @@ function render(img: HTMLImageElement, size: number, scale: number): string {
 
 function applyAppleTouchIcon(href: string): void {
   let link = document.querySelector<HTMLLinkElement>(
-    'link[rel="apple-touch-icon"]',
+    'link[rel="apple-touch-icon"]'
   )
   if (!link) {
     link = document.createElement('link')

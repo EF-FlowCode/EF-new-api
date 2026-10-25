@@ -3,7 +3,7 @@ package reasonmap
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/types"
 )
 
 func ClaudeStopReasonToOpenAIFinishReason(stopReason string) string {

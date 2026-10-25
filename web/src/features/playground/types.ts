@@ -162,4 +162,5 @@ export interface GroupOption {
   value: string
   ratio: number
   desc?: string
+  available?: boolean
 }

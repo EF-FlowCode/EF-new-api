@@ -7,36 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
-
-func responsesStreamIndexKey(itemID string, idx *int) string {
-	if itemID == "" {
-		return ""
-	}
-	if idx == nil {
-		return itemID
-	}
-	return fmt.Sprintf("%s:%d", itemID, *idx)
-}
-
-func stringDeltaFromPrefix(prev string, next string) string {
-	if next == "" {
-		return ""
-	}
-	if prev != "" && strings.HasPrefix(next, prev) {
-		return next[len(prev):]
-	}
-	return next
-}
 
 func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
@@ -58,6 +38,8 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+
+	info.ObserveResponseModel(responsesResp.Model)
 
 	chatId := helper.GetResponseID(c)
 	chatResp, usage, err := service.ResponsesResponseToChatCompletionsResponse(&responsesResp, chatId)
@@ -137,7 +119,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	toolCallCanonicalIDByItemID := make(map[string]string)
 	hasSentReasoningSummary := false
 	needsReasoningSummarySeparator := false
-	//reasoningSummaryTextByKey := make(map[string]string)
 
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo == nil {
 		info.ClaudeConvertInfo = &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}
@@ -330,6 +311,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
+		if streamResp.Response != nil {
+			info.ObserveResponseModel(streamResp.Response.Model)
+		}
 
 		switch streamResp.Type {
 		case "response.created":
@@ -360,24 +344,6 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			if hasSentReasoningSummary {
 				needsReasoningSummarySeparator = true
 			}
-
-		//case "response.reasoning_summary_part.added", "response.reasoning_summary_part.done":
-		//	key := responsesStreamIndexKey(strings.TrimSpace(streamResp.ItemID), streamResp.SummaryIndex)
-		//	if key == "" || streamResp.Part == nil {
-		//		break
-		//	}
-		//	// Only handle summary text parts, ignore other part types.
-		//	if streamResp.Part.Type != "" && streamResp.Part.Type != "summary_text" {
-		//		break
-		//	}
-		//	prev := reasoningSummaryTextByKey[key]
-		//	next := streamResp.Part.Text
-		//	delta := stringDeltaFromPrefix(prev, next)
-		//	reasoningSummaryTextByKey[key] = next
-		//	if !sendReasoningSummaryDelta(delta) {
-		//		sr.Stop(streamErr)
-		//		return
-		//	}
 
 		case "response.output_text.delta":
 			if !sendStartIfNeeded() {
@@ -464,7 +430,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		case "response.function_call_arguments.done":
 
-		case "response.completed":
+		// incomplete (max_output_tokens or content filter) is terminal and carries
+		// the authoritative usage just like completed.
+		case "response.completed", "response.done", "response.incomplete":
 			if streamResp.Response != nil {
 				if streamResp.Response.Model != "" {
 					model = streamResp.Response.Model
@@ -473,29 +441,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					createAt = int64(streamResp.Response.CreatedAt)
 				}
 				if streamResp.Response.Usage != nil {
-					if streamResp.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResp.Response.Usage.InputTokens
-						usage.InputTokens = streamResp.Response.Usage.InputTokens
-					}
-					if streamResp.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResp.Response.Usage.OutputTokens
-						usage.OutputTokens = streamResp.Response.Usage.OutputTokens
-					}
-					if streamResp.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResp.Response.Usage.TotalTokens
-					} else {
-						usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-					}
-					if streamResp.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResp.Response.Usage.InputTokensDetails.CachedTokens
-						usage.PromptTokensDetails.CachedCreationTokens = streamResp.Response.Usage.InputTokensDetails.CachedCreationTokens
-						usage.PromptTokensDetails.CacheWriteTokens = streamResp.Response.Usage.InputTokensDetails.CacheWriteTokens
-						usage.PromptTokensDetails.ImageTokens = streamResp.Response.Usage.InputTokensDetails.ImageTokens
-						usage.PromptTokensDetails.AudioTokens = streamResp.Response.Usage.InputTokensDetails.AudioTokens
-					}
-					if streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens != 0 {
-						usage.CompletionTokenDetails.ReasoningTokens = streamResp.Response.Usage.CompletionTokenDetails.ReasoningTokens
-					}
+					mergeResponsesUsage(usage, streamResp.Response.Usage)
 				}
 			}
 
@@ -511,6 +457,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				if sawToolCall && outputText.Len() == 0 {
 					finishReason = "tool_calls"
 				}
+				if streamResp.Type == "response.incomplete" {
+					finishReason = "length"
+				}
 				stop := helper.GenerateStopResponse(responseId, createAt, model, finishReason)
 				if !sendChatChunk(stop) {
 					sr.Stop(streamErr)
@@ -519,7 +468,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				sentStop = true
 			}
 
-		case "response.error", "response.failed":
+		case "response.error", "response.failed", "error":
 			if streamResp.Response != nil {
 				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
 					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)

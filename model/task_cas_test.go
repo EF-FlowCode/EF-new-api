@@ -2,74 +2,17 @@ package model
 
 import (
 	"encoding/json"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
-
-func TestMain(m *testing.M) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		panic("failed to open test db: " + err.Error())
-	}
-	DB = db
-	LOG_DB = db
-
-	common.RedisEnabled = false
-	common.BatchUpdateEnabled = false
-	common.LogConsumeEnabled = true
-	sqlDB, err := db.DB()
-	if err != nil {
-		panic("failed to get sql.DB: " + err.Error())
-	}
-	sqlDB.SetMaxOpenConns(1)
-
-	if err := db.AutoMigrate(
-		&Task{},
-		&User{},
-		&Token{},
-		&PasskeyCredential{},
-		&TwoFA{},
-		&TwoFABackupCode{},
-		&Log{},
-		&Channel{},
-		&Ability{},
-		&TopUp{},
-		&Ticket{},
-		&TicketMessage{},
-		&TicketAttachment{},
-		&UserOAuthBinding{},
-		&PerfMetric{},
-	); err != nil {
-		panic("failed to migrate: " + err.Error())
-	}
-
-	os.Exit(m.Run())
-}
 
 func truncateTables(t *testing.T) {
 	t.Helper()
-	t.Cleanup(func() {
-		DB.Exec("DELETE FROM tasks")
-		DB.Exec("DELETE FROM passkey_credentials")
-		DB.Exec("DELETE FROM two_fa_backup_codes")
-		DB.Exec("DELETE FROM two_fas")
-		DB.Exec("DELETE FROM tokens")
-		DB.Exec("DELETE FROM user_oauth_bindings")
-		DB.Exec("DELETE FROM users")
-		DB.Exec("DELETE FROM logs")
-		DB.Exec("DELETE FROM channels")
-		DB.Exec("DELETE FROM abilities")
-		DB.Exec("DELETE FROM top_ups")
-		DB.Exec("DELETE FROM perf_metrics")
-	})
+	useFullModelIntegrationTestDB(t)
 }
 
 func insertTask(t *testing.T, task *Task) {
@@ -206,7 +149,7 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(idx int) {
 			defer wg.Done()
 			t := &Task{}

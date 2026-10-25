@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
   ChevronUp,
@@ -9,6 +8,9 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -30,8 +32,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { TagInput } from '@/components/tag-input'
-import { cn } from '@/lib/utils'
-import { api } from '@/lib/api'
 import {
   createEmptyErrorFilterRule,
   ERROR_FILTER_ACTIONS,
@@ -62,8 +62,7 @@ const ACTION_BADGE_VARIANTS: Record<ErrorFilterAction, string> = {
   retry: 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400',
   rewrite:
     'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  replace:
-    'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400',
+  replace: 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400',
 }
 
 const formatTimestamp = (ts: number | undefined): string => {
@@ -208,7 +207,9 @@ function RecentErrorsDialog({
             {t('Pick from recent errors')}
           </DialogTitle>
           <DialogDescription>
-            {t('Showing the last 50 errors for this channel (deduplicated by content)')}
+            {t(
+              'Showing the last 50 errors for this channel (deduplicated by content)'
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -334,9 +335,7 @@ function RuleSummary({ rule }: { rule: ErrorFilterRule }) {
   }
   if (rule.message_contains.length > 0) {
     const head = rule.message_contains.slice(0, 2).join('", "')
-    conditions.push(
-      `"${head}${rule.message_contains.length > 2 ? '"…' : '"'}`
-    )
+    conditions.push(`"${head}${rule.message_contains.length > 2 ? '"…' : '"'}`)
   }
   if (rule.error_codes.length > 0) {
     conditions.push(
@@ -403,7 +402,7 @@ function RuleItem({
       <button
         type='button'
         className={cn(
-          'flex w-full select-none items-center justify-between px-3 py-2.5',
+          'flex w-full items-center justify-between px-3 py-2.5 select-none',
           expanded && 'border-b'
         )}
         onClick={() => setExpanded((v) => !v)}
@@ -485,7 +484,9 @@ function RuleItem({
                       new Set(
                         vals
                           .map((v) => Number.parseInt(v.trim(), 10))
-                          .filter((v) => Number.isInteger(v) && v >= 100 && v <= 599)
+                          .filter(
+                            (v) => Number.isInteger(v) && v >= 100 && v <= 599
+                          )
                       )
                     ),
                   })
@@ -503,9 +504,7 @@ function RuleItem({
                   onChange={(vals) =>
                     onUpdate(index, {
                       error_codes: Array.from(
-                        new Set(
-                          vals.map((v) => v.trim()).filter(Boolean)
-                        )
+                        new Set(vals.map((v) => v.trim()).filter(Boolean))
                       ),
                     })
                   }
@@ -521,9 +520,7 @@ function RuleItem({
                   onChange={(vals) =>
                     onUpdate(index, {
                       message_contains: Array.from(
-                        new Set(
-                          vals.map((v) => v.trim()).filter(Boolean)
-                        )
+                        new Set(vals.map((v) => v.trim()).filter(Boolean))
                       ),
                     })
                   }
@@ -533,7 +530,9 @@ function RuleItem({
             </div>
             {!hasCondition && (
               <div className='rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-300'>
-                {t('⚠ No matcher set: this rule will match every upstream error')}
+                {t(
+                  '⚠ No matcher set: this rule will match every upstream error'
+                )}
               </div>
             )}
           </div>
@@ -544,9 +543,7 @@ function RuleItem({
               value={rule.action}
               onValueChange={(v) =>
                 onUpdate(index, {
-                  action: (ERROR_FILTER_ACTIONS.includes(
-                    v as ErrorFilterAction
-                  )
+                  action: (ERROR_FILTER_ACTIONS.includes(v as ErrorFilterAction)
                     ? v
                     : 'retry') as ErrorFilterAction,
                 })
@@ -665,7 +662,8 @@ export function ErrorFilterRulesEditor({ value, onChange, channelId }: Props) {
   const updateRule = (index: number, patch: Partial<ErrorFilterRule>) =>
     emit(rules.map((r, i) => (i === index ? { ...r, ...patch } : r)))
 
-  const removeRule = (index: number) => emit(rules.filter((_, i) => i !== index))
+  const removeRule = (index: number) =>
+    emit(rules.filter((_, i) => i !== index))
 
   const addRule = () => emit([...rules, createEmptyErrorFilterRule()])
 

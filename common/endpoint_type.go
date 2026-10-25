@@ -1,9 +1,18 @@
 package common
 
-import "github.com/QuantumNous/new-api/constant"
+import (
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/pkg/knowledge"
+)
 
 // GetEndpointTypesByChannelType 获取渠道最优先端点类型（所有的渠道都支持 OpenAI 端点）
 func GetEndpointTypesByChannelType(channelType int, modelName string) []constant.EndpointType {
+	if capability, ok := knowledge.Lookup(modelName); ok {
+		if capability.Kind == "embedding" {
+			return []constant.EndpointType{constant.EndpointTypeEmbeddings}
+		}
+		return []constant.EndpointType{constant.EndpointTypeJinaRerank}
+	}
 	var endpointTypes []constant.EndpointType
 	switch channelType {
 	case constant.ChannelTypeJina:

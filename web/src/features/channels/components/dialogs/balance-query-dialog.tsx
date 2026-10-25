@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { getCodexUsage, updateChannelBalance } from '../../api'
 import { channelsQueryKeys } from '../../lib'
 import { useChannels } from '../channels-provider'
@@ -39,6 +40,7 @@ export function BalanceQueryDialog({
   const [balanceUpdatedTime, setBalanceUpdatedTime] = useState<number | null>(
     null
   )
+  const [rawResponse, setRawResponse] = useState<string | null>(null)
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
 
@@ -95,6 +97,10 @@ export function BalanceQueryDialog({
         await queryClient.invalidateQueries({
           queryKey: channelsQueryKeys.lists(),
         })
+        setRawResponse(null)
+      } else if (response.success && response.raw_response) {
+        setRawResponse(response.raw_response)
+        toast.success(t('Balance response received'))
       } else {
         toast.error(response.message || t('Failed to query balance'))
       }
@@ -110,6 +116,7 @@ export function BalanceQueryDialog({
   const handleClose = () => {
     setBalance(null)
     setBalanceUpdatedTime(null)
+    setRawResponse(null)
     setCodexUsageResponse(null)
     onOpenChange(false)
   }
@@ -171,6 +178,21 @@ export function BalanceQueryDialog({
               )}
             </div>
           </div>
+
+          {rawResponse && (
+            <div className='space-y-2'>
+              <div className='text-sm font-medium'>
+                {t('Raw balance response')}
+              </div>
+              <JsonCodeEditor
+                value={rawResponse}
+                onChange={setRawResponse}
+                disabled
+                heightClassName='h-48 min-h-48'
+                ariaLabel={t('Raw balance response')}
+              />
+            </div>
+          )}
 
           {/* Balance Update Button */}
           <Button

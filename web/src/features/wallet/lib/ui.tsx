@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react'
 import { CreditCard, Landmark } from 'lucide-react'
-import { SiAlipay, SiWechat, SiStripe } from 'react-icons/si'
+import { IconAlipay, IconStripe, IconWeChat } from '@/assets/brand-icons'
 import { PAYMENT_TYPES, PAYMENT_ICON_COLORS } from '../constants'
 
 // ============================================================================
@@ -69,21 +69,21 @@ export function getPaymentIcon(
   switch (paymentType) {
     case PAYMENT_TYPES.ALIPAY:
       return (
-        <SiAlipay
+        <IconAlipay
           className={className}
           style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.ALIPAY] }}
         />
       )
     case PAYMENT_TYPES.WECHAT:
       return (
-        <SiWechat
+        <IconWeChat
           className={className}
           style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.WECHAT] }}
         />
       )
     case PAYMENT_TYPES.STRIPE:
       return (
-        <SiStripe
+        <IconStripe
           className={className}
           style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.STRIPE] }}
         />

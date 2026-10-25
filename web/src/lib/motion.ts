@@ -20,7 +20,14 @@ export const MOTION_TRANSITION: Record<string, Transition> = {
 export const MOTION_VARIANTS = {
   pageEnter: {
     initial: { opacity: 0, y: 8, filter: 'blur(4px)' },
-    animate: { opacity: 1, y: 0, filter: 'blur(0px)' },
+    animate: {
+      opacity: 1,
+      y: 0,
+      // 零半径 blur 会让部分 Android 渲染器（如 OriginOS 6）整页白屏：保留模糊过渡，
+      // 终点停在 0.01px，动画结束后再把 filter 置为 none。
+      filter: 'blur(0.01px)',
+      transitionEnd: { filter: 'none' },
+    },
     exit: { opacity: 0, y: -4, filter: 'blur(2px)' },
   },
   fadeIn: {

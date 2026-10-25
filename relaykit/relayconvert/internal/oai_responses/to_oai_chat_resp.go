@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 const (

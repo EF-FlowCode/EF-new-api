@@ -19,13 +19,16 @@ import (
 //   - tier(name, value) — trace callback that records which tier matched
 //   - max, min, abs, ceil, floor — standard math helpers
 //
-// Returns the resulting float64 quota (before group ratio) and a TraceResult
-// with side-channel info captured by tier() during execution.
+// Returns the expression's raw result (USD amount for v2, legacy coefficient
+// units for v1), before group ratio, plus the trace captured by tier().
 func RunExpr(exprStr string, params TokenParams) (float64, TraceResult, error) {
 	return RunExprWithRequest(exprStr, params, RequestInput{})
 }
 
 func RunExprWithRequest(exprStr string, params TokenParams, request RequestInput) (float64, TraceResult, error) {
+	if err := validateRequestUsage(exprStr, request); err != nil {
+		return 0, TraceResult{}, err
+	}
 	prog, err := CompileFromCache(exprStr)
 	if err != nil {
 		return 0, TraceResult{}, err
@@ -41,6 +44,9 @@ func RunExprByHash(exprStr, hash string, params TokenParams) (float64, TraceResu
 }
 
 func RunExprByHashWithRequest(exprStr, hash string, params TokenParams, request RequestInput) (float64, TraceResult, error) {
+	if err := validateRequestUsage(exprStr, request); err != nil {
+		return 0, TraceResult{}, err
+	}
 	prog, err := CompileFromCacheByHash(exprStr, hash)
 	if err != nil {
 		return 0, TraceResult{}, err
@@ -52,7 +58,7 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 	trace := TraceResult{}
 	headers := normalizeHeaders(request.Headers)
 
-	env := map[string]interface{}{
+	env := map[string]any{
 		"p":     params.P,
 		"c":     params.C,
 		"len":   params.Len,
@@ -71,7 +77,7 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 		"header": func(key string) string {
 			return headers[strings.ToLower(strings.TrimSpace(key))]
 		},
-		"param": func(path string) interface{} {
+		"param": func(path string) any {
 			path = strings.TrimSpace(path)
 			if path == "" || len(request.Body) == 0 {
 				return nil
@@ -82,11 +88,18 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			}
 			return result.Value()
 		},
-		"has": func(source interface{}, substr string) bool {
+		"has": func(source any, substr string) bool {
 			if source == nil || substr == "" {
 				return false
 			}
 			return strings.Contains(fmt.Sprint(source), substr)
+		},
+		"u": func(name string) (any, error) {
+			value, ok := request.Usage[name]
+			if !ok || value == nil {
+				return nil, fmt.Errorf("usage field %q is missing", name)
+			}
+			return value, nil
 		},
 		"hour":    func(tz string) int { return timeInZone(tz).Hour() },
 		"minute":  func(tz string) int { return timeInZone(tz).Minute() },

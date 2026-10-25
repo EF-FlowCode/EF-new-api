@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { Activity, Database, Zap } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
+import { useIsAdmin } from '@/hooks/use-admin'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -17,13 +19,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useIsAdmin } from '@/hooks/use-admin'
-import { cn } from '@/lib/utils'
-import {
-  fetchAdminGroupDetail,
-  fetchGroupHistory,
-} from '../api'
-import type { ChannelStat, GroupDetail, GroupSummary, HistoryPoint } from '../types'
+import { fetchAdminGroupDetail, fetchGroupHistory } from '../api'
+import type {
+  ChannelStat,
+  GroupDetail,
+  GroupSummary,
+  HistoryPoint,
+} from '../types'
 import { AvailabilityCacheChart } from './availability-cache-chart'
 import { StatusTimeline } from './status-timeline'
 
@@ -35,8 +37,11 @@ function rateColor(rate: number | null | undefined): string {
   return 'rgb(239 68 68)'
 }
 
+// common.ChannelStatusEnabled
+const CHANNEL_STATUS_ENABLED = 1
+
 function rateBadgeClass(rate: number | null | undefined): string {
-  if (rate == null) {
+  if (rate == null || rate < 0) {
     return 'border-muted-foreground/40 bg-muted/40 text-muted-foreground'
   }
   if (rate >= 99) {
@@ -57,9 +62,9 @@ function formatFRT(ms: number | null | undefined): string {
   return `${Math.round(ms)}ms`
 }
 
-function formatLastTest(ts: number | string | null | undefined): string {
-  if (!ts) return '—'
-  const date = new Date(ts)
+function formatUpdatedAt(seconds: number | null | undefined): string {
+  if (!seconds) return '—'
+  const date = new Date(seconds * 1000)
   if (Number.isNaN(date.getTime())) return '—'
   return date.toLocaleString([], {
     month: '2-digit',
@@ -82,12 +87,12 @@ function Stat({ icon, label, value, valueColor }: StatProps) {
     <div className='bg-card rounded-xl border p-3'>
       <div className='text-muted-foreground flex items-center gap-1.5'>
         {icon}
-        <span className='text-[10px] font-semibold uppercase tracking-wider'>
+        <span className='text-[10px] font-semibold tracking-wider uppercase'>
           {label}
         </span>
       </div>
       <div
-        className='mt-1.5 font-mono text-xl font-semibold leading-none'
+        className='mt-1.5 font-mono text-xl leading-none font-semibold'
         style={{ color: valueColor }}
       >
         {value}
@@ -236,9 +241,7 @@ export function GroupDetailPanel({ open, group, onClose }: Props) {
           {/* Channel table — admin only */}
           {admin && (
             <div>
-              <div className='mb-2 text-sm font-semibold'>
-                {t('Channels')}
-              </div>
+              <div className='mb-2 text-sm font-semibold'>{t('Channels')}</div>
               {loading && channelData.length === 0 ? (
                 <div className='space-y-2'>
                   {[0, 1, 2].map((i) => (
@@ -262,9 +265,7 @@ export function GroupDetailPanel({ open, group, onClose }: Props) {
                         </TableHead>
                         <TableHead className='w-24'>{t('Cache hit')}</TableHead>
                         <TableHead className='w-20'>FRT</TableHead>
-                        <TableHead className='w-32'>
-                          {t('Last test')}
-                        </TableHead>
+                        <TableHead className='w-32'>{t('Updated')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -291,12 +292,14 @@ export function GroupDetailPanel({ open, group, onClose }: Props) {
                                 variant='outline'
                                 className={cn(
                                   'font-normal',
-                                  ch.enabled
+                                  ch.channel_status === CHANNEL_STATUS_ENABLED
                                     ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                                     : 'border-muted-foreground/40 bg-muted/40 text-muted-foreground'
                                 )}
                               >
-                                {ch.enabled ? t('Enabled') : t('Disabled')}
+                                {ch.channel_status === CHANNEL_STATUS_ENABLED
+                                  ? t('Enabled')
+                                  : t('Disabled')}
                               </Badge>
                             </TableCell>
                             <TableCell>
@@ -307,7 +310,8 @@ export function GroupDetailPanel({ open, group, onClose }: Props) {
                                   rateBadgeClass(ch.availability_rate)
                                 )}
                               >
-                                {ch.availability_rate != null
+                                {ch.availability_rate != null &&
+                                ch.availability_rate >= 0
                                   ? `${ch.availability_rate.toFixed(1)}%`
                                   : '—'}
                               </Badge>
@@ -317,21 +321,23 @@ export function GroupDetailPanel({ open, group, onClose }: Props) {
                                 variant='outline'
                                 className={cn(
                                   'font-normal',
-                                  ch.cache_hit_rate != null && ch.cache_hit_rate >= 3
+                                  ch.cache_hit_rate != null &&
+                                    ch.cache_hit_rate >= 3
                                     ? rateBadgeClass(ch.cache_hit_rate)
                                     : 'border-muted-foreground/40 bg-muted/40 text-muted-foreground'
                                 )}
                               >
-                                {ch.cache_hit_rate != null && ch.cache_hit_rate >= 3
+                                {ch.cache_hit_rate != null &&
+                                ch.cache_hit_rate >= 3
                                   ? `${ch.cache_hit_rate.toFixed(1)}%`
                                   : '—'}
                               </Badge>
                             </TableCell>
                             <TableCell className='font-mono text-xs'>
-                              {formatFRT(ch.first_response_time)}
+                              {formatFRT(ch.avg_frt)}
                             </TableCell>
                             <TableCell className='text-muted-foreground text-xs'>
-                              {formatLastTest(ch.last_test_time)}
+                              {formatUpdatedAt(ch.updated_at)}
                             </TableCell>
                           </TableRow>
                         ))}

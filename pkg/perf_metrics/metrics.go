@@ -1,17 +1,16 @@
 package perfmetrics
 
 import (
-	"context"
-	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"eflow.local/new-api/model"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/perf_metrics_setting"
 )
 
 var hotBuckets sync.Map
@@ -25,7 +24,19 @@ func Init() {
 }
 
 func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
+	recordRelaySample(info, success, outputTokens, 0, "")
+}
+
+func RecordRelayErrorSample(info *relaycommon.RelayInfo, statusCode int, content string) {
+	recordRelaySample(info, false, 0, statusCode, content)
+}
+
+func recordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64, statusCode int, content string) {
 	if info == nil {
+		return
+	}
+	availabilitySetting := operation_setting.GetGroupMonitoringSetting()
+	if !shouldRecordRelaySample(availabilitySetting, info.OriginModelName, statusCode, content) {
 		return
 	}
 	now := time.Now()
@@ -54,6 +65,10 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	})
 }
 
+func shouldRecordRelaySample(setting operation_setting.GroupMonitoringSetting, modelName string, statusCode int, content string) bool {
+	return !setting.IsAvailabilityExcluded(statusCode, modelName, content)
+}
+
 func Record(sample Sample) {
 	setting := perf_metrics_setting.GetSetting()
 	if !setting.Enabled || sample.Model == "" {
@@ -73,7 +88,6 @@ func Record(sample Sample) {
 	}
 	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
 	actual.(*atomicBucket).add(sample)
-	recordRedis(key, sample)
 }
 
 func Query(params QueryParams) (QueryResult, error) {
@@ -222,7 +236,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			for ts := range buckets {
 				tss = append(tss, ts)
 			}
-			sort.Slice(tss, func(i, j int) bool { return tss[i] < tss[j] })
+			slices.Sort(tss)
 			series = make([]int64, 0, len(tss))
 			for _, ts := range tss {
 				b := buckets[ts]
@@ -304,9 +318,7 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 		for ts := range buckets {
 			timestamps = append(timestamps, ts)
 		}
-		sort.Slice(timestamps, func(i, j int) bool {
-			return timestamps[i] < timestamps[j]
-		})
+		slices.Sort(timestamps)
 
 		total := counters{}
 		series := make([]BucketPoint, 0, len(timestamps))
@@ -368,54 +380,4 @@ func avgTps(value counters) float64 {
 		return 0
 	}
 	return float64(value.outputTokens) / (float64(value.generationMs) / 1000)
-}
-
-func recordRedis(key bucketKey, sample Sample) {
-	if !common.RedisEnabled || common.RDB == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	redisKey := redisBucketKey(key)
-	pipe := common.RDB.TxPipeline()
-	pipe.HIncrBy(ctx, redisKey, "req", 1)
-	if sample.Success {
-		pipe.HIncrBy(ctx, redisKey, "ok", 1)
-	}
-	if sample.LatencyMs > 0 {
-		pipe.HIncrBy(ctx, redisKey, "lat", sample.LatencyMs)
-	}
-	if sample.HasTtft && sample.TtftMs >= 0 {
-		pipe.HIncrBy(ctx, redisKey, "ttft", sample.TtftMs)
-		pipe.HIncrBy(ctx, redisKey, "ttft_n", 1)
-	}
-	if sample.OutputTokens > 0 && sample.GenerationMs > 0 {
-		pipe.HIncrBy(ctx, redisKey, "out", sample.OutputTokens)
-		pipe.HIncrBy(ctx, redisKey, "gen_ms", sample.GenerationMs)
-	}
-	pipe.Expire(ctx, redisKey, time.Hour)
-	_, _ = pipe.Exec(ctx)
-}
-
-func mergeRedisActiveBuckets(merged map[bucketKey]counters, params QueryParams, startTs int64, endTs int64) {
-	if !common.RedisEnabled || common.RDB == nil || params.Model == "" || params.Group == "" {
-		return
-	}
-	active := bucketStart(time.Now().Unix())
-	if active < startTs || active > endTs {
-		return
-	}
-	key := bucketKey{model: params.Model, group: params.Group, bucketTs: active}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	values, err := common.RDB.HGetAll(ctx, redisBucketKey(key)).Result()
-	if err != nil || len(values) == 0 {
-		return
-	}
-	mergeCounters(merged, key, redisCounters(values))
-}
-
-func redisBucketKey(key bucketKey) string {
-	return fmt.Sprintf("perf:%s:%s:%d", key.model, key.group, key.bucketTs)
 }

@@ -1,21 +1,25 @@
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { TOKEN_UNIT_DIVISORS } from '../constants'
+import type { PricingModel, TokenUnit } from '../types'
 import {
   BILLING_PRICING_VARS,
+  parseFlatTokenBillingExpr,
   parseTiersFromExpr,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
   type BillingVar,
   type ParsedTier,
 } from './billing-expr'
-import type { PricingModel, TokenUnit } from '../types'
+import { getTimePricingSummary, type TimePricingSummary } from './time-pricing'
 
-type DynamicPriceOptions = {
+export type DynamicPriceOptions = {
+  selectedGroup?: string
   tokenUnit: TokenUnit
   showRechargePrice?: boolean
   priceRate?: number
   usdExchangeRate?: number
   groupRatioMultiplier?: number
+  now?: Date
 }
 
 export type DynamicPriceEntry = {
@@ -28,6 +32,12 @@ export type DynamicPriceEntry = {
   variable: BillingVar
 }
 
+export type DynamicTierPriceRow = {
+  tier: ParsedTier
+  entries: DynamicPriceEntry[]
+  effectiveEntries: DynamicPriceEntry[]
+}
+
 export type DynamicPricingSummary = {
   tiers: ParsedTier[]
   tier: ParsedTier | null
@@ -38,12 +48,22 @@ export type DynamicPricingSummary = {
   entries: DynamicPriceEntry[]
   primaryEntries: DynamicPriceEntry[]
   secondaryEntries: DynamicPriceEntry[]
+  tierRows: DynamicTierPriceRow[]
+  priceFields: DynamicPriceEntry[]
+  timePricing: TimePricingSummary | null
+  currentEffectiveMultiplier: number
+  effectiveEntries: DynamicPriceEntry[]
 }
 
 const PRIMARY_DYNAMIC_FIELDS = new Set(['inputPrice', 'outputPrice'])
 
 export function isDynamicPricingModel(model: PricingModel): boolean {
-  return model.billing_mode === 'tiered_expr' && Boolean(model.billing_expr)
+  if (model.knowledge?.prices) return false
+  return (
+    model.billing_mode === 'tiered_expr' &&
+    Boolean(model.billing_expr) &&
+    !parseFlatTokenBillingExpr(model.billing_expr || '')
+  )
 }
 
 export function getDynamicDisplayGroupRatio(
@@ -111,7 +131,9 @@ export function formatDynamicUnitPrice(
 
 export function getDynamicPricingTiers(model: PricingModel): ParsedTier[] {
   if (!isDynamicPricingModel(model)) return []
-  const { billingExpr } = splitBillingExprAndRequestRules(model.billing_expr || '')
+  const { billingExpr } = splitBillingExprAndRequestRules(
+    model.billing_expr || ''
+  )
   return parseTiersFromExpr(billingExpr)
 }
 
@@ -161,7 +183,30 @@ export function getDynamicPricingSummary(
 
   const tiers = getDynamicPricingTiers(model)
   const tier = tiers[0] || null
-  const entries = getDynamicPriceEntries(tier, options)
+  const timePricing = getTimePricingSummary(
+    model.billing_expr || '',
+    options.now
+  )
+  const currentMultiplier = timePricing?.currentMultiplier ?? 1
+  const currentEffectiveMultiplier =
+    (options.groupRatioMultiplier ?? 1) * currentMultiplier
+  const tierRows = tiers.map((currentTier) => ({
+    tier: currentTier,
+    entries: getDynamicPriceEntries(currentTier, options),
+    effectiveEntries: getDynamicPriceEntries(currentTier, {
+      ...options,
+      groupRatioMultiplier: currentEffectiveMultiplier,
+    }),
+  }))
+  const entries = tierRows[0]?.entries || []
+  const effectiveEntries = tierRows[0]?.effectiveEntries || []
+  const priceFields = Array.from(
+    new Map(
+      tierRows
+        .flatMap((row) => row.entries)
+        .map((entry) => [entry.field, entry])
+    ).values()
+  )
   const rawExpression = model.billing_expr || ''
 
   return {
@@ -178,5 +223,10 @@ export function getDynamicPricingSummary(
     secondaryEntries: entries.filter(
       (entry) => !PRIMARY_DYNAMIC_FIELDS.has(entry.field)
     ),
+    tierRows,
+    priceFields,
+    timePricing,
+    currentEffectiveMultiplier,
+    effectiveEntries,
   }
 }

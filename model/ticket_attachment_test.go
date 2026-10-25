@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -78,6 +78,7 @@ func TestBindAttachmentsToMessage_AlreadyBoundDenied(t *testing.T) {
 }
 
 func TestBindAttachmentsToMessage_EmptyIsNoop(t *testing.T) {
+	useModelIntegrationTestDB(t)
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		return BindAttachmentsToMessage(tx, nil, 1, 1, 1)
 	})
@@ -113,5 +114,6 @@ func TestListOrphanAttachments(t *testing.T) {
 
 func truncateAttachments(t *testing.T) {
 	t.Helper()
+	useModelIntegrationTestDB(t, &TicketAttachment{})
 	require.NoError(t, DB.Exec("DELETE FROM ticket_attachments").Error)
 }

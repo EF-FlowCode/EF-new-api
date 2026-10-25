@@ -7,12 +7,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/setting/operation_setting"
 
-	"github.com/bytedance/gopkg/util/gopool"
+	gopool "eflow.local/new-api/internal/drainpool"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -88,6 +88,7 @@ func (user *User) ToBaseUser() *UserBase {
 		Username:                user.Username,
 		Setting:                 user.Setting,
 		Email:                   user.Email,
+		CacheSchema:             userCacheSchemaVersion,
 	}
 	return cache
 }
@@ -101,6 +102,22 @@ func (user *User) GetAccessToken() string {
 
 func (user *User) SetAccessToken(token string) {
 	user.AccessToken = &token
+}
+
+// SetLegacyUserAccessToken 仅轮换旧版控制台访问令牌（过渡期后停用），避免把过期的用户快照写回
+// 并覆盖并发发生的额度、返利或资料变更。
+func SetLegacyUserAccessToken(id int, token string) error {
+	if id == 0 {
+		return errors.New("id 为空！")
+	}
+	result := DB.Model(&User{}).Where("id = ?", id).Update("access_token", token)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (user *User) GetSetting() dto.UserSetting {
@@ -138,19 +155,43 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	return updateUserSettingCache(userId, settingValue)
 }
 
+// userBindColumns 是第三方账号绑定列白名单，防止专用更新入口被用于修改
+// 角色、状态、分组或其他用户字段。
+var userBindColumns = map[string]bool{
+	"github_id":   true,
+	"discord_id":  true,
+	"oidc_id":     true,
+	"linux_do_id": true,
+	"wechat_id":   true,
+	"telegram_id": true,
+}
+
+// UpdateUserBindColumn 只更新指定的第三方账号绑定列。
+// 绑定流程不能使用“读取完整用户快照 -> 修改一个字段 -> 整体更新”，否则
+// 读取期间发生的封禁、降权或分组变更可能被旧快照覆盖。
+func UpdateUserBindColumn(userId int, column string, value string) error {
+	if userId <= 0 {
+		return errors.New("id 为空！")
+	}
+	if !userBindColumns[column] {
+		return fmt.Errorf("invalid user bind column: %s", column)
+	}
+	return DB.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
+}
+
 // 根据用户角色生成默认的边栏配置
 func generateDefaultSidebarConfigForRole(userRole int) string {
-	defaultConfig := map[string]interface{}{}
+	defaultConfig := map[string]any{}
 
 	// 聊天区域 - 所有用户都可以访问
-	defaultConfig["chat"] = map[string]interface{}{
+	defaultConfig["chat"] = map[string]any{
 		"enabled":    true,
 		"playground": true,
 		"chat":       true,
 	}
 
 	// 控制台区域 - 所有用户都可以访问
-	defaultConfig["console"] = map[string]interface{}{
+	defaultConfig["console"] = map[string]any{
 		"enabled":    true,
 		"detail":     true,
 		"token":      true,
@@ -161,7 +202,7 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 	}
 
 	// 个人中心区域 - 所有用户都可以访问
-	defaultConfig["personal"] = map[string]interface{}{
+	defaultConfig["personal"] = map[string]any{
 		"enabled":  true,
 		"topup":    true,
 		"personal": true,
@@ -170,7 +211,7 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 	// 管理员区域 - 根据角色决定
 	if userRole == common.RoleAdminUser {
 		// 管理员可以访问管理员区域，但不能访问系统设置
-		defaultConfig["admin"] = map[string]interface{}{
+		defaultConfig["admin"] = map[string]any{
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
@@ -183,7 +224,7 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 		}
 	} else if userRole == common.RoleRootUser {
 		// 超级管理员可以访问所有功能
-		defaultConfig["admin"] = map[string]interface{}{
+		defaultConfig["admin"] = map[string]any{
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
@@ -422,11 +463,11 @@ func SearchUsers(keyword string, group string, roles []int, statuses []int, star
 	// （即被排除），单按 ID/用户名 搜索时会莫名漏掉没填邮箱的用户。
 	if keyword != "" {
 		likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
-		likeArgs := []interface{}{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
+		likeArgs := []any{"%" + keyword + "%", "%" + keyword + "%", "%" + keyword + "%"}
 		// 尝试将关键字转换为整数ID：数字关键字同时精确匹配 ID
 		if keywordInt, convErr := strconv.Atoi(keyword); convErr == nil {
 			likeCondition = "id = ? OR " + likeCondition
-			likeArgs = append([]interface{}{keywordInt}, likeArgs...)
+			likeArgs = append([]any{keywordInt}, likeArgs...)
 		}
 		query = query.Where("("+likeCondition+")", likeArgs...)
 	}
@@ -572,21 +613,26 @@ func HardDeleteUserById(id int) error {
 	return user.HardDelete()
 }
 
-func inviteUser(inviterId int) (err error) {
-	user, err := GetUserById(inviterId, true)
-	if err != nil {
-		return err
+func inviteUser(inviterId int, quotaForInviter int) error {
+	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]any{
+		"aff_count":   gorm.Expr("aff_count + ?", 1),
+		"aff_quota":   gorm.Expr("aff_quota + ?", quotaForInviter),
+		"aff_history": gorm.Expr("aff_history + ?", quotaForInviter),
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-	user.AffCount++
-	user.AffQuota += common.QuotaForInviter
-	user.AffHistoryQuota += common.QuotaForInviter
-	return DB.Save(user).Error
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 检查quota是否小于最小额度
-	if float64(quota) < common.QuotaPerUnit {
-		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(int(common.QuotaPerUnit)))
+	quotaPerUnit := common.GetQuotaPerUnit()
+	if float64(quota) < quotaPerUnit {
+		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(int(quotaPerUnit)))
 	}
 
 	// 开始数据库事务
@@ -597,7 +643,7 @@ func (user *User) TransferAffQuotaToQuota(quota int) error {
 	defer tx.Rollback() // 确保在函数退出时事务能回滚
 
 	// 加锁查询用户以确保数据一致性
-	err := tx.Set("gorm:query_option", "FOR UPDATE").First(&user, user.Id).Error
+	err := lockForUpdate(tx).First(user, user.Id).Error
 	if err != nil {
 		return err
 	}
@@ -674,12 +720,13 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 }
 
 func (user *User) Insert(inviterId int) error {
+	quotaSettings := common.GetUserQuotaSettings()
 	if err := DB.Transaction(func(tx *gorm.DB) error {
 		return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
+			user.Quota = quotaSettings.QuotaForNewUser
 			user.AffCode = common.GetRandomString(4)
 			if user.CreatedTime == 0 {
 				user.CreatedTime = common.GetTimestamp()
@@ -713,18 +760,18 @@ func (user *User) Insert(inviterId int) error {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+	if quotaSettings.QuotaForNewUser > 0 {
+		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(quotaSettings.QuotaForNewUser)))
 	}
-	if shouldIssueAffiliateReward(inviterId) {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+	if shouldIssueAffiliateReward(inviterId, quotaSettings) {
+		if quotaSettings.QuotaForInvitee > 0 {
+			_ = IncreaseUserQuota(user.Id, quotaSettings.QuotaForInvitee, true)
+			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(quotaSettings.QuotaForInvitee)))
 		}
-		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+		if quotaSettings.QuotaForInviter > 0 {
+			//_ = IncreaseUserQuota(inviterId, quotaSettings.QuotaForInviter)
+			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(quotaSettings.QuotaForInviter)))
+			_ = inviteUser(inviterId, quotaSettings.QuotaForInviter)
 		}
 	}
 	return nil
@@ -733,12 +780,12 @@ func (user *User) Insert(inviterId int) error {
 // InsertWithTx inserts a new user within an existing transaction.
 // This is used for OAuth registration where user creation and binding need to be atomic.
 // Post-creation tasks (sidebar config, logs, inviter rewards) are handled after the transaction commits.
-func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
+func (user *User) InsertWithTx(tx *gorm.DB, inviterId int, quotaSettings common.UserQuotaSettings) error {
 	return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
+		user.Quota = quotaSettings.QuotaForNewUser
 		user.AffCode = common.GetRandomString(4)
 		if user.CreatedTime == 0 {
 			user.CreatedTime = common.GetTimestamp()
@@ -756,7 +803,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
 // This should be called after the transaction commits successfully.
-func (user *User) FinalizeOAuthUserCreation(inviterId int) {
+func (user *User) FinalizeOAuthUserCreation(inviterId int, quotaSettings common.UserQuotaSettings) {
 	// 用户创建成功后，根据角色初始化边栏配置
 	var createdUser User
 	if err := DB.Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
@@ -770,23 +817,23 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+	if quotaSettings.QuotaForNewUser > 0 {
+		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(quotaSettings.QuotaForNewUser)))
 	}
-	if shouldIssueAffiliateReward(inviterId) {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+	if shouldIssueAffiliateReward(inviterId, quotaSettings) {
+		if quotaSettings.QuotaForInvitee > 0 {
+			_ = IncreaseUserQuota(user.Id, quotaSettings.QuotaForInvitee, true)
+			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(quotaSettings.QuotaForInvitee)))
 		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+		if quotaSettings.QuotaForInviter > 0 {
+			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(quotaSettings.QuotaForInviter)))
+			_ = inviteUser(inviterId, quotaSettings.QuotaForInviter)
 		}
 	}
 }
 
-func shouldIssueAffiliateReward(inviterId int) bool {
-	return inviterId != 0 && common.AffiliateEnabled && operation_setting.IsPaymentComplianceConfirmed()
+func shouldIssueAffiliateReward(inviterId int, settings common.UserQuotaSettings) bool {
+	return inviterId != 0 && settings.AffiliateEnabled && operation_setting.IsPaymentComplianceConfirmed()
 }
 
 func (user *User) Update(updatePassword bool) error {
@@ -803,7 +850,16 @@ func (user *User) Update(updatePassword bool) error {
 		return err
 	}
 	// eflow/上游安全修复：Omit quota 类字段，防用户经资料更新接口篡改自己额度。
-	if err = DB.Model(&current).Omit("quota", "used_quota", "request_count", "additional_customer_tiers").Updates(newUser).Error; err != nil {
+	if err = DB.Model(&current).Omit(
+		"access_token",
+		"quota",
+		"used_quota",
+		"request_count",
+		"aff_count",
+		"aff_quota",
+		"aff_history",
+		"additional_customer_tiers",
+	).Updates(newUser).Error; err != nil {
 		return err
 	}
 	if err = DB.First(user, user.Id).Error; err != nil {
@@ -824,7 +880,7 @@ func (user *User) Edit(updatePassword bool) error {
 	}
 
 	newUser := *user
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"username":                  newUser.Username,
 		"display_name":              newUser.DisplayName,
 		"group":                     newUser.Group,
@@ -886,7 +942,13 @@ func (user *User) Delete() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	if err := DB.Delete(user).Error; err != nil {
+	// Deleting the account removes its access tokens; disabling keeps them.
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if _, err := DeleteUserAccessTokensWithTx(tx, user.Id); err != nil {
+			return err
+		}
+		return tx.Delete(user).Error
+	}); err != nil {
 		return err
 	}
 
@@ -928,6 +990,7 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 		&TwoFA{},
 		&PasskeyCredential{},
 		&Token{},
+		&UserAccessToken{},
 	} {
 		if err := tx.Unscoped().Where("user_id = ?", userId).Delete(authenticationData).Error; err != nil {
 			return err
@@ -988,14 +1051,6 @@ func (user *User) FillUserByGitHubId() error {
 	return nil
 }
 
-// UpdateGitHubId updates the user's GitHub ID (used for migration from login to numeric ID)
-func (user *User) UpdateGitHubId(newGitHubId string) error {
-	if user.Id == 0 {
-		return errors.New("user id is empty")
-	}
-	return DB.Model(user).Update("github_id", newGitHubId).Error
-}
-
 func (user *User) FillUserByDiscordId() error {
 	if user.DiscordId == "" {
 		return errors.New("discord id 为空！")
@@ -1016,8 +1071,12 @@ func (user *User) FillUserByWeChatId() error {
 	if user.WeChatId == "" {
 		return errors.New("WeChat id 为空！")
 	}
-	DB.Where(User{WeChatId: user.WeChatId}).First(user)
-	return nil
+	// 未找到保持 user.Id == 0，由调用方提示账号已注销；其余数据库错误向上返回。
+	err := DB.Where(User{WeChatId: user.WeChatId}).First(user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (user *User) FillUserByTelegramId() error {
@@ -1028,7 +1087,7 @@ func (user *User) FillUserByTelegramId() error {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return errors.New("该 Telegram 账户未绑定")
 	}
-	return nil
+	return err
 }
 
 func IsEmailAlreadyTaken(email string) bool {
@@ -1055,24 +1114,38 @@ func GetUniqueUserByEmail(email string) (*User, error) {
 	}
 }
 
+// isIdentityTaken 判断第三方身份是否已被任意账号占用：存在任意匹配（含历史多账号）即占用；
+// 查询失败时保守视为已占用，避免数据库异常时放行重复绑定或注册。空值不代表任何身份，保持未占用。
+func isIdentityTaken(query *gorm.DB, column, value string) bool {
+	if value == "" {
+		return false
+	}
+	var count int64
+	if err := query.Model(&User{}).Where(column+" = ?", value).Count(&count).Error; err != nil {
+		common.SysError(fmt.Sprintf("check %s taken failed: %s", column, err.Error()))
+		return true
+	}
+	return count > 0
+}
+
 func IsWeChatIdAlreadyTaken(wechatId string) bool {
-	return DB.Unscoped().Where("wechat_id = ?", wechatId).Find(&User{}).RowsAffected == 1
+	return isIdentityTaken(DB.Unscoped(), "wechat_id", wechatId)
 }
 
 func IsGitHubIdAlreadyTaken(githubId string) bool {
-	return DB.Unscoped().Where("github_id = ?", githubId).Find(&User{}).RowsAffected == 1
+	return isIdentityTaken(DB.Unscoped(), "github_id", githubId)
 }
 
 func IsDiscordIdAlreadyTaken(discordId string) bool {
-	return DB.Unscoped().Where("discord_id = ?", discordId).Find(&User{}).RowsAffected == 1
+	return isIdentityTaken(DB.Unscoped(), "discord_id", discordId)
 }
 
 func IsOidcIdAlreadyTaken(oidcId string) bool {
-	return DB.Where("oidc_id = ?", oidcId).Find(&User{}).RowsAffected == 1
+	return isIdentityTaken(DB, "oidc_id", oidcId)
 }
 
 func IsTelegramIdAlreadyTaken(telegramId string) bool {
-	return DB.Unscoped().Where("telegram_id = ?", telegramId).Find(&User{}).RowsAffected == 1
+	return isIdentityTaken(DB.Unscoped(), "telegram_id", telegramId)
 }
 
 func ResetUserPasswordByEmail(email string, password string) error {
@@ -1122,24 +1195,9 @@ func ValidateAccessToken(token string) (*User, error) {
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
 func GetUserQuota(id int, fromDB bool) (quota int, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserQuotaCache(id, quota); err != nil {
-					common.SysLog("failed to update user quota cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
-		quota, err := getUserQuotaCache(id)
-		if err == nil {
-			return quota, nil
-		}
-		// Don't return error - fall through to DB
+		return getUserQuotaCache(id)
 	}
-	fromDB = true
 	err = DB.Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error
 	if err != nil {
 		return 0, err
@@ -1228,17 +1286,16 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheIncrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
 	if !db && common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
+		updateUserQuotaCacheAsync(id, int64(quota), "increase")
 		return nil
 	}
-	return increaseUserQuota(id, quota)
+	if err = increaseUserQuota(id, quota); err != nil {
+		return err
+	}
+	updateUserQuotaCacheAsync(id, int64(quota), "increase")
+	return nil
 }
 
 func increaseUserQuota(id int, quota int) (err error) {
@@ -1253,17 +1310,28 @@ func DecreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
 	if !db && common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
+		updateUserQuotaCacheAsync(id, -int64(quota), "decrease")
 		return nil
 	}
-	return decreaseUserQuota(id, quota)
+	if err = decreaseUserQuota(id, quota); err != nil {
+		return err
+	}
+	updateUserQuotaCacheAsync(id, -int64(quota), "decrease")
+	return nil
+}
+
+func updateUserQuotaCacheAsync(id int, delta int64, operation string) {
+	if !common.RedisEnabled {
+		return
+	}
+	gopool.Go(func() {
+		_, err := cacheApplyUserQuotaDelta(id, delta)
+		if err != nil {
+			common.SysLog("failed to " + operation + " user quota: " + err.Error())
+		}
+	})
 }
 
 func decreaseUserQuota(id int, quota int) (err error) {
@@ -1310,9 +1378,25 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 	updateUserUsedQuotaAndRequestCount(id, quota, 1)
 }
 
+// UpdateUserUsedQuota adjusts accumulated usage without changing request_count.
+// It is used by asynchronous settlement/refund paths after the initial request
+// has already incremented the request counter.
+func UpdateUserUsedQuota(id int, quota int) {
+	if quota == 0 {
+		return
+	}
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		return
+	}
+	if err := DB.Model(&User{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", quota)).Error; err != nil {
+		common.SysLog("failed to update user used quota: " + err.Error())
+	}
+}
+
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
-		map[string]interface{}{
+		map[string]any{
 			"used_quota":    gorm.Expr("used_quota + ?", quota),
 			"request_count": gorm.Expr("request_count + ?", count),
 		},
@@ -1334,7 +1418,7 @@ func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, r
 	}
 
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
-		map[string]interface{}{
+		map[string]any{
 			"quota":         gorm.Expr("quota + ?", quota),
 			"used_quota":    gorm.Expr("used_quota + ?", usedQuota),
 			"request_count": gorm.Expr("request_count + ?", requestCount),
@@ -1347,7 +1431,7 @@ func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, r
 
 func updateUserUsedQuota(id int, quota int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
-		map[string]interface{}{
+		map[string]any{
 			"used_quota": gorm.Expr("used_quota + ?", quota),
 		},
 	).Error
@@ -1527,7 +1611,7 @@ func IncrementEnforcementHit(userID int, source string, windowSeconds int64, now
 		default:
 			return fmt.Errorf("unknown enforcement source: %s", source)
 		}
-		if err := tx.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		if err := tx.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 			"enforcement_hit_count_risk":       hitRisk,
 			"enforcement_hit_count_moderation": hitMod,
 			"enforcement_window_start_at":      windowStart,
@@ -1565,7 +1649,7 @@ func MarkEnforcementEmailSent(userID int, windowStartAt int64, count int) error 
 	if userID <= 0 {
 		return nil
 	}
-	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"enforcement_email_window_start_at": windowStartAt,
 		"enforcement_email_count_in_window": count,
 	}).Error
@@ -1575,7 +1659,7 @@ func MarkEnforcementBanEmailSent(userID int, windowStartAt int64, count int) err
 	if userID <= 0 {
 		return nil
 	}
-	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"enforcement_ban_email_window_start_at": windowStartAt,
 		"enforcement_ban_email_count_in_window": count,
 	}).Error
@@ -1585,17 +1669,21 @@ func MarkEnforcementAutoBanned(userID int, ts int64) error {
 	if userID <= 0 {
 		return nil
 	}
-	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+	if err := DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"status":                     common.UserStatusDisabled,
 		"enforcement_auto_banned_at": ts,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+	InvalidateUserAuthCaches(userID)
+	return nil
 }
 
 func ResetEnforcementCounter(userID int) error {
 	if userID <= 0 {
 		return nil
 	}
-	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+	return DB.Model(&User{}).Where("id = ?", userID).Updates(map[string]any{
 		"enforcement_hit_count_risk":            0,
 		"enforcement_hit_count_moderation":      0,
 		"enforcement_window_start_at":           int64(0),

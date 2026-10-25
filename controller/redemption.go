@@ -1,14 +1,15 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,9 +30,10 @@ func GetAllRedemptions(c *gin.Context) {
 
 func SearchRedemptions(c *gin.Context) {
 	keyword := c.Query("keyword")
+	status := c.Query("status")
 	pageInfo := common.GetPageQuery(c)
 	sortOpts := model.NewRedemptionSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	redemptions, total, err := model.SearchRedemptions(keyword, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOpts)
+	redemptions, total, err := model.SearchRedemptions(keyword, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOpts)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -83,6 +85,10 @@ func AddRedemption(c *gin.Context) {
 	}
 	if redemption.Count > 100 {
 		common.ApiErrorI18n(c, i18n.MsgRedemptionCountMax)
+		return
+	}
+	if redemption.Quota <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionQuotaPositive)
 		return
 	}
 	if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
@@ -147,9 +153,19 @@ func UpdateRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// A used code keeps its redemption record; re-enabling it would allow a
+	// second credit, and editing it would rewrite what was paid out.
+	if cleanRedemption.Status == common.RedemptionCodeStatusUsed {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionStatusInvalid)
+		return
+	}
 	if statusOnly == "" {
 		if valid, msg := validateExpiredTime(c, redemption.ExpiredTime); !valid {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+			return
+		}
+		if redemption.Quota <= 0 {
+			common.ApiErrorI18n(c, i18n.MsgRedemptionQuotaPositive)
 			return
 		}
 		// If you add more fields, please also update redemption.Update()
@@ -158,9 +174,21 @@ func UpdateRedemption(c *gin.Context) {
 		cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	}
 	if statusOnly != "" {
+		if redemption.Status != common.RedemptionCodeStatusEnabled && redemption.Status != common.RedemptionCodeStatusDisabled {
+			common.ApiErrorI18n(c, i18n.MsgRedemptionStatusInvalid)
+			return
+		}
 		cleanRedemption.Status = redemption.Status
 	}
-	err = cleanRedemption.Update()
+	if statusOnly != "" {
+		err = cleanRedemption.UpdateStatus()
+	} else {
+		err = cleanRedemption.Update()
+	}
+	if errors.Is(err, model.ErrRedemptionAlreadyUsed) {
+		common.ApiErrorI18n(c, i18n.MsgRedemptionStatusInvalid)
+		return
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -192,4 +220,27 @@ func validateExpiredTime(c *gin.Context, expired int64) (bool, string) {
 		return false, i18n.T(c, i18n.MsgRedemptionExpireTimeInvalid)
 	}
 	return true, ""
+}
+
+// DeleteRedemptionBatch 批量删除选中的兑换码（软删除），并记录带数量与请求 ID 的管理审计。
+// eflow: 按上游 524455fac。
+func DeleteRedemptionBatch(c *gin.Context) {
+	var request struct {
+		Ids []int `json:"ids" binding:"required,min=1,max=1000,dive,gt=0"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	count, err := model.BatchDeleteRedemptions(request.Ids)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "redemption.delete_batch", map[string]any{
+		"count":                    count,
+		"total":                    len(request.Ids),
+		"requested_redemption_ids": request.Ids,
+	})
+	common.ApiSuccess(c, count)
 }

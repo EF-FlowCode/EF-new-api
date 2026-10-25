@@ -14,8 +14,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 
 // ============================================================================
 // Two-FA Disable Dialog Component
@@ -34,34 +38,36 @@ export function TwoFADisableDialog({
 }: TwoFADisableDialogProps) {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
-  const [code, setCode] = useState('')
   const [confirmed, setConfirmed] = useState(false)
+  const verification = useSecureVerification()
 
   const handleDisable = async () => {
-    if (!code) {
-      toast.error(t('Please enter your verification code or backup code'))
-      return
-    }
-
     if (!confirmed) {
       toast.error(t('Please confirm that you understand the consequences'))
       return
     }
 
-    try {
-      setLoading(true)
-      const response = await disable2FA(code)
-
+    const submit = async (proof?: SecurityProof) => {
+      const response = await disable2FA(proof?.proof_token)
       if (response.success) {
         toast.success(t('Two-factor authentication disabled'))
         onOpenChange(false)
         onSuccess()
-        // Reset
-        setCode('')
         setConfirmed(false)
       } else {
         toast.error(response.message || t('Failed to disable 2FA'))
       }
+    }
+
+    try {
+      setLoading(true)
+      await verification.startVerification(submit, {
+        operation: { scope: '2fa.disable' },
+        preferredMethod: '2fa',
+        description: t(
+          'Confirm your identity before disabling two-factor authentication.'
+        ),
+      })
     } catch (_error) {
       toast.error(t('Failed to disable 2FA'))
     } finally {
@@ -72,7 +78,6 @@ export function TwoFADisableDialog({
   const handleOpenChange = (open: boolean) => {
     if (!loading) {
       if (!open) {
-        setCode('')
         setConfirmed(false)
       }
       onOpenChange(open)
@@ -102,20 +107,6 @@ export function TwoFADisableDialog({
             </AlertDescription>
           </Alert>
 
-          <div className='space-y-2'>
-            <Label htmlFor='code'>{t('Verification Code')}</Label>
-            <Input
-              id='code'
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder={t('Enter code or backup code')}
-              disabled={loading}
-            />
-            <p className='text-muted-foreground text-xs'>
-              {t('Enter your authenticator code or a backup code')}
-            </p>
-          </div>
-
           <div className='flex items-start space-x-2'>
             <Checkbox
               id='confirm'
@@ -144,13 +135,14 @@ export function TwoFADisableDialog({
           <Button
             variant='destructive'
             onClick={handleDisable}
-            disabled={loading || !code || !confirmed}
+            disabled={loading || !confirmed}
           >
             {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
             {loading ? t('Disabling...') : t('Disable 2FA')}
           </Button>
         </DialogFooter>
       </DialogContent>
+      <SecureVerificationDialog {...verification.dialogProps} />
     </Dialog>
   )
 }

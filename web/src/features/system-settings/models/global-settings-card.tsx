@@ -21,7 +21,7 @@ import { Switch } from '@/components/ui/switch'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { StatusBadge } from '@/components/status-badge'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const thinkingBlacklistExample = JSON.stringify(
   ['moonshotai/kimi-k2-thinking', 'kimi-k2-thinking'],
@@ -114,7 +114,7 @@ type GlobalSettingsCardProps = {
 
 export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -144,12 +144,9 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
       return
     }
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
-    }
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value }))
+    )
   }
 
   return (
@@ -351,8 +348,8 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

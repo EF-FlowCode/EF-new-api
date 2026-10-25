@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import type {
   ApiKey,
   ApiResponse,
@@ -20,7 +20,12 @@ export async function getApiKeys(
   const queryParams = new URLSearchParams({ p: String(p), size: String(size) })
   if (sort_by) queryParams.set('sort_by', sort_by)
   if (sort_order) queryParams.set('sort_order', sort_order)
-  const res = await api.get(`/api/token/?${queryParams.toString()}`)
+  // Callers (keys table, chat-link key lookup) report success=false themselves,
+  // so only the business toast is skipped; HTTP errors such as 429 still get the
+  // interceptor toast because these callers do not catch them.
+  const res = await api.get(`/api/token/?${queryParams.toString()}`, {
+    skipBusinessError: true,
+  })
   return res.data
 }
 
@@ -36,7 +41,9 @@ export async function searchApiKeys(
   if (size != null) queryParams.set('size', String(size))
   if (sort_by) queryParams.set('sort_by', sort_by)
   if (sort_order) queryParams.set('sort_order', sort_order)
-  const res = await api.get(`/api/token/search?${queryParams.toString()}`)
+  const res = await api.get(`/api/token/search?${queryParams.toString()}`, {
+    skipBusinessError: true,
+  })
   return res.data
 }
 
@@ -50,7 +57,7 @@ export async function getApiKey(id: number): Promise<ApiResponse<ApiKey>> {
 export async function createApiKey(
   data: ApiKeyFormData
 ): Promise<ApiResponse<ApiKey>> {
-  const res = await api.post('/api/token/', data)
+  const res = await api.post('/api/token/', data, CALLER_HANDLED_REQUEST_CONFIG)
   return res.data
 }
 
@@ -58,13 +65,16 @@ export async function createApiKey(
 export async function updateApiKey(
   data: ApiKeyFormData & { id: number }
 ): Promise<ApiResponse<ApiKey>> {
-  const res = await api.put('/api/token/', data)
+  const res = await api.put('/api/token/', data, CALLER_HANDLED_REQUEST_CONFIG)
   return res.data
 }
 
 // Delete a single API key
 export async function deleteApiKey(id: number): Promise<ApiResponse> {
-  const res = await api.delete(`/api/token/${id}/`)
+  const res = await api.delete(
+    `/api/token/${id}/`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -72,7 +82,11 @@ export async function deleteApiKey(id: number): Promise<ApiResponse> {
 export async function batchDeleteApiKeys(
   ids: number[]
 ): Promise<ApiResponse<number>> {
-  const res = await api.post('/api/token/batch', { ids })
+  const res = await api.post(
+    '/api/token/batch',
+    { ids },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -81,7 +95,11 @@ export async function updateApiKeyStatus(
   id: number,
   status: number
 ): Promise<ApiResponse<ApiKey>> {
-  const res = await api.put('/api/token/?status_only=true', { id, status })
+  const res = await api.put(
+    '/api/token/?status_only=true',
+    { id, status },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -89,7 +107,11 @@ export async function updateApiKeyStatus(
 export async function fetchTokenKey(
   id: number
 ): Promise<{ success: boolean; message?: string; data?: { key: string } }> {
-  const res = await api.post(`/api/token/${id}/key`)
+  const res = await api.post(
+    `/api/token/${id}/key`,
+    undefined,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -99,6 +121,10 @@ export async function fetchTokenKeysBatch(ids: number[]): Promise<{
   message?: string
   data?: { keys: Record<number, string> }
 }> {
-  const res = await api.post('/api/token/batch/keys', { ids })
+  const res = await api.post(
+    '/api/token/batch/keys',
+    { ids },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }

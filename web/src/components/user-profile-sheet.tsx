@@ -6,9 +6,12 @@
 //   - 这个直接走 /api/user/:id/profile-summary（需要 admin 权限）
 // 后端两条接口返回结构一致，渲染部分基本一致。
 import { useEffect, useRef, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { RefreshCw } from 'lucide-react'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
+import { formatQuotaWithCurrency } from '@/lib/currency'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -27,9 +30,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { api } from '@/lib/api'
-import { formatQuotaWithCurrency } from '@/lib/currency'
-import { cn } from '@/lib/utils'
 
 type RecentLog = {
   id: number
@@ -124,7 +124,10 @@ export function UserProfileSheet({ userId, username, onOpenChange }: Props) {
   const load = async (uid: number) => {
     setLoading(true)
     try {
-      const res = await api.get(`/api/user/${uid}/profile-summary`)
+      const res = await api.get(
+        `/api/user/${uid}/profile-summary`,
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data?.success) {
         setProfile(res.data.data || null)
         lastLoadedUserId.current = uid
@@ -219,12 +222,17 @@ export function UserProfileSheet({ userId, username, onOpenChange }: Props) {
                   </Row>
                   {profile.pending_refund_quota != null &&
                     profile.pending_refund_quota > 0 && (
-                      <Row label={t('Pending refund')} className='sm:col-span-2'>
+                      <Row
+                        label={t('Pending refund')}
+                        className='sm:col-span-2'
+                      >
                         <span className='inline-flex flex-wrap items-center gap-2'>
-                          {formatQuotaWithCurrency(profile.pending_refund_quota)}
+                          {formatQuotaWithCurrency(
+                            profile.pending_refund_quota
+                          )}
                           <Badge
                             variant='outline'
-                            className='border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-normal'
+                            className='border-amber-500/40 bg-amber-500/10 font-normal text-amber-600 dark:text-amber-400'
                           >
                             {t('Already deducted, awaiting review')}
                           </Badge>

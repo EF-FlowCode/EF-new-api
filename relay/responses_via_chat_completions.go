@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel"
-	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/openaicompat"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/relay/channel"
+	openaichannel "eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/service/openaicompat"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,7 +37,7 @@ func responsesViaChatCompletions(c *gin.Context, info *relaycommon.RelayInfo, ad
 	}
 
 	// 1. translate request: responses → chat
-	chatReq, err := openaicompat.ResponsesRequestToChatCompletionsRequest(request)
+	chatReq, err := openaicompat.ResponsesRequestToChatCompletionsRequestWithInfo(request, info)
 	if err != nil {
 		return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}
@@ -82,13 +82,12 @@ func responsesViaChatCompletions(c *gin.Context, info *relaycommon.RelayInfo, ad
 
 	logger.LogDebug(c, "responses-via-chat upstream body: %s", jsonData)
 
-	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	defer closer.Close()
 	jsonData = nil
-	info.UpstreamRequestBodySize = size
 	var requestBody io.Reader = body
 
 	// 4. send to upstream

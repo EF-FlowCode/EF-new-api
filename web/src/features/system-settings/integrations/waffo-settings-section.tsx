@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 export interface WaffoSettingsValues {
   WaffoEnabled: boolean
@@ -59,7 +59,7 @@ interface Props {
 
 export function WaffoSettingsSection(props: Props) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const [loading, setLoading] = useState(false)
   const iconFileInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -127,12 +127,9 @@ export function WaffoSettingsSection(props: Props) {
           value: values.WaffoSandboxPrivateKey,
         })
 
-      for (const opt of options) {
-        await updateOption.mutateAsync(opt)
-      }
-      toast.success(t('Updated successfully'))
+      await updateOptions.mutateAsync(options)
     } catch {
-      toast.error(t('Update failed'))
+      // The mutation owns request error feedback.
     } finally {
       setLoading(false)
     }

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 type ResponsesToChatStreamState struct {
@@ -488,8 +488,8 @@ func (s *ResponsesToChatStreamState) flushAllPendingTools() []dto.ChatCompletion
 		tool := s.toolByKey[key]
 		if tool == nil {
 			callID := strings.TrimPrefix(key, "item:")
-			if strings.HasPrefix(key, "output:") {
-				callID = "call_output_" + strings.TrimPrefix(key, "output:")
+			if after, ok := strings.CutPrefix(key, "output:"); ok {
+				callID = "call_output_" + after
 			}
 			tool = &responsesStreamTool{
 				Key:    key,
@@ -506,8 +506,8 @@ func (s *ResponsesToChatStreamState) flushAllPendingTools() []dto.ChatCompletion
 				delete(s.pendingArgsByOutputIndex, outputIndex)
 			}
 		}
-		if strings.HasPrefix(key, "item:") {
-			itemID := strings.TrimPrefix(key, "item:")
+		if after, ok := strings.CutPrefix(key, "item:"); ok {
+			itemID := after
 			tool.Arguments += s.pendingArgsByItemID[itemID]
 			delete(s.pendingArgsByItemID, itemID)
 		}

@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 
 	"gorm.io/gorm"
 )
@@ -99,7 +99,7 @@ func (mi *Model) Insert() error {
 	}
 
 	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
+	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]any{
 		"status":        originalStatus,
 		"sync_official": originalSyncOfficial,
 	}).Error

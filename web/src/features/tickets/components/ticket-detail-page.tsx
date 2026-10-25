@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
-import { toast } from 'sonner'
 import { ArrowLeft } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { cn } from '@/lib/utils'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,9 +17,14 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useAuthStore } from '@/stores/auth-store'
-import { cn } from '@/lib/utils'
 import {
   adminUpdateTicketStatus,
   closeTicket,
@@ -44,13 +51,6 @@ import { RefundDetailCard } from './refund-detail-card'
 import { TicketConversation } from './ticket-conversation'
 import { TicketReplyBox } from './ticket-reply-box'
 import { TicketUserProfileSheet } from './user-profile-sheet'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 
 type Props = {
   ticketId: number
@@ -110,9 +110,7 @@ export function TicketDetailPage({ ticketId, admin, backTo }: Props) {
       setCloseDialogOpen(false)
       await loadDetail()
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to close ticket')
-      )
+      toast.error(e instanceof Error ? e.message : t('Failed to close ticket'))
     }
   }
 
@@ -133,9 +131,8 @@ export function TicketDetailPage({ ticketId, admin, backTo }: Props) {
   const priorityMeta = useMemo(
     () =>
       ticket
-        ? TICKET_PRIORITY_META[
-            ticket.priority as TicketPriority
-          ] ?? TICKET_PRIORITY_META[2]
+        ? (TICKET_PRIORITY_META[ticket.priority as TicketPriority] ??
+          TICKET_PRIORITY_META[2])
         : null,
     [ticket]
   )
@@ -285,7 +282,6 @@ export function TicketDetailPage({ ticketId, admin, backTo }: Props) {
               </div>
             )}
           </dl>
-
         </div>
 
         {detail?.invoice && (

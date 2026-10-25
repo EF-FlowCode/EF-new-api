@@ -1,22 +1,25 @@
 package controller
 
 import (
+	"context"
 	"strconv"
+	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/relay"
+	"eflow.local/new-api/service"
+	management "eflow.local/new-api/service/taskplugin"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
 
 // UpdateTaskBulk 薄入口，实际轮询逻辑在 service 层
 func UpdateTaskBulk() {
-	service.TaskPollingLoop()
+	service.TaskPollingLoop(context.Background(), 15*time.Second)
 }
 
 func GetAllTask(c *gin.Context) {
@@ -90,5 +93,42 @@ func tasksToDto(tasks []*model.Task, fillUser bool) []*dto.TaskDto {
 		}
 		result[i] = relay.TaskModel2Dto(task)
 	}
+	markDisabledTaskChannels(tasks, result)
 	return result
+}
+
+// markDisabledTaskChannels flags terminal tasks whose channel (or, for plugin
+// tasks, production binding) is no longer active: the stored result is shown
+// as a historical record. One channel query per page; channel ids stay hidden.
+func markDisabledTaskChannels(tasks []*model.Task, result []*dto.TaskDto) {
+	ids := types.NewSet[int]()
+	for _, task := range tasks {
+		if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+			ids.Add(task.ChannelId)
+		}
+	}
+	if ids.Len() == 0 {
+		return
+	}
+	var channels []model.Channel
+	if err := model.DB.Select("id", "status").Where("id IN ?", ids.Items()).Find(&channels).Error; err != nil {
+		return
+	}
+	enabled := map[int]bool{}
+	for _, channel := range channels {
+		enabled[channel.Id] = channel.Status == common.ChannelStatusEnabled
+	}
+	for i, task := range tasks {
+		if task.Status != model.TaskStatusSuccess && task.Status != model.TaskStatusFailure {
+			continue
+		}
+		active := enabled[task.ChannelId]
+		if active && task.PrivateData.Plugin != nil {
+			_, binding, bound := management.Default.ProductionHandle(task.ChannelId)
+			active = bound && binding.Key == task.PrivateData.Plugin.Key
+		}
+		if !active {
+			result[i].ChannelStatus = management.ChannelStatusDisabled
+		}
+	}
 }

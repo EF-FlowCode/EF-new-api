@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 
 // eflow: 上游每个系统设置大类（content / maintenance / integrations / ...）下面有多个
 // section，原本靠这条"页内二级 tab"在它们之间切换。eflow 把左侧栏收成「每类一个入口」
@@ -38,22 +38,29 @@ export function SettingsSectionTabs({
   }
 
   return (
-    <Tabs
-      value={activeSection}
-      onValueChange={handleChange}
-      className='mb-2 overflow-x-auto pb-1'
-    >
-      <TabsList className='bg-card h-auto w-max min-w-full justify-start gap-1 rounded-xl border p-1 shadow-xs'>
+    <nav className='bg-background/95 border-border/70 sticky top-0 z-20 mb-4 flex min-w-0 gap-1 overflow-x-auto border-b py-1 backdrop-blur'>
+      <span className='text-muted-foreground me-2 flex shrink-0 items-center px-1 text-[10px] font-semibold tracking-[0.16em] uppercase'>
+        Settings
+      </span>
+      <div className='flex min-w-0 gap-1'>
         {items.map((item) => (
-          <TabsTrigger
+          <button
             key={item.id}
-            value={item.id}
-            className='data-[state=active]:bg-primary/10 data-[state=active]:text-primary dark:data-[state=active]:bg-primary/15 h-9 flex-none rounded-lg px-3 data-[state=active]:shadow-none'
+            type='button'
+            onClick={() => handleChange(item.id)}
+            className={cn(
+              'text-muted-foreground hover:bg-muted hover:text-foreground flex h-8 shrink-0 items-center rounded-md px-3 text-left text-xs transition-colors',
+              activeSection === item.id &&
+                'bg-primary/10 text-primary font-semibold'
+            )}
           >
-            {item.title}
-          </TabsTrigger>
+            <span className='truncate'>{item.title}</span>
+            {activeSection === item.id && (
+              <span className='bg-primary ms-2 size-1.5 rounded-full' />
+            )}
+          </button>
         ))}
-      </TabsList>
-    </Tabs>
+      </div>
+    </nav>
   )
 }

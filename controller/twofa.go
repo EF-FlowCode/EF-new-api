@@ -4,13 +4,35 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 )
+
+// eflow: 登录待 2FA 状态 5 分钟过期，过期需重新登录。连续输错由 TwoFA 自身的失败计数锁定。
+const (
+	pending2FAUsernameSessionKey  = "pending_username"
+	pending2FAUserIDSessionKey    = "pending_user_id"
+	pending2FAStartedAtSessionKey = "pending_2fa_at"
+	// pending2FALoginMethodSessionKey 记住进入待验证前的登录方式，完成后写入登录审计。
+	pending2FALoginMethodSessionKey = "pending_login_method"
+	pending2FAMaxAge                = 5 * time.Minute
+)
+
+func clearPending2FA(session sessions.Session) {
+	session.Delete(pending2FAUsernameSessionKey)
+	session.Delete(pending2FAUserIDSessionKey)
+	session.Delete(pending2FAStartedAtSessionKey)
+	session.Delete(pending2FALoginMethodSessionKey)
+	session.Delete(pendingLoginFlowTokenSessionKey)
+	session.Delete(loginPasskeyFlowKey)
+}
 
 // Setup2FARequest 设置2FA请求结构
 type Setup2FARequest struct {
@@ -29,9 +51,17 @@ type Setup2FAResponse struct {
 	BackupCodes []string `json:"backup_codes"`
 }
 
-// Setup2FA 初始化2FA设置
+// twoFASetupAuthorizationKey keeps the consumed 2fa.setup proof between
+// setup and enable, so enabling belongs to the same verified flow.
+const twoFASetupAuthorizationKey = "twofa_setup_authorization"
+
+// Setup2FA 初始化2FA设置。需要 2fa.setup 一次性验证凭证。
 func Setup2FA(c *gin.Context) {
 	userId := c.GetInt("id")
+	authorization := middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFASetup})
+	if authorization == nil {
+		return
+	}
 
 	// 检查用户是否已经启用2FA
 	existing, err := model.GetTwoFAByUserId(userId)
@@ -119,8 +149,21 @@ func Setup2FA(c *gin.Context) {
 		return
 	}
 
+	encodedAuthorization, err := common.Marshal(authorization)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	session := sessions.Default(c)
+	session.Set(twoFASetupAuthorizationKey, string(encodedAuthorization))
+	if err := session.Save(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "开始设置两步验证")
+	recordUserSecurityAudit(c, userId, "user.2fa_setup", nil)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -166,6 +209,9 @@ func Enable2FA(c *gin.Context) {
 		})
 		return
 	}
+	if !validateTwoFASetupAuthorization(c) {
+		return
+	}
 
 	// 验证TOTP验证码
 	cleanCode, err := common.ValidateNumericCode(req.Code)
@@ -191,8 +237,12 @@ func Enable2FA(c *gin.Context) {
 		return
 	}
 
+	clearTwoFASetupAuthorization(c)
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "成功启用两步验证")
+	// A new sign-in factor signs out the account's other browser sessions.
+	revokeUserSessions(c, userId, true)
+	recordUserSecurityAudit(c, userId, "user.2fa_enable", nil)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -200,17 +250,8 @@ func Enable2FA(c *gin.Context) {
 	})
 }
 
-// Disable2FA 禁用2FA
+// Disable2FA 禁用2FA。需要 2fa.disable 一次性验证凭证。
 func Disable2FA(c *gin.Context) {
-	var req Verify2FARequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "参数错误",
-		})
-		return
-	}
-
 	userId := c.GetInt("id")
 
 	// 获取2FA记录
@@ -226,34 +267,7 @@ func Disable2FA(c *gin.Context) {
 		})
 		return
 	}
-
-	// 验证TOTP验证码或备用码
-	cleanCode, err := common.ValidateNumericCode(req.Code)
-	isValidTOTP := false
-	isValidBackup := false
-
-	if err == nil {
-		// 尝试验证TOTP
-		isValidTOTP, _ = twoFA.ValidateTOTPAndUpdateUsage(cleanCode)
-	}
-
-	if !isValidTOTP {
-		// 尝试验证备用码
-		isValidBackup, err = twoFA.ValidateBackupCodeAndUpdateUsage(req.Code)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	}
-
-	if !isValidTOTP && !isValidBackup {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "验证码或备用码错误，请重试",
-		})
+	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFADisable}) == nil {
 		return
 	}
 
@@ -265,6 +279,8 @@ func Disable2FA(c *gin.Context) {
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "禁用两步验证")
+	revokeUserSessions(c, userId, true)
+	recordUserSecurityAudit(c, userId, "user.2fa_disable_self", nil)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -282,7 +298,7 @@ func Get2FAStatus(c *gin.Context) {
 		return
 	}
 
-	status := map[string]interface{}{
+	status := map[string]any{
 		"enabled": false,
 		"locked":  false,
 	}
@@ -308,17 +324,9 @@ func Get2FAStatus(c *gin.Context) {
 	})
 }
 
-// RegenerateBackupCodes 重新生成备用码
+// RegenerateBackupCodes 重新生成备用码。需要 2fa.backup_codes.regenerate 一次性验证凭证
+// （两步验证码方式只接受 TOTP，不接受即将作废的备用码）。
 func RegenerateBackupCodes(c *gin.Context) {
-	var req Verify2FARequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "参数错误",
-		})
-		return
-	}
-
 	userId := c.GetInt("id")
 
 	// 获取2FA记录
@@ -334,30 +342,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 		})
 		return
 	}
-
-	// 验证TOTP验证码
-	cleanCode, err := common.ValidateNumericCode(req.Code)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	valid, err := twoFA.ValidateTOTPAndUpdateUsage(cleanCode)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	if !valid {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "验证码或备用码错误，请重试",
-		})
+	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeTwoFABackupCodes}) == nil {
 		return
 	}
 
@@ -384,17 +369,19 @@ func RegenerateBackupCodes(c *gin.Context) {
 
 	// 记录操作日志
 	model.RecordLog(userId, model.LogTypeSystem, "重新生成两步验证备用码")
+	recordUserSecurityAudit(c, userId, "user.2fa_backup_codes", nil)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "备用码重新生成成功",
-		"data": map[string]interface{}{
+		"data": map[string]any{
 			"backup_codes": backupCodes,
 		},
 	})
 }
 
-// Verify2FALogin 登录时验证2FA
+// Verify2FALogin 登录时验证2FA。eflow: 保留为 /api/user/login/verify 的 TOTP 别名，
+// 只校验本会话中的待验证登录（不需要 flow_token），供旧前端标签页使用。
 func Verify2FALogin(c *gin.Context) {
 	var req Verify2FARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -404,85 +391,7 @@ func Verify2FALogin(c *gin.Context) {
 		})
 		return
 	}
-
-	// 从会话中获取pending用户信息
-	session := sessions.Default(c)
-	pendingUserId := session.Get("pending_user_id")
-	if pendingUserId == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话已过期，请重新登录",
-		})
-		return
-	}
-	userId, ok := pendingUserId.(int)
-	if !ok {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话数据无效，请重新登录",
-		})
-		return
-	}
-	// 获取用户信息
-	user, err := model.GetUserById(userId, false)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户不存在",
-		})
-		return
-	}
-
-	// 获取2FA记录
-	twoFA, err := model.GetTwoFAByUserId(user.Id)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if twoFA == nil || !twoFA.IsEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "用户未启用2FA",
-		})
-		return
-	}
-
-	// 验证TOTP验证码或备用码
-	cleanCode, err := common.ValidateNumericCode(req.Code)
-	isValidTOTP := false
-	isValidBackup := false
-
-	if err == nil {
-		// 尝试验证TOTP
-		isValidTOTP, _ = twoFA.ValidateTOTPAndUpdateUsage(cleanCode)
-	}
-
-	if !isValidTOTP {
-		// 尝试验证备用码
-		isValidBackup, err = twoFA.ValidateBackupCodeAndUpdateUsage(req.Code)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-	}
-
-	if !isValidTOTP && !isValidBackup {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "验证码或备用码错误，请重试",
-		})
-		return
-	}
-
-	// 2FA验证成功，清理pending会话信息并完成登录
-	session.Delete("pending_username")
-	session.Delete("pending_user_id")
-	session.Save()
-
-	setupLogin(user, c)
+	verifyLoginTwoFactor(c, "", req.Code)
 }
 
 // Admin2FAStats 管理员获取2FA统计信息
@@ -528,6 +437,10 @@ func AdminDisable2FA(c *gin.Context) {
 		return
 	}
 
+	if requireAdminUserProof(c, service.VerificationScopeAdminUserTwoFADisable, service.AdminUserContext{UserID: userId}) == nil {
+		return
+	}
+
 	// 禁用2FA
 	if err := model.DisableTwoFA(userId); err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
@@ -544,7 +457,7 @@ func AdminDisable2FA(c *gin.Context) {
 	// 记录操作日志：管理员身份通过 admin_info 传递，避免在非管理员可见的日志内容中泄露。
 	adminId := c.GetInt("id")
 	adminName := c.GetString("username")
-	adminInfo := map[string]interface{}{
+	adminInfo := map[string]any{
 		"admin_id":       adminId,
 		"admin_username": adminName,
 	}
@@ -555,4 +468,27 @@ func AdminDisable2FA(c *gin.Context) {
 		"success": true,
 		"message": "用户2FA已被强制禁用",
 	})
+}
+
+// validateTwoFASetupAuthorization checks that enabling 2FA continues the setup
+// flow whose 2fa.setup proof was consumed by Setup2FA in this session.
+func validateTwoFASetupAuthorization(c *gin.Context) bool {
+	identity, ok := middleware.GetStepUpIdentity(c)
+	raw, _ := sessions.Default(c).Get(twoFASetupAuthorizationKey).(string)
+	var authorization service.StepUpAuthorization
+	if !ok || raw == "" || common.Unmarshal([]byte(raw), &authorization) != nil {
+		writeSecurityStatusError(c, http.StatusOK, "TWOFA_SETUP_INVALID", "Two-factor setup has expired. Start the setup again.")
+		return false
+	}
+	if err := service.ValidateFlowAuthorization(identity, middleware.GetStepUpContext(c), service.VerificationOperation{Scope: service.VerificationScopeTwoFASetup}, &authorization); err != nil {
+		writeSecurityOperationError(c, err)
+		return false
+	}
+	return true
+}
+
+func clearTwoFASetupAuthorization(c *gin.Context) {
+	session := sessions.Default(c)
+	session.Delete(twoFASetupAuthorizationKey)
+	_ = session.Save()
 }

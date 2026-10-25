@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 //var claudeHeadersSettings = map[string][]string{}
@@ -41,11 +41,14 @@ func init() {
 
 // GetClaudeSettings 获取Claude配置
 func GetClaudeSettings() *ClaudeSettings {
-	// check default max tokens must have default key
-	if _, ok := claudeSettings.DefaultMaxTokens["default"]; !ok {
-		claudeSettings.DefaultMaxTokens["default"] = 8192
+	setting := config.MustSnapshot[ClaudeSettings]("claude")
+	if setting.DefaultMaxTokens == nil {
+		setting.DefaultMaxTokens = map[string]int{}
 	}
-	return &claudeSettings
+	if _, ok := setting.DefaultMaxTokens["default"]; !ok {
+		setting.DefaultMaxTokens["default"] = 8192
+	}
+	return &setting
 }
 
 func (c *ClaudeSettings) WriteHeaders(originModel string, httpHeader *http.Header) {
@@ -66,7 +69,7 @@ func normalizeHeaderListValues(values []string) []string {
 	normalizedValues := make([]string, 0, len(values))
 	seenValues := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		for _, item := range strings.Split(value, ",") {
+		for item := range strings.SplitSeq(value, ",") {
 			normalizedItem := strings.TrimSpace(item)
 			if normalizedItem == "" {
 				continue

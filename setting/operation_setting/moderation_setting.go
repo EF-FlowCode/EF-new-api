@@ -1,9 +1,10 @@
 package operation_setting
 
 import (
+	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 const (
@@ -25,15 +26,15 @@ const (
 )
 
 type ModerationSetting struct {
-	Enabled              bool              `json:"enabled"`
-	Mode                 string            `json:"mode"`
-	BaseURL              string            `json:"base_url"`
-	Model                string            `json:"model"`
-	APIKeys              []string          `json:"api_keys"`
-	EventQueueSize       int               `json:"event_queue_size"`
-	WorkerCount          int               `json:"worker_count"`
-	HTTPTimeoutMS        int               `json:"http_timeout_ms"`
-	MaxRetries           int               `json:"max_retries"`
+	Enabled        bool     `json:"enabled"`
+	Mode           string   `json:"mode"`
+	BaseURL        string   `json:"base_url"`
+	Model          string   `json:"model"`
+	APIKeys        []string `json:"api_keys"`
+	EventQueueSize int      `json:"event_queue_size"`
+	WorkerCount    int      `json:"worker_count"`
+	HTTPTimeoutMS  int      `json:"http_timeout_ms"`
+	MaxRetries     int      `json:"max_retries"`
 	// RedisQueueEnabled writes events to a Redis-backed write-ahead log
 	// so multi-instance deployments don't lose in-flight events on
 	// rolling restart. Falls back to memory-only when Redis is
@@ -51,16 +52,16 @@ type ModerationSetting struct {
 	FlaggedRetentionHours int `json:"flagged_retention_hours"`
 	// BenignRetentionHours bounds how long below-threshold incidents stick
 	// around. Default 72h.
-	BenignRetentionHours    int  `json:"benign_retention_hours"`
-	RecordUnmatchedInputs   bool `json:"record_unmatched_inputs"`
+	BenignRetentionHours  int  `json:"benign_retention_hours"`
+	RecordUnmatchedInputs bool `json:"record_unmatched_inputs"`
 }
 
 var moderationSetting = ModerationSetting{
-	Enabled:               false,
-	Mode:                  ModerationModeOff,
-	BaseURL:               ModerationDefaultBaseURL,
-	Model:                 ModerationDefaultModel,
-	APIKeys:               []string{},
+	Enabled: false,
+	Mode:    ModerationModeOff,
+	BaseURL: ModerationDefaultBaseURL,
+	Model:   ModerationDefaultModel,
+	APIKeys: []string{},
 	// 3000 RPM peak / multi-instance sizing: 50 RPS × 100% sampling.
 	// 16 workers × OpenAI ~140ms RTT ≈ 114 req/s capacity per instance
 	// (≈2.3x single-instance headroom; with 3 instances ≈ 7x). Queue
@@ -204,8 +205,9 @@ func init() {
 }
 
 func GetModerationSetting() *ModerationSetting {
-	NormalizeModerationSetting(&moderationSetting)
-	return &moderationSetting
+	setting := config.MustSnapshot[ModerationSetting]("moderation")
+	NormalizeModerationSetting(&setting)
+	return &setting
 }
 
 // IsModerationEnabledForGroup mirrors IsRiskControlEnabledForGroup but with
@@ -218,13 +220,7 @@ func IsModerationEnabledForGroup(setting *ModerationSetting, group string) bool 
 	if group == "" || group == ModerationAutoGroup {
 		return false
 	}
-	found := false
-	for _, g := range setting.EnabledGroups {
-		if g == group {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(setting.EnabledGroups, group)
 	if !found {
 		return false
 	}

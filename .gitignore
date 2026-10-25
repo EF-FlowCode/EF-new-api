@@ -4,9 +4,7 @@
 .history
 upload
 *.exe
-*.db
 build
-*.db-journal
 logs
 web/node_modules
 web/dist
@@ -21,6 +19,7 @@ tiktoken_cache
 .gomodcache/
 .cache
 .codegraph/
+/.playwright-cli/
 plans
 .claude
 .cursor
@@ -37,8 +36,12 @@ skills-lock.json
 
 new-api-eflow.tar
 new-api-eflow.tar.gz
-/deploy.ps1
+/new-api-eflow-release-*.tar*
 
 # eflow: internal AI-assistant instructions — kept locally for dev, never published
 CLAUDE.md
 AGENTS.md
+# Local Python deployment/test bytecode
+/scripts/__pycache__/
+/.rolling/
+/.releases/

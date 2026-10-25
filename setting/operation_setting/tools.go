@@ -1,11 +1,12 @@
 package operation_setting
 
 import (
+	"maps"
 	"sort"
 	"strings"
 	"sync/atomic"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -41,12 +42,8 @@ type ToolPriceSetting struct {
 var toolPriceSetting = ToolPriceSetting{
 	Prices: func() map[string]float64 {
 		m := make(map[string]float64, len(defaultToolPrices)+len(defaultToolPriceOverrides))
-		for k, v := range defaultToolPrices {
-			m[k] = v
-		}
-		for k, v := range defaultToolPriceOverrides {
-			m[k] = v
-		}
+		maps.Copy(m, defaultToolPrices)
+		maps.Copy(m, defaultToolPriceOverrides)
 		return m
 	}(),
 }
@@ -75,16 +72,11 @@ var currentIndex atomic.Pointer[toolPriceIndex]
 // RebuildToolPriceIndex rebuilds the lookup index from the current config.
 // Called on init and after config updates. Not on the billing hot path.
 func RebuildToolPriceIndex() {
-	merged := make(map[string]float64, len(defaultToolPrices)+len(defaultToolPriceOverrides)+len(toolPriceSetting.Prices))
-	for k, v := range defaultToolPrices {
-		merged[k] = v
-	}
-	for k, v := range defaultToolPriceOverrides {
-		merged[k] = v
-	}
-	for k, v := range toolPriceSetting.Prices {
-		merged[k] = v
-	}
+	setting := config.MustSnapshot[ToolPriceSetting]("tool_price_setting")
+	merged := make(map[string]float64, len(defaultToolPrices)+len(defaultToolPriceOverrides)+len(setting.Prices))
+	maps.Copy(merged, defaultToolPrices)
+	maps.Copy(merged, defaultToolPriceOverrides)
+	maps.Copy(merged, setting.Prices)
 
 	idx := &toolPriceIndex{
 		defaults: make(map[string]float64),
@@ -92,13 +84,13 @@ func RebuildToolPriceIndex() {
 	}
 
 	for key, price := range merged {
-		colonIdx := strings.IndexByte(key, ':')
-		if colonIdx < 0 {
+		before, after, ok := strings.Cut(key, ":")
+		if !ok {
 			idx.defaults[key] = price
 			continue
 		}
-		toolName := key[:colonIdx]
-		modelPart := key[colonIdx+1:]
+		toolName := before
+		modelPart := after
 		prefix := strings.TrimSuffix(modelPart, "*")
 		idx.prefixes[toolName] = append(idx.prefixes[toolName], prefixEntry{prefix: prefix, price: price})
 	}

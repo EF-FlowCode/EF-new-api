@@ -8,11 +8,11 @@ package dto
 // 选 key 时按 headroom 评分挑余量最大的。**不与 channel-级限流冲突**：
 // channel_limiter 是渠道维度，本配置是 sk 维度，两道闸串联。
 type SchedulerConfig struct {
-	Enabled bool                             `json:"enabled,omitempty"`
-	Policy  SchedulerPolicy                  `json:"policy,omitempty"`
-	Models  map[string]ModelQuota            `json:"models,omitempty"`        // model -> 默认配额
+	Enabled      bool                             `json:"enabled,omitempty"`
+	Policy       SchedulerPolicy                  `json:"policy,omitempty"`
+	Models       map[string]ModelQuota            `json:"models,omitempty"`        // model -> 默认配额
 	KeyOverrides map[string]map[string]ModelQuota `json:"key_overrides,omitempty"` // keyFp -> model -> 配额（覆盖默认）
-	Affinity SchedulerAffinity            `json:"affinity,omitempty"`      // 会话级 key 亲和（保 prompt cache）
+	Affinity     SchedulerAffinity                `json:"affinity,omitempty"`      // 会话级 key 亲和（保 prompt cache）
 }
 
 // SchedulerAffinity 会话级 key 亲和：把同一来源（默认 user_id）的请求粘在同一把 sk 上，

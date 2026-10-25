@@ -3,7 +3,7 @@ package dto
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -76,13 +76,38 @@ func TestGeneralOpenAIRequestDropsThinkingBudgetForNonQwenModel(t *testing.T) {
 	assert.False(t, gjson.GetBytes(encoded, "thinking_budget").Exists())
 }
 
+func TestGeneralOpenAIRequestSystemRoleUsesNarrowReasoningModelDetection(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{name: "o1", model: "o1", want: "developer"},
+		{name: "o3 family", model: "o3-mini-high", want: "developer"},
+		{name: "o4 family", model: "o4-mini", want: "developer"},
+		{name: "o1 mini", model: "o1-mini", want: "system"},
+		{name: "o1 preview", model: "o1-preview", want: "system"},
+		{name: "gpt 5", model: "gpt-5", want: "developer"},
+		{name: "unrelated o prefix", model: "omni-moderation-latest", want: "system"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := GeneralOpenAIRequest{Model: tt.model}
+			assert.Equal(t, tt.want, req.GetSystemRoleName())
+		})
+	}
+}
+
 func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-4.1",
 		"max_output_tokens":0,
 		"max_tool_calls":0,
 		"stream":false,
-		"top_p":0
+		"top_p":0,
+		"frequency_penalty":0,
+		"presence_penalty":0
 	}`)
 
 	var req OpenAIResponsesRequest
@@ -96,6 +121,8 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.True(t, gjson.GetBytes(encoded, "max_tool_calls").Exists())
 	require.True(t, gjson.GetBytes(encoded, "stream").Exists())
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())
+	require.True(t, gjson.GetBytes(encoded, "frequency_penalty").Exists())
+	require.True(t, gjson.GetBytes(encoded, "presence_penalty").Exists())
 }
 
 func TestOpenAIResponsesRequestPreservesQwenThinkingBudget(t *testing.T) {

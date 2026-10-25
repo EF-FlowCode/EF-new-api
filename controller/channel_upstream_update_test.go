@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +39,44 @@ func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.JSONEq(t, `{"success":true,"message":"","data":["claude-sonnet"]}`, recorder.Body.String())
+}
+
+func TestFetchModelsPreviewSupportsAdvancedCustomModelRoute(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/models", r.URL.Path)
+		require.Equal(t, "Bearer preview-key", r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"data":[{"id":"preview-model"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	advancedCustom := `{"advanced_routes":[{"incoming_path":"/v1/models","upstream_path":"` + server.URL + `/models"}]}`
+	body, err := common.Marshal(map[string]any{
+		"base_url":        server.URL,
+		"type":            constant.ChannelTypeCustom,
+		"key":             "preview-key",
+		"advanced_custom": advancedCustom,
+	})
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/fetch_models", strings.NewReader(string(body)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	FetchModels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"success":true,"message":"","data":["preview-model"]}`, recorder.Body.String())
+}
+
+func TestBuildAdvancedCustomModelPreviewChannelRejectsInvalidConfig(t *testing.T) {
+	raw := `{"advanced_routes":[]}`
+	_, err := buildAdvancedCustomModelPreviewChannel(fetchModelsRequest{
+		Type:           constant.ChannelTypeCustom,
+		Key:            "preview-key",
+		AdvancedCustom: &raw,
+	})
+	require.Error(t, err)
 }
 
 func TestNormalizeModelNames(t *testing.T) {
@@ -162,7 +200,7 @@ func TestCollectPendingUpstreamModelChangesFromModels_WithIgnoredRegexPatterns(t
 
 func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *testing.T) {
 	channelSummaries := make([]upstreamModelUpdateChannelSummary, 0, 12)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		channelSummaries = append(channelSummaries, upstreamModelUpdateChannelSummary{
 			ChannelName: "channel-" + string(rune('A'+i)),
 			AddCount:    i + 1,

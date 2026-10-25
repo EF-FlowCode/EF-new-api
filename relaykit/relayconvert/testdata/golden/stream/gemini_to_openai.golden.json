@@ -59,21 +59,6 @@
         "prompt_tokens": 4,
         "completion_tokens": 2,
         "total_tokens": 6,
-        "billing_usage": {
-          "source": "gemini_chat",
-          "semantic": "gemini",
-          "gemini_usage_metadata": {
-            "promptTokenCount": 4,
-            "toolUsePromptTokenCount": 0,
-            "candidatesTokenCount": 2,
-            "totalTokenCount": 6,
-            "thoughtsTokenCount": 0,
-            "cachedContentTokenCount": 0,
-            "promptTokensDetails": [],
-            "toolUsePromptTokensDetails": [],
-            "candidatesTokensDetails": []
-          }
-        },
         "prompt_tokens_details": {
           "cached_tokens": 0,
           "text_tokens": 4,
@@ -111,21 +96,6 @@
         "prompt_tokens": 4,
         "completion_tokens": 2,
         "total_tokens": 6,
-        "billing_usage": {
-          "source": "gemini_chat",
-          "semantic": "gemini",
-          "gemini_usage_metadata": {
-            "promptTokenCount": 4,
-            "toolUsePromptTokenCount": 0,
-            "candidatesTokenCount": 2,
-            "totalTokenCount": 6,
-            "thoughtsTokenCount": 0,
-            "cachedContentTokenCount": 0,
-            "promptTokensDetails": [],
-            "toolUsePromptTokensDetails": [],
-            "candidatesTokensDetails": []
-          }
-        },
         "prompt_tokens_details": {
           "cached_tokens": 0,
           "text_tokens": 4,
@@ -150,21 +120,6 @@
     "prompt_tokens": 4,
     "completion_tokens": 2,
     "total_tokens": 6,
-    "billing_usage": {
-      "source": "gemini_chat",
-      "semantic": "gemini",
-      "gemini_usage_metadata": {
-        "promptTokenCount": 4,
-        "toolUsePromptTokenCount": 0,
-        "candidatesTokenCount": 2,
-        "totalTokenCount": 6,
-        "thoughtsTokenCount": 0,
-        "cachedContentTokenCount": 0,
-        "promptTokensDetails": [],
-        "toolUsePromptTokensDetails": [],
-        "candidatesTokensDetails": []
-      }
-    },
     "prompt_tokens_details": {
       "cached_tokens": 0,
       "text_tokens": 4,

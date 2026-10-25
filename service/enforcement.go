@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/bytedance/gopkg/util/gopool"
+	"eflow.local/new-api/common"
+	gopool "eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
 )
 
 // updateUserStatusForEnforcement is a tiny helper to avoid pulling in the
@@ -20,9 +20,13 @@ func updateUserStatusForEnforcement(userID, status int) error {
 	if userID <= 0 {
 		return fmt.Errorf("invalid user id")
 	}
-	return model.DB.Exec(
+	if err := model.DB.Exec(
 		"UPDATE users SET status = ? WHERE id = ?", status, userID,
-	).Error
+	).Error; err != nil {
+		return err
+	}
+	model.InvalidateUserAuthCaches(userID)
+	return nil
 }
 
 // EnforcementHit is the unified entry point for the post-hit handling layer.

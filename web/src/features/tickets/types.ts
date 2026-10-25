@@ -17,7 +17,8 @@ export const TICKET_PRIORITY = {
   LOW: 3,
 } as const
 
-export type TicketPriority = (typeof TICKET_PRIORITY)[keyof typeof TICKET_PRIORITY]
+export type TicketPriority =
+  (typeof TICKET_PRIORITY)[keyof typeof TICKET_PRIORITY]
 
 export type TicketType = 'general' | 'refund' | 'invoice'
 
@@ -48,7 +49,6 @@ export type Ticket = {
   user_id: number
   username?: string
   assignee_id?: number
-  assignee_username?: string
   created_time: number
   updated_time: number
 }

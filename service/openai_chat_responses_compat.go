@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/service/openaicompat"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/service/openaicompat"
 )
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {

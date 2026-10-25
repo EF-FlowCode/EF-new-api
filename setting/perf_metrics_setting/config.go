@@ -1,6 +1,6 @@
 package perf_metrics_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type PerfMetricsSetting struct {
 	Enabled       bool   `json:"enabled"`
@@ -21,11 +21,11 @@ func init() {
 }
 
 func GetSetting() PerfMetricsSetting {
-	return perfMetricsSetting
+	return config.MustSnapshot[PerfMetricsSetting]("perf_metrics_setting")
 }
 
 func GetBucketSeconds() int64 {
-	switch perfMetricsSetting.BucketTime {
+	switch GetSetting().BucketTime {
 	case "minute":
 		return 60
 	case "5min":
@@ -38,8 +38,9 @@ func GetBucketSeconds() int64 {
 }
 
 func GetFlushIntervalMinutes() int {
-	if perfMetricsSetting.FlushInterval < 1 {
+	setting := GetSetting()
+	if setting.FlushInterval < 1 {
 		return 1
 	}
-	return perfMetricsSetting.FlushInterval
+	return setting.FlushInterval
 }

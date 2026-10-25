@@ -1,8 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Plus, Trash2 } from 'lucide-react'
+import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -13,20 +25,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Badge } from '@/components/ui/badge'
-import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOption, useUpdateOptions } from '../hooks/use-update-option'
 
 // ----------------------------------------------------------------------------
 // Types
@@ -169,7 +169,11 @@ const TICKET_TYPES: Array<{
   },
 ]
 
-const STRATEGY_OPTIONS: Array<{ value: TicketAssignStrategy; labelKey: string; hintKey: string }> = [
+const STRATEGY_OPTIONS: Array<{
+  value: TicketAssignStrategy
+  labelKey: string
+  hintKey: string
+}> = [
   {
     value: 'round_robin',
     labelKey: 'Round robin',
@@ -190,7 +194,10 @@ const STRATEGY_OPTIONS: Array<{ value: TicketAssignStrategy; labelKey: string; h
 // eflow: 后端 setting/ticket_assignment.go 只支持两种 fallback：
 //   - none：留在待认领池（仅记录日志通知管理员）
 //   - general_group：回落到 general 工单组（要求 general 规则非 manual 且 users 非空）
-const FALLBACK_OPTIONS: Array<{ value: TicketAssignFallback; labelKey: string }> = [
+const FALLBACK_OPTIONS: Array<{
+  value: TicketAssignFallback
+  labelKey: string
+}> = [
   { value: 'none', labelKey: 'Leave unassigned (notify admin only)' },
   {
     value: 'general_group',
@@ -205,6 +212,7 @@ const FALLBACK_OPTIONS: Array<{ value: TicketAssignFallback; labelKey: string }>
 export function TicketSettingsSection({ defaultValues }: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const [notifyEnabled, setNotifyEnabled] = useState(
     defaultValues.TicketNotifyEnabled
@@ -352,9 +360,7 @@ export function TicketSettingsSection({ defaultValues }: Props) {
       toast.info(t('No changes to save'))
       return
     }
-    for (const u of updates) {
-      await updateOption.mutateAsync(u)
-    }
+    await updateOptions.mutateAsync(updates)
   }
 
   const saveAssign = async () => {
@@ -501,7 +507,9 @@ export function TicketSettingsSection({ defaultValues }: Props) {
 
         {/* eflow: 工单回复邮件是否随附件一起发给用户 */}
         <section className='bg-card space-y-4 rounded-xl border p-4'>
-          <h4 className='text-sm font-semibold'>{t('Reply email attachments')}</h4>
+          <h4 className='text-sm font-semibold'>
+            {t('Reply email attachments')}
+          </h4>
           <div className='flex items-start justify-between gap-3 rounded-lg border p-3'>
             <div className='space-y-0.5'>
               <div className='text-sm font-medium'>
@@ -555,7 +563,7 @@ export function TicketSettingsSection({ defaultValues }: Props) {
         </section>
 
         <div className='flex justify-end'>
-          <Button onClick={saveBasic} disabled={updateOption.isPending}>
+          <Button onClick={saveBasic} disabled={updateOptions.isPending}>
             {t('Save ticket settings')}
           </Button>
         </div>
@@ -564,7 +572,9 @@ export function TicketSettingsSection({ defaultValues }: Props) {
         <section className='bg-card space-y-4 rounded-xl border p-4'>
           <div className='flex items-start justify-between gap-3'>
             <div>
-              <h4 className='text-sm font-semibold'>{t('Auto-assign rules')}</h4>
+              <h4 className='text-sm font-semibold'>
+                {t('Auto-assign rules')}
+              </h4>
               <p className='text-muted-foreground text-xs'>
                 {t(
                   'When enabled, new tickets are assigned to support staff according to the per-type rules'
@@ -604,10 +614,7 @@ export function TicketSettingsSection({ defaultValues }: Props) {
           {TICKET_TYPES.map((type) => {
             const rule = assignConfig.rules[type.value]
             return (
-              <div
-                key={type.value}
-                className='space-y-3 rounded-lg border p-3'
-              >
+              <div key={type.value} className='space-y-3 rounded-lg border p-3'>
                 <div>
                   <div className='text-sm font-medium'>{t(type.labelKey)}</div>
                   <div className='text-muted-foreground text-xs'>
@@ -688,9 +695,9 @@ export function TicketSettingsSection({ defaultValues }: Props) {
                                     ...prev.rules,
                                     [type.value]: {
                                       ...prev.rules[type.value],
-                                      users: prev.rules[type.value].users.filter(
-                                        (x) => x !== uid
-                                      ),
+                                      users: prev.rules[
+                                        type.value
+                                      ].users.filter((x) => x !== uid),
                                     },
                                   },
                                 }))

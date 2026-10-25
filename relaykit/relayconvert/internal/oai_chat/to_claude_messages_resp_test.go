@@ -3,8 +3,8 @@ package oaichat
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,14 +13,14 @@ func TestResponseOpenAI2ClaudeToolUseInputIsObject(t *testing.T) {
 	tests := []struct {
 		name string
 		args string
-		want map[string]interface{}
+		want map[string]any
 	}{
-		{name: "object", args: `{"q":"x"}`, want: map[string]interface{}{"q": "x"}},
-		{name: "empty", args: "", want: map[string]interface{}{}},
-		{name: "invalid", args: "{", want: map[string]interface{}{}},
-		{name: "null", args: "null", want: map[string]interface{}{}},
-		{name: "array", args: `["x"]`, want: map[string]interface{}{}},
-		{name: "string", args: `"x"`, want: map[string]interface{}{}},
+		{name: "object", args: `{"q":"x"}`, want: map[string]any{"q": "x"}},
+		{name: "empty", args: "", want: map[string]any{}},
+		{name: "invalid", args: "{", want: map[string]any{}},
+		{name: "null", args: "null", want: map[string]any{}},
+		{name: "array", args: `["x"]`, want: map[string]any{}},
+		{name: "string", args: `"x"`, want: map[string]any{}},
 	}
 
 	for _, tt := range tests {
@@ -216,4 +216,43 @@ func TestNormalizeCacheCreationSplit(t *testing.T) {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+func TestStreamResponseOpenAI2ClaudeKeepsTextSharingChunkWithReasoning(t *testing.T) {
+	info := &convmeta.Values{
+		ClaudeConvertInfo: &convmeta.ClaudeConvertInfo{
+			LastMessagesType: convmeta.LastMessageTypeNone,
+		},
+	}
+	info.SendResponseCount = 1
+	StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_mix",
+		Model: "gpt-test",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{ReasoningContent: ptr("think")}},
+		},
+	}, info)
+
+	info.SendResponseCount = 2
+	responses := StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_mix",
+		Model: "gpt-test",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				ReasoningContent: ptr(" done"),
+				Content:          ptr("Answer"),
+			}},
+		},
+	}, info)
+
+	require.Len(t, responses, 4)
+	assert.Equal(t, "content_block_delta", responses[0].Type)
+	assert.Equal(t, "thinking_delta", responses[0].Delta.Type)
+	assert.Equal(t, 0, responses[0].GetIndex())
+	assert.Equal(t, "content_block_stop", responses[1].Type)
+	assert.Equal(t, "content_block_start", responses[2].Type)
+	assert.Equal(t, "text", responses[2].ContentBlock.Type)
+	assert.Equal(t, 1, responses[2].GetIndex())
+	assert.Equal(t, "text_delta", responses[3].Delta.Type)
+	assert.Equal(t, "Answer", *responses[3].Delta.Text)
 }

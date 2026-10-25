@@ -1,6 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
+import {
+  Copy,
+  Download,
+  Eraser,
+  History,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getRequestErrorMessage } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,14 +45,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
-import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -45,6 +52,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -53,20 +61,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { DateTimePicker } from '@/components/datetime-picker'
-import { useDebounce } from '@/hooks/use-debounce'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { cn } from '@/lib/utils'
 import {
-  Copy,
-  Download,
-  Eraser,
-  History,
-  MoreHorizontal,
-  Plus,
-  RefreshCw,
-  Trash2,
-} from 'lucide-react'
+  ServerPagination,
+  useLatestRequest,
+  useServerPagination,
+} from '@/components/data-table'
+import { DateTimePicker } from '@/components/datetime-picker'
 import {
   createInvitationCode,
   deleteInvalidInvitationCodes,
@@ -82,6 +82,8 @@ import {
   type InvitationCodeSavePayload,
   type InvitationCodeUsage,
 } from './types'
+
+const route = getRouteApi('/_authenticated/invitation-codes/')
 
 function formatTimestamp(unixSec: number | undefined | null): string {
   if (!unixSec) return '—'
@@ -148,8 +150,6 @@ function StatusBadge({ record }: { record: InvitationCode }) {
   )
 }
 
-const PAGE_SIZES = [10, 20, 50, 100]
-
 // ============================================================================
 // Edit drawer
 // ============================================================================
@@ -189,10 +189,10 @@ function EditInvitationCodeDrawer({
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [createdCodes, setCreatedCodes] = useState<string[] | null>(null)
-  const [editingStatus, setEditingStatus] =
-    useState<typeof INVITATION_CODE_STATUS.ENABLED | typeof INVITATION_CODE_STATUS.DISABLED>(
-      INVITATION_CODE_STATUS.ENABLED
-    )
+  const [editingStatus, setEditingStatus] = useState<
+    | typeof INVITATION_CODE_STATUS.ENABLED
+    | typeof INVITATION_CODE_STATUS.DISABLED
+  >(INVITATION_CODE_STATUS.ENABLED)
 
   // Reset / load when opening
   useEffect(() => {
@@ -215,7 +215,7 @@ function EditInvitationCodeDrawer({
         })
         .catch((e) =>
           toast.error(
-            e instanceof Error ? e.message : t('Failed to load invitation code')
+            getRequestErrorMessage(e, t('Failed to load invitation code'))
           )
         )
         .finally(() => setLoading(false))
@@ -259,7 +259,7 @@ function EditInvitationCodeDrawer({
         }
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Save failed'))
+      toast.error(getRequestErrorMessage(e, t('Save failed')))
     } finally {
       setSubmitting(false)
     }
@@ -285,7 +285,9 @@ function EditInvitationCodeDrawer({
         <SheetContent className='flex w-full flex-col gap-0 p-0 sm:max-w-md'>
           <SheetHeader className='border-b px-4 py-3 sm:px-6 sm:py-4'>
             <SheetTitle>
-              {isEdit ? t('Update invitation code') : t('Create invitation code')}
+              {isEdit
+                ? t('Update invitation code')
+                : t('Create invitation code')}
             </SheetTitle>
             <SheetDescription>
               {isEdit
@@ -459,9 +461,7 @@ function UsagesDialog({ open, onOpenChange, record }: UsagesDialogProps) {
     fetchInvitationCodeUsages(record.id)
       .then((data) => setUsages(data))
       .catch((e) =>
-        toast.error(
-          e instanceof Error ? e.message : t('Failed to load usages')
-        )
+        toast.error(getRequestErrorMessage(e, t('Failed to load usages')))
       )
       .finally(() => setLoading(false))
   }, [open, record, t])
@@ -520,10 +520,18 @@ export function InvitationCodes() {
   const [items, setItems] = useState<InvitationCode[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
-  const [keyword, setKeyword] = useState('')
-  const debouncedKeyword = useDebounce(keyword, 350)
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const pagination = useServerPagination({
+    search,
+    navigate,
+    total,
+    defaultPageSize: 10,
+  })
+  const { page, pageSize } = pagination
+  const runListRequest = useLatestRequest()
+  const appliedKeyword = search.filter ?? ''
+  const [keyword, setKeyword] = useState(appliedKeyword)
 
   const [editOpen, setEditOpen] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -534,28 +542,29 @@ export function InvitationCodes() {
   )
   const [pendingClearInvalid, setPendingClearInvalid] = useState(false)
 
+  useEffect(() => setKeyword(appliedKeyword), [appliedKeyword])
+
   const params = useMemo(
-    () => ({ page, pageSize, keyword: debouncedKeyword }),
-    [page, pageSize, debouncedKeyword]
+    () => ({ page, pageSize, keyword: appliedKeyword }),
+    [page, pageSize, appliedKeyword]
   )
 
   const refresh = async () => {
     setLoading(true)
-    try {
-      const data = await fetchInvitationCodes(params)
-      setItems(data.items || [])
-      setTotal(data.total || 0)
-    } catch (e) {
-      toast.error(
-        e instanceof Error
-          ? e.message
-          : t('Failed to load invitation codes')
-      )
-      setItems([])
-      setTotal(0)
-    } finally {
-      setLoading(false)
-    }
+    await runListRequest((signal) => fetchInvitationCodes(params, signal), {
+      onSuccess: (data) => {
+        setItems(data.items || [])
+        setTotal(data.total || 0)
+      },
+      onError: (error) => {
+        toast.error(
+          getRequestErrorMessage(error, t('Failed to load invitation codes'))
+        )
+        setItems([])
+        setTotal(0)
+      },
+      onSettled: () => setLoading(false),
+    })
   }
 
   useEffect(() => {
@@ -563,11 +572,10 @@ export function InvitationCodes() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params])
 
-  useEffect(() => {
-    setPage(1)
-  }, [debouncedKeyword, pageSize])
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const applyKeyword = () => {
+    const nextKeyword = keyword.trim()
+    pagination.resetPage({ filter: nextKeyword || undefined })
+  }
 
   const handleCopy = async (text: string) => {
     if (await copyToClipboard(text)) {
@@ -594,7 +602,7 @@ export function InvitationCodes() {
       toast.success(t('Operation succeeded'))
       refresh()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Operation failed'))
+      toast.error(getRequestErrorMessage(e, t('Operation failed')))
     }
   }
 
@@ -604,7 +612,7 @@ export function InvitationCodes() {
       toast.success(t('Deleted'))
       refresh()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Delete failed'))
+      toast.error(getRequestErrorMessage(e, t('Delete failed')))
     } finally {
       setPendingDelete(null)
     }
@@ -616,7 +624,7 @@ export function InvitationCodes() {
       toast.success(t('Deleted {{count}} invalid codes', { count }))
       refresh()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Operation failed'))
+      toast.error(getRequestErrorMessage(e, t('Operation failed')))
     } finally {
       setPendingClearInvalid(false)
     }
@@ -659,13 +667,28 @@ export function InvitationCodes() {
             <Eraser className='mr-1.5 h-3.5 w-3.5' />
             {t('Clear invalid codes')}
           </Button>
-          <div className='ml-auto flex w-full sm:w-auto items-center gap-2'>
+          <div className='ml-auto flex w-full items-center gap-2 sm:w-auto'>
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  applyKeyword()
+                }
+              }}
               placeholder={t('Search name, code, creator or owner')}
               className='sm:w-72'
             />
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-9 shrink-0 sm:h-8'
+              onClick={applyKeyword}
+            >
+              <Search className='size-3.5' />
+              {t('Search')}
+            </Button>
           </div>
         </div>
 
@@ -774,7 +797,11 @@ export function InvitationCodes() {
                         </Button>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button size='icon' variant='ghost' className='h-8 w-8'>
+                            <Button
+                              size='icon'
+                              variant='ghost'
+                              className='h-8 w-8'
+                            >
                               <MoreHorizontal className='h-3.5 w-3.5' />
                             </Button>
                           </DropdownMenuTrigger>
@@ -812,50 +839,11 @@ export function InvitationCodes() {
           </Table>
         </div>
 
-        {/* Pagination */}
-        <div className='flex flex-wrap items-center justify-between gap-3'>
-          <div className='text-muted-foreground text-xs'>
-            {t('Total {{n}} records', { n: total })}
-          </div>
-          <div className='flex items-center gap-2'>
-            <Select
-              value={String(pageSize)}
-              onValueChange={(v) => setPageSize(Number(v))}
-            >
-              <SelectTrigger className='w-[100px]'>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PAGE_SIZES.map((size) => (
-                  <SelectItem key={size} value={String(size)}>
-                    {t('{{n}} / page', { n: size })}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              disabled={page <= 1 || loading}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              {t('Previous')}
-            </Button>
-            <span className='text-muted-foreground text-xs'>
-              {t('Page {{p}} / {{total}}', { p: page, total: totalPages })}
-            </span>
-            <Button
-              type='button'
-              variant='outline'
-              size='sm'
-              disabled={page >= totalPages || loading}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            >
-              {t('Next')}
-            </Button>
-          </div>
-        </div>
+        <ServerPagination
+          table={pagination.table}
+          total={total}
+          loading={loading}
+        />
       </div>
 
       <EditInvitationCodeDrawer

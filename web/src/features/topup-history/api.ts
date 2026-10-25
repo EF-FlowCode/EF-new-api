@@ -1,11 +1,10 @@
-import { api } from '@/lib/api'
+import {
+  api,
+  CALLER_HANDLED_REQUEST_CONFIG,
+  type ApiResult,
+  unwrapApiResult,
+} from '@/lib/api'
 import type { TopupListResponse, TopupStatus } from './types'
-
-type ApiResponse<T> = {
-  success: boolean
-  message?: string
-  data: T
-}
 
 export type TopupListParams = {
   page: number
@@ -18,7 +17,8 @@ export type TopupListParams = {
 }
 
 export async function fetchTopups(
-  params: TopupListParams
+  params: TopupListParams,
+  signal?: AbortSignal
 ): Promise<TopupListResponse> {
   const search = new URLSearchParams()
   search.set('p', String(params.page))
@@ -29,21 +29,22 @@ export async function fetchTopups(
   if (params.endTime) search.set('end_time', String(params.endTime))
 
   const base = params.admin ? '/api/user/topup' : '/api/user/topup/self'
-  const res = await api.get<ApiResponse<TopupListResponse>>(
-    `${base}?${search.toString()}`
+  const res = await api.get<ApiResult<TopupListResponse>>(
+    `${base}?${search.toString()}`,
+    {
+      ...CALLER_HANDLED_REQUEST_CONFIG,
+      signal,
+    }
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to load topup history')
-  }
-  return res.data.data
+  return unwrapApiResult(res.data, 'Failed to load topup history')
 }
 
 export async function adminCompleteTopup(tradeNo: string): Promise<boolean> {
-  const res = await api.post<ApiResponse<unknown>>('/api/user/topup/complete', {
-    trade_no: tradeNo,
-  })
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to complete topup')
-  }
+  const res = await api.post<ApiResult<unknown>>(
+    '/api/user/topup/complete',
+    { trade_no: tradeNo },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  unwrapApiResult(res.data, 'Failed to complete topup')
   return true
 }

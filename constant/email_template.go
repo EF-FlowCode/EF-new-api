@@ -5,6 +5,8 @@ package constant
 //	EmailTemplate.<key>.subject
 //	EmailTemplate.<key>.body
 const (
+	EmailTemplateKeyPasswordReset       = "password_reset"
+	EmailTemplateKeyQuotaWarning        = "quota_warning"
 	EmailTemplateKeyTicketCreatedAdmin  = "ticket_created_admin"
 	EmailTemplateKeyTicketReplyUser     = "ticket_reply_user"
 	EmailTemplateKeyTicketReplyAdmin    = "ticket_reply_admin"
@@ -21,27 +23,29 @@ const EmailTemplateOptionPrefix = "EmailTemplate."
 type EmailTemplateVariable struct {
 	Name        string `json:"name"`        // 变量名，不含 {{}}
 	Description string `json:"description"` // 人类可读说明
-	Sample      string `json:"sample"`      // 预览时填充的示例值（HTML 安全）
+	Sample      string `json:"sample"`      // 预览示例；纯文本模板由渲染器转义，旧模板可含 HTML
 }
 
 // EmailTemplateSpec 每种邮件模板的元信息 + 默认值
 type EmailTemplateSpec struct {
-	Key             string                  `json:"key"`
-	Name            string                  `json:"name"`
-	Description     string                  `json:"description"`
-	Variables       []EmailTemplateVariable `json:"variables"`
-	DefaultSubject  string                  `json:"default_subject"`
-	DefaultBody     string                  `json:"default_body"`
+	Key                   string                  `json:"key"`
+	Name                  string                  `json:"name"`
+	Description           string                  `json:"description"`
+	Variables             []EmailTemplateVariable `json:"variables"`
+	DefaultSubject        string                  `json:"default_subject"`
+	DefaultBody           string                  `json:"default_body"`
+	PlainTextVariables    bool                    `json:"-"`
+	RequiredBodyVariables []string                `json:"-"`
 }
 
 // 共用变量
 var (
-	varSystemName = EmailTemplateVariable{Name: "system_name", Description: "系统名称", Sample: "New API"}
-	varServerAddr = EmailTemplateVariable{Name: "server_address", Description: "网站地址（ServerAddress）", Sample: "https://example.com"}
-	varHeading    = EmailTemplateVariable{Name: "heading", Description: "邮件大标题", Sample: "通知"}
-	varInfoTable  = EmailTemplateVariable{Name: "info_table", Description: "由系统拼装的信息表格 HTML（工单字段/订单字段）", Sample: `<table style="width:100%;border-collapse:collapse;font-size:14px;"><tr><td style="padding:10px 0;color:#8e8e93;">示例字段</td><td style="padding:10px 0;color:#1d1d1f;text-align:right;">示例值</td></tr></table>`}
-	varPreview    = EmailTemplateVariable{Name: "content_preview", Description: "内容预览区块（工单邮件专用；已转义为安全 HTML，可能为空）", Sample: `<div style="padding:16px;background-color:#f5f5f7;border-radius:10px;color:#1d1d1f;">这里是工单内容预览…</div>`}
-	varActionURL  = EmailTemplateVariable{Name: "action_url", Description: "跳转链接", Sample: "https://example.com/ticket"}
+	varSystemName  = EmailTemplateVariable{Name: "system_name", Description: "系统名称", Sample: "New API"}
+	varServerAddr  = EmailTemplateVariable{Name: "server_address", Description: "网站地址（ServerAddress）", Sample: "https://example.com"}
+	varHeading     = EmailTemplateVariable{Name: "heading", Description: "邮件大标题", Sample: "通知"}
+	varInfoTable   = EmailTemplateVariable{Name: "info_table", Description: "由系统拼装的信息表格 HTML（工单字段/订单字段）", Sample: `<table style="width:100%;border-collapse:collapse;font-size:14px;"><tr><td style="padding:10px 0;color:#8e8e93;">示例字段</td><td style="padding:10px 0;color:#1d1d1f;text-align:right;">示例值</td></tr></table>`}
+	varPreview     = EmailTemplateVariable{Name: "content_preview", Description: "内容预览区块（工单邮件专用；已转义为安全 HTML，可能为空）", Sample: `<div style="padding:16px;background-color:#f5f5f7;border-radius:10px;color:#1d1d1f;">这里是工单内容预览…</div>`}
+	varActionURL   = EmailTemplateVariable{Name: "action_url", Description: "跳转链接", Sample: "https://example.com/ticket"}
 	varActionLabel = EmailTemplateVariable{Name: "action_label", Description: "跳转按钮文字", Sample: "前往查看"}
 )
 
@@ -63,6 +67,34 @@ const defaultBody = `<div style="background-color:#fafafa;padding:40px 16px;font
 // EmailTemplateSpecs 按顺序返回所有可配置邮件模板
 func EmailTemplateSpecs() []EmailTemplateSpec {
 	return []EmailTemplateSpec{
+		{
+			Key:         EmailTemplateKeyPasswordReset,
+			Name:        "密码重置",
+			Description: "用户申请重置密码时发送。正文必须包含 reset_url 和 valid_minutes；建议完整链接只显示一次。变量作为文本填入，正文中自动进行 HTML 转义。",
+			Variables: []EmailTemplateVariable{
+				varSystemName,
+				{Name: "reset_url", Description: "密码重置链接（正文必填；放入带引号的 href 属性及链接文字）", Sample: "https://example.com/user/reset?email=reader@example.com&token=preview-only"},
+				{Name: "valid_minutes", Description: "有效分钟数（正文必填）", Sample: "10"},
+			},
+			DefaultSubject:        "{{system_name}}密码重置",
+			DefaultBody:           `<p>您好，我们收到了您的账户密码重置请求。</p><p>请在 {{valid_minutes}} 分钟内打开以下页面继续操作：</p><p><a href="{{reset_url}}">{{reset_url}}</a></p><p>如果您未发起此请求，请忽略本邮件。</p>`,
+			PlainTextVariables:    true,
+			RequiredBodyVariables: []string{"reset_url", "valid_minutes"},
+		},
+		{
+			Key:         EmailTemplateKeyQuotaWarning,
+			Name:        "额度提醒",
+			Description: "余额低于通知阈值且通知方式为邮件时发送。正文必须包含 remaining_quota 和 topup_url。变量作为文本填入，正文中自动进行 HTML 转义。",
+			Variables: []EmailTemplateVariable{
+				varSystemName,
+				{Name: "remaining_quota", Description: "当前剩余额度（含显示单位，正文必填）", Sample: "¥0.014234"},
+				{Name: "topup_url", Description: "账户充值页面（正文必填；放入带引号的 href 属性及链接文字）", Sample: "https://example.com/console/topup"},
+			},
+			DefaultSubject:        "{{system_name}}账户余额提醒",
+			DefaultBody:           `<p>您好，您的账户当前剩余额度为 {{remaining_quota}}。</p><p>您可以在以下页面查看账户并补充余额：</p><p><a href="{{topup_url}}">{{topup_url}}</a></p>`,
+			PlainTextVariables:    true,
+			RequiredBodyVariables: []string{"remaining_quota", "topup_url"},
+		},
 		{
 			Key:         EmailTemplateKeyTicketCreatedAdmin,
 			Name:        "工单创建-通知管理员",

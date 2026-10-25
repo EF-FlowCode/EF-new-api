@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -188,7 +188,7 @@ func AddToken(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 			return
 		}
-		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
+		maxQuotaValue := int(1000000000 * common.GetQuotaPerUnit())
 		if token.RemainQuota > maxQuotaValue {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
 			return
@@ -272,7 +272,7 @@ func UpdateToken(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 			return
 		}
-		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
+		maxQuotaValue := int(1000000000 * common.GetQuotaPerUnit())
 		if token.RemainQuota > maxQuotaValue {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
 			return

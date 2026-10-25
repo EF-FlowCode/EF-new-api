@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"embed"
+	"slices"
 	"strings"
 	"sync"
 
@@ -10,9 +11,9 @@ import (
 	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
 )
 
 const (
@@ -222,10 +223,5 @@ func SupportedLanguages() []string {
 // IsSupported checks if a language code is supported
 func IsSupported(lang string) bool {
 	lang = normalizeLang(lang)
-	for _, supported := range SupportedLanguages() {
-		if lang == supported {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SupportedLanguages(), lang)
 }

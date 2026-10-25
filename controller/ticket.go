@@ -4,28 +4,33 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
 
 // validateAttachmentRequest 验证附件 ID 列表是否合法：数量不超过上限、无重复、为正整数。
 // 具体归属/绑定状态在 model 层的事务里一并校验。
 func validateAttachmentRequest(ids []int) error {
+	return validateAttachmentRequestWithSettings(setting.GetTicketAttachmentSettings(), ids)
+}
+
+func validateAttachmentRequestWithSettings(settings setting.TicketAttachmentSettings, ids []int) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if !setting.TicketAttachmentEnabled {
+	if !settings.Enabled {
 		return errors.New("ticket attachment is disabled")
 	}
-	if len(ids) > setting.TicketAttachmentMaxCount {
-		return fmt.Errorf("too many attachments: max %d", setting.TicketAttachmentMaxCount)
+	if len(ids) > settings.MaxCount {
+		return fmt.Errorf("too many attachments: max %d", settings.MaxCount)
 	}
 	seen := make(map[int]struct{}, len(ids))
 	for _, id := range ids {
@@ -125,16 +130,15 @@ func ticketAccessibleByActor(c *gin.Context, ticket *model.Ticket) bool {
 	if ticket.AssigneeId == currentUserId {
 		return true
 	}
-	// 同组未分配池 —— 允许客服抢单/回复
+	// 待认领池 —— 只限本人所属分配规则的工单类型，与列表 scope=unassigned 口径一致
 	if ticket.AssigneeId == 0 {
-		pool := service.ResolveAssigneeIdsForUser(currentUserId, role)
-		for _, uid := range pool {
-			if uid == currentUserId {
-				return true
-			}
-		}
+		return staffHandlesTicketType(currentUserId, ticket.Type)
 	}
 	return false
+}
+
+func staffHandlesTicketType(userId int, ticketType string) bool {
+	return slices.Contains(setting.TicketTypesForUser(userId), ticketType)
 }
 
 func ensureTicketAccessible(c *gin.Context, ticket *model.Ticket) bool {
@@ -230,8 +234,6 @@ func handleTicketError(c *gin.Context, err error) {
 		common.ApiErrorMsg(c, "attachment belongs to another user")
 	case errors.Is(err, model.ErrAttachmentBound):
 		common.ApiErrorMsg(c, "attachment already bound")
-	case errors.Is(err, model.ErrAttachmentBindTicket):
-		common.ApiErrorMsg(c, "attachment belongs to another ticket")
 	default:
 		common.ApiError(c, err)
 	}
@@ -466,8 +468,10 @@ func GetAllTickets(c *gin.Context) {
 			if opts.Type == "" && len(myTypes) > 0 {
 				opts.TypeIn = myTypes
 			}
-			if len(myTypes) == 0 {
-				// 未加入任何分组的客服 —— 没有可认领的工单，强制返回空结果。
+			if len(myTypes) == 0 || (opts.Type != "" && !staffHandlesTicketType(currentUserId, opts.Type)) {
+				// 未加入任何分组、或指定了不属于自己的类型 —— 没有可认领的工单，强制返回空结果。
+				// 同时约束显式类型与类型范围，搜索条件也不能扩大可见范围。
+				opts.Type = "__none__"
 				opts.TypeIn = []string{"__none__"}
 			}
 		default:
@@ -515,18 +519,24 @@ func AssignTicket(c *gin.Context) {
 	// - 管理员可以指派任意人 / 取消分配
 	// - 客服只能把工单分配给自己（"认领"）或在同组内转派，且不能取消分配
 	if role < common.RoleAdminUser {
-		if req.AssigneeId == 0 {
+		if req.AssigneeId == 0 || req.ExpectedAssigneeId == nil {
+			// 客服必须带上当前负责人做 CAS，不能绕过乐观锁直接改派。
 			common.ApiErrorI18n(c, i18n.MsgForbidden)
+			return
+		}
+		current, err := model.GetTicketById(ticketId)
+		if err != nil {
+			handleTicketError(c, err)
+			return
+		}
+		if !ensureTicketAccessible(c, current) {
 			return
 		}
 		allowed := req.AssigneeId == currentUserId
 		if !allowed {
 			pool := service.ResolveAssigneeIdsForUser(currentUserId, role)
-			for _, uid := range pool {
-				if uid == req.AssigneeId {
-					allowed = true
-					break
-				}
+			if slices.Contains(pool, req.AssigneeId) {
+				allowed = true
 			}
 		}
 		if !allowed {
@@ -746,11 +756,11 @@ func BatchUpdateTicketStatus(c *gin.Context) {
 	}
 
 	common.ApiSuccess(c, gin.H{
-		"updated":       len(updated),
-		"updated_ids":   updated,
-		"failed":        len(failed),
-		"failed_ids":    failed,
-		"requested":     len(ids),
+		"updated":     len(updated),
+		"updated_ids": updated,
+		"failed":      len(failed),
+		"failed_ids":  failed,
+		"requested":   len(ids),
 	})
 }
 
@@ -764,6 +774,7 @@ func GetEligibleInvoiceOrders(c *gin.Context) {
 }
 
 func CreateInvoiceTicket(c *gin.Context) {
+	ticketSettings := common.GetTicketNotificationSettings()
 	var req CreateInvoiceTicketRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -795,12 +806,13 @@ func CreateInvoiceTicket(c *gin.Context) {
 		CompanyPhone:   req.CompanyPhone,
 		Email:          req.Email,
 		TopUpOrderIds:  req.TopUpOrderIds,
+		MinTopupMoney:  ticketSettings.InvoiceMinTopupMoney,
 	})
 	if err != nil {
 		// eflow: 未达最低开票金额——带阈值文案，让用户知道差多少
 		if errors.Is(err, model.ErrTicketInvoiceAmountTooLow) {
 			common.ApiErrorI18n(c, i18n.MsgTicketInvoiceAmountTooLow, map[string]any{
-				"Min": strconv.FormatFloat(common.TicketInvoiceMinTopupMoney, 'f', -1, 64),
+				"Min": strconv.FormatFloat(ticketSettings.InvoiceMinTopupMoney, 'f', -1, 64),
 			})
 			return
 		}

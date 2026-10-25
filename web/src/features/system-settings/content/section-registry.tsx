@@ -28,7 +28,6 @@ const CONTENT_SECTIONS = [
       <DashboardSection
         defaultValues={{
           DataExportEnabled: settings.DataExportEnabled,
-          DataExportInterval: settings.DataExportInterval,
           DataExportDefaultTime: validateDataExportDefaultTime(
             settings.DataExportDefaultTime
           ),

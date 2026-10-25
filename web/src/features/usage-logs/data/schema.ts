@@ -26,6 +26,15 @@ export const usageLogSchema = z.object({
   ip: z.string().default(''),
   other: z.string().default(''),
   request_id: z.string().default(''),
+  // eflow: 计费异常标记（仅管理员接口下发）：1 输入估算 / 2 输出估算 / 3 上游无用量免单
+  billing_anomaly: z.number().optional(),
+  usage_refund: z
+    .object({
+      batch_id: z.string(),
+      quota: z.number(),
+      refunded_at: z.number(),
+    })
+    .optional(),
 })
 
 export type UsageLog = z.infer<typeof usageLogSchema>

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
 import { getUserGroups } from '@/lib/api'
 import { formatQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -38,27 +39,50 @@ function useAuthorizedGroupRatios() {
     refetchInterval: 30 * 1000,
     refetchOnWindowFocus: true,
     select: (res) => {
-      if (!res.success || !res.data) return {}
+      if (!res.success || !res.data) {
+        return {
+          ratios: {},
+          authorizedGroups: [] as string[],
+          unavailableGroups: [] as string[],
+        }
+      }
       const ratios: Record<string, number> = {}
+      const unavailableGroups: string[] = []
       for (const [group, info] of Object.entries(res.data)) {
         if (typeof info.ratio === 'number') {
           ratios[group] = info.ratio
         }
+        if (info.available === false) {
+          unavailableGroups.push(group)
+        }
       }
-      return ratios
+      return {
+        ratios,
+        authorizedGroups: Object.keys(res.data),
+        unavailableGroups,
+      }
     },
   })
 
   return {
-    ratios: query.data ?? {},
+    ratios: query.data?.ratios ?? {},
+    authorizedGroups: query.data?.authorizedGroups ?? [],
+    unavailableGroups: query.data?.unavailableGroups ?? [],
     loaded: query.isSuccess,
   }
 }
 
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
-  const { ratios: groupRatios, loaded: groupAuthorizationLoaded } =
-    useAuthorizedGroupRatios()
+  const {
+    ratios: groupRatios,
+    authorizedGroups,
+    unavailableGroups,
+    loaded: groupAuthorizationLoaded,
+  } = useAuthorizedGroupRatios()
+  const primaryGroup = useAuthStore((state) => state.auth.user?.group)
+  const authorizedGroupSet = new Set(authorizedGroups)
+  const unavailableGroupSet = new Set(unavailableGroups)
   return [
     {
       id: 'select',
@@ -189,46 +213,65 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         const apiKey = row.original
         const group = row.getValue('group') as string
         const ratio = group && group !== 'auto' ? groupRatios[group] : undefined
+        // Same rule as the relay auth check: a token without a group falls
+        // back to the primary customer tier, which must itself be authorized.
         const groupRemoved =
           groupAuthorizationLoaded &&
+          (group
+            ? !authorizedGroupSet.has(group)
+            : Boolean(primaryGroup) && !authorizedGroupSet.has(primaryGroup!))
+        const groupUnavailable =
+          groupAuthorizationLoaded &&
           Boolean(group) &&
-          group !== 'auto' &&
-          !(group in groupRatios)
+          unavailableGroupSet.has(group)
+        const removedHint = groupRemoved && (
+          <p className='text-destructive max-w-40 text-[11px] leading-tight'>
+            {group
+              ? t(
+                  'This group was removed by the administrator. The token is unavailable.'
+                )
+              : t(
+                  'Your primary tier is not authorized. Select an available group for this token.'
+                )}
+          </p>
+        )
 
         if (group === 'auto') {
           return (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className='inline-flex items-center gap-1.5 text-xs'>
-                  <GroupBadge group='auto' />
-                  {apiKey.cross_group_retry && (
-                    <>
-                      <span className='text-muted-foreground/30'>·</span>
-                      <span className='text-muted-foreground/60'>
-                        {t('Cross-group')}
-                      </span>
-                    </>
-                  )}
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>
-                <span className='text-xs'>
-                  {t(
-                    'Automatically selects the best available group with circuit breaker mechanism'
-                  )}
-                </span>
-              </TooltipContent>
-            </Tooltip>
+            <div className='space-y-1'>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className='inline-flex items-center gap-1.5 text-xs'>
+                    <GroupBadge group='auto' />
+                    {apiKey.cross_group_retry && (
+                      <>
+                        <span className='text-muted-foreground/30'>·</span>
+                        <span className='text-muted-foreground/60'>
+                          {t('Cross-group')}
+                        </span>
+                      </>
+                    )}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <span className='text-xs'>
+                    {t(
+                      'Automatically selects the best available group with circuit breaker mechanism'
+                    )}
+                  </span>
+                </TooltipContent>
+              </Tooltip>
+              {removedHint}
+            </div>
           )
         }
         return (
           <div className='space-y-1'>
             <GroupBadge group={group} ratio={ratio} />
-            {groupRemoved && (
+            {removedHint}
+            {groupUnavailable && (
               <p className='text-destructive max-w-40 text-[11px] leading-tight'>
-                {t(
-                  'This group was removed by the administrator. The token is unavailable.'
-                )}
+                {t('Unavailable in this region')}
               </p>
             )}
           </div>

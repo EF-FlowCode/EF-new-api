@@ -11,9 +11,10 @@ import {
   EyeOff,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { SiGithub, SiDiscord } from 'react-icons/si'
 import { toast } from 'sonner'
+import { IconDiscord, IconGithub } from '@/assets/brand-icons'
 import { api } from '@/lib/api'
+import { indexCustomOAuthBindings, type CustomOAuthBinding } from '@/lib/oauth'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -33,12 +34,21 @@ import {
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
 import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
+import {
   getUser,
   getUserOAuthBindings,
   adminClearUserBinding,
   adminUnbindCustomOAuth,
-  type OAuthBinding,
 } from '../../api'
+import {
+  BUILTIN_BINDING_TYPE_BY_FIELD,
+  type BuiltinBindingField,
+  type BuiltinBindingType,
+} from '../../lib/builtin-binding-types'
 import type { User } from '../../types'
 
 interface Props {
@@ -54,7 +64,8 @@ interface BindingItem {
   icon: React.ReactNode
   value: string
   type: 'builtin' | 'custom'
-  providerId?: string
+  bindingType?: BuiltinBindingType
+  providerId?: number
   isBound: boolean
   isEnabled: boolean
 }
@@ -67,63 +78,55 @@ interface StatusInfo {
   telegram_oauth?: boolean
   linuxdo_oauth?: boolean
   custom_oauth_providers?: Array<{
-    id: string
+    id: number
     name: string
     icon?: string
   }>
 }
 
 const BUILTIN_BINDINGS: ReadonlyArray<{
-  key: string
-  field: string
+  field: BuiltinBindingField
   label: string
   icon: React.ReactNode
   statusKey: keyof StatusInfo | null
 }> = [
   {
-    key: 'email',
     field: 'email',
     label: 'Email',
     icon: <Mail className='h-4 w-4' />,
     statusKey: null,
   },
   {
-    key: 'github_id',
     field: 'github_id',
     label: 'GitHub',
-    icon: <SiGithub className='h-4 w-4' />,
+    icon: <IconGithub className='h-4 w-4' />,
     statusKey: 'github_oauth',
   },
   {
-    key: 'discord_id',
     field: 'discord_id',
     label: 'Discord',
-    icon: <SiDiscord className='h-4 w-4' />,
+    icon: <IconDiscord className='h-4 w-4' />,
     statusKey: 'discord_oauth',
   },
   {
-    key: 'wechat_id',
     field: 'wechat_id',
     label: 'WeChat',
     icon: <MessageCircle className='h-4 w-4' />,
     statusKey: 'wechat_login',
   },
   {
-    key: 'oidc_id',
     field: 'oidc_id',
     label: 'OIDC',
     icon: <Globe className='h-4 w-4' />,
     statusKey: 'oidc_enabled',
   },
   {
-    key: 'telegram_id',
     field: 'telegram_id',
     label: 'Telegram',
     icon: <Send className='h-4 w-4' />,
     statusKey: 'telegram_oauth',
   },
   {
-    key: 'linux_do_id',
     field: 'linux_do_id',
     label: 'LinuxDO',
     icon: <Globe className='h-4 w-4' />,
@@ -148,7 +151,7 @@ function CustomProviderIcon(props: { iconUrl?: string }) {
 export function UserBindingDialog(props: Props) {
   const { t } = useTranslation()
   const [user, setUser] = useState<User | null>(null)
-  const [oauthBindings, setOauthBindings] = useState<OAuthBinding[]>([])
+  const [oauthBindings, setOauthBindings] = useState<CustomOAuthBinding[]>([])
   const [statusInfo, setStatusInfo] = useState<StatusInfo>({})
   const [loading, setLoading] = useState(false)
   const [showBoundOnly, setShowBoundOnly] = useState(true)
@@ -177,7 +180,7 @@ export function UserBindingDialog(props: Props) {
         setUser(userRes.data)
       }
       if (oauthRes.success && oauthRes.data) {
-        setOauthBindings(oauthRes.data as OAuthBinding[])
+        setOauthBindings(oauthRes.data)
       }
       if (statusRes.success && statusRes.data) {
         setStatusInfo(statusRes.data as StatusInfo)
@@ -212,47 +215,46 @@ export function UserBindingDialog(props: Props) {
         field.statusKey == null ? true : Boolean(statusInfo[field.statusKey])
 
       items.push({
-        key: field.key,
+        key: field.field,
         label: field.label,
         icon: field.icon,
         value: isBound ? value : '',
         type: 'builtin',
+        bindingType: BUILTIN_BINDING_TYPE_BY_FIELD[field.field],
         isBound,
         isEnabled,
       })
     }
 
-    const oauthBindingMap = new Map(
-      oauthBindings.map((b) => [String(b.provider_id), b])
-    )
+    const oauthBindingMap = indexCustomOAuthBindings(oauthBindings)
 
     const customProviders = statusInfo.custom_oauth_providers || []
-    const seenProviderIds = new Set<string>()
+    const seenProviderIds = new Set<number>()
 
     for (const provider of customProviders) {
-      seenProviderIds.add(String(provider.id))
-      const binding = oauthBindingMap.get(String(provider.id))
+      seenProviderIds.add(provider.id)
+      const binding = oauthBindingMap.get(provider.id)
       items.push({
         key: `oauth_${provider.id}`,
-        label: provider.name || provider.id,
+        label: provider.name || String(provider.id),
         icon: <CustomProviderIcon iconUrl={provider.icon} />,
-        value: binding?.external_id || '',
+        value: binding?.provider_user_id || '',
         type: 'custom',
-        providerId: String(provider.id),
+        providerId: provider.id,
         isBound: !!binding,
         isEnabled: true,
       })
     }
 
     for (const binding of oauthBindings) {
-      if (!seenProviderIds.has(String(binding.provider_id))) {
+      if (!seenProviderIds.has(binding.provider_id)) {
         items.push({
           key: `oauth_${binding.provider_id}`,
-          label: binding.provider_name || binding.provider_id,
+          label: binding.provider_name || String(binding.provider_id),
           icon: <Link2 className='h-4 w-4' />,
-          value: binding.external_id || '-',
+          value: binding.provider_user_id || '-',
           type: 'custom',
-          providerId: String(binding.provider_id),
+          providerId: binding.provider_id,
           isBound: true,
           isEnabled: false,
         })
@@ -268,28 +270,48 @@ export function UserBindingDialog(props: Props) {
 
   const boundCount = allBindings.filter((b) => b.isBound).length
 
+  const verification = useSecureVerification()
+
   const handleUnbind = async () => {
     if (!unbindTarget || !props.userId) return
-    setUnbinding(true)
-    try {
-      let res
-      if (unbindTarget.type === 'builtin') {
-        res = await adminClearUserBinding(props.userId, unbindTarget.key)
-      } else if (unbindTarget.providerId) {
-        res = await adminUnbindCustomOAuth(
-          props.userId,
-          unbindTarget.providerId
-        )
-      }
+    const target = unbindTarget
+    const userId = props.userId
+    const builtin = target.type === 'builtin' && target.bindingType
+    if (!builtin && !target.providerId) return
+
+    const submit = async (proof?: SecurityProof) => {
+      const res =
+        builtin && target.bindingType
+          ? await adminClearUserBinding(
+              userId,
+              target.bindingType,
+              proof?.proof_token
+            )
+          : await adminUnbindCustomOAuth(
+              userId,
+              target.providerId as number,
+              proof?.proof_token
+            )
       if (res?.success) {
-        toast.success(
-          t('Unbound {{provider}}', { provider: unbindTarget.label })
-        )
+        toast.success(t('Unbound {{provider}}', { provider: target.label }))
         await fetchData()
         props.onUnbindSuccess?.()
       } else {
         toast.error(res?.message || t('Unbind failed'))
       }
+    }
+
+    setUnbinding(true)
+    try {
+      await verification.startVerification(submit, {
+        operation: {
+          scope: 'admin.user.binding.clear',
+          context: builtin
+            ? { user_id: userId, binding_type: target.bindingType }
+            : { user_id: userId, provider_id: target.providerId },
+        },
+        description: t('Confirm your identity before removing this binding.'),
+      })
     } catch {
       toast.error(t('Unbind failed'))
     } finally {
@@ -430,6 +452,8 @@ export function UserBindingDialog(props: Props) {
         handleConfirm={handleUnbind}
         isLoading={unbinding}
       />
+
+      <SecureVerificationDialog {...verification.dialogProps} />
     </>
   )
 }

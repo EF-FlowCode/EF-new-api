@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import type { UsageLog } from '../../data/schema'
@@ -36,12 +37,14 @@ import {
   parseAuditLine,
   decodeBillingExprB64,
   getTieredBillingSummary,
+  getUnresolvedTierText,
   hasAnyCacheTokens,
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
   buildBillingFormula,
   getImageTokenDetails,
+  getReasoningEffortVariant,
   type BillingFormula,
 } from '../../lib/format'
 import {
@@ -50,6 +53,7 @@ import {
   isTimingLogType,
 } from '../../lib/utils'
 import type { LogOtherData } from '../../types'
+import { ResponseModelDetails } from '../model-badge'
 
 function timingTextColorClass(
   variant: 'success' | 'warning' | 'danger'
@@ -129,7 +133,8 @@ function BillingBreakdown(props: {
   const { log, other, isAdmin } = props
   const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
-  const isTieredExpr = other.billing_mode === 'tiered_expr'
+  const isExpressionBilling =
+    other.billing_mode === 'tiered_expr' || other.billing_mode === 'flat_price'
   const tieredSummary = getTieredBillingSummary(other)
 
   const rows: Array<{ label: string; value: string }> = []
@@ -137,10 +142,27 @@ function BillingBreakdown(props: {
   const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
 
-  if (isTieredExpr) {
+  if (other.billing_mode === 'batch_file') {
+    rows.push({ label: t('Billing Mode'), value: t('Batch input') })
+    if (other.input_tokens != null && Number.isFinite(other.input_tokens)) {
+      rows.push({
+        label: t('Input Tokens'),
+        value: other.input_tokens.toLocaleString(),
+      })
+    }
+    if (other.input_price != null && Number.isFinite(other.input_price)) {
+      rows.push({
+        label: t('Input price'),
+        value: `${fmtPrice(other.input_price)}/M`,
+      })
+    }
+  } else if (isExpressionBilling) {
     rows.push({
       label: t('Billing Mode'),
-      value: t('Dynamic Pricing'),
+      value:
+        other.billing_mode === 'flat_price'
+          ? t('Fixed token price')
+          : t('Dynamic Pricing'),
     })
     if (tieredSummary) {
       if (tieredSummary.tier.label) {
@@ -161,7 +183,7 @@ function BillingBreakdown(props: {
     } else {
       rows.push({
         label: t('Matched Tier'),
-        value: t('No matching results'),
+        value: getUnresolvedTierText(other, t),
       })
     }
   } else if (
@@ -170,25 +192,31 @@ function BillingBreakdown(props: {
   ) {
     // eflow: ASR 按音频秒数计费，每秒价 = model_ratio*2/1e6（1 token=1 秒）。
     const perSecUSD = baseInputUSD / 1_000_000
-    rows.push({ label: t('Billing Mode'), value: '按音频秒数计费' })
-    rows.push({ label: t('Input'), value: `${fmtPrice(perSecUSD)}/秒` })
+    rows.push({ label: t('Billing Mode'), value: t('Billed per second') })
+    rows.push({
+      label: t('Input'),
+      value: `${fmtPrice(perSecUSD)}/${t('seconds')}`,
+    })
     if (other.completion_ratio != null) {
       rows.push({
         label: t('Output'),
-        value: `${fmtPrice(perSecUSD * other.completion_ratio)}/秒`,
+        value: `${fmtPrice(perSecUSD * other.completion_ratio)}/${t('seconds')}`,
       })
     }
   } else if (other.billing_mode === 'duration_seconds') {
     // eflow: 视频任务按时长计费，model_price 即每秒价。
-    rows.push({ label: t('Billing Mode'), value: '按时长计费（秒）' })
+    rows.push({ label: t('Billing Mode'), value: t('Billed per second') })
     if (other.model_price != null) {
       rows.push({
         label: t('Model Price'),
-        value: `${fmtPrice(other.model_price)}/秒`,
+        value: `${fmtPrice(other.model_price)}/${t('seconds')}`,
       })
     }
     if (other.dur_sec != null) {
-      rows.push({ label: '计费时长', value: `${other.dur_sec} 秒` })
+      rows.push({
+        label: t('Duration'),
+        value: `${other.dur_sec} ${t('seconds')}`,
+      })
     }
   } else if (isPerCall) {
     rows.push({ label: t('Billing Mode'), value: t('Per-call') })
@@ -224,7 +252,7 @@ function BillingBreakdown(props: {
     })
   }
 
-  if (!isTieredExpr && isClaude && hasAnyCacheTokens(other)) {
+  if (!isExpressionBilling && isClaude && hasAnyCacheTokens(other)) {
     if (other.cache_ratio != null && other.cache_ratio !== 1) {
       rows.push({
         label: t('Cache Read'),
@@ -260,7 +288,7 @@ function BillingBreakdown(props: {
     }
   }
 
-  if (!isTieredExpr) {
+  if (!isExpressionBilling) {
     if (other.audio_ratio != null && other.audio_ratio !== 1) {
       rows.push({
         label: t('Audio input'),
@@ -330,28 +358,29 @@ function BillingBreakdown(props: {
 
   if (rows.length === 0) return null
 
-  // eflow: 在主表后面追加「计算公式」+「缓存命中率」展开。详见
-  // lib/format.ts::buildBillingFormula —— 纯前端从 other 字段重建公式，
+  // eflow: 在主表后面追加独立的「计费过程」区块。详见
+  // lib/format.ts::buildBillingFormula —— 纯前端从 other 字段重建账单项，
   // 不动 expression engine。null 表示这条日志不适合渲染（per-call /
   // audio_seconds / duration_seconds / 数据缺失等）。
   const formula = buildBillingFormula(log, other)
 
   return (
-    <DetailSection label={t('Billing Details')}>
-      {rows.map((row, idx) => (
-        <DetailRow key={idx} label={row.label} value={row.value} mono />
-      ))}
-      {formula && <BillingFormulaBlock formula={formula} />}
-    </DetailSection>
+    <>
+      <DetailSection label={t('Billing Details')}>
+        {rows.map((row, idx) => (
+          <DetailRow key={idx} label={row.label} value={row.value} mono />
+        ))}
+      </DetailSection>
+      {formula && <BillingProcessBlock formula={formula} />}
+    </>
   )
 }
 
 /**
- * Renders a multi-line cost expansion: variable formula → token
- * substitution → per-term products → group ratio application → final.
- * Plus a cache hit rate row when applicable.
+ * Renders a bill-like cost expansion: one readable line per charged item,
+ * followed by the group-ratio application and final monetary amount.
  */
-function BillingFormulaBlock(props: { formula: BillingFormula }) {
+function BillingProcessBlock(props: { formula: BillingFormula }) {
   const { t } = useTranslation()
   const { formula } = props
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
@@ -362,41 +391,82 @@ function BillingFormulaBlock(props: { formula: BillingFormula }) {
       digitsSmall: 4,
       abbreviate: false,
     })
+  const fmtTokens = (tokens: number) => tokens.toLocaleString()
 
-  const symbolicLine = formula.terms
-    .map((term) => `${term.varName}×${fmtRatePrice(term.pricePerMillionUSD)}/M`)
-    .join(' + ')
-  const substitutionLine = formula.terms
-    .map((term) => `${term.tokens}×${fmtRatePrice(term.pricePerMillionUSD)}/M`)
-    .join(' + ')
-  const productsLine = formula.terms
-    .map((term) => fmtPrice(term.productUSD))
-    .join(' + ')
+  const labelByVar = new Map(
+    formula.terms.map((term) => [term.varName, t(term.varLabel)])
+  )
+  const normalizationRows = formula.tokenNormalizations.map((normalization) => {
+    const rawLabel =
+      normalization.varName === 'p' ? t('Input Tokens') : t('Output Tokens')
+    const deductions = normalization.deductions
+      .map(
+        (deduction) =>
+          ` - ${labelByVar.get(deduction.varName) ?? deduction.varName} ${fmtTokens(deduction.tokens)}`
+      )
+      .join('')
+    return {
+      label: rawLabel,
+      value: `${fmtTokens(normalization.rawTokens)}${deductions} = ${fmtTokens(normalization.normalizedTokens)} tokens`,
+    }
+  })
 
   const showGroupStep = formula.groupRatio !== null && formula.groupRatio !== 1
+  const fmtRatio = (ratio: number) =>
+    ratio.toLocaleString(undefined, { maximumFractionDigits: 6 })
+  const multiplierSteps: string[] = []
+  if (formula.timeMultiplier !== null) {
+    multiplierSteps.push(
+      `${t('Time-based pricing')} ${fmtRatio(formula.timeMultiplier)}`
+    )
+  }
   const groupLabel = formula.groupRatioIsUserExclusive
     ? t('User Exclusive Ratio')
     : t('Group Ratio')
+  if (showGroupStep && formula.groupRatio !== null) {
+    multiplierSteps.push(`${groupLabel} ${fmtRatio(formula.groupRatio)}`)
+  }
 
   return (
-    <>
-      <div className='border-border/50 mt-2 border-t pt-2'>
-        <Label className='mb-1.5 block text-xs font-semibold'>
-          {t('Calculation Formula')}
-        </Label>
-        <pre className='text-muted-foreground bg-background/40 overflow-x-auto rounded px-2 py-1.5 font-mono text-[11px] leading-relaxed break-all whitespace-pre-wrap'>
-          {symbolicLine}
-          {'\n'}= {substitutionLine}
-          {'\n'}= {productsLine}
-          {showGroupStep && (
+    <DetailSection label={t('Billing Process')}>
+      <div className='flex min-w-0 flex-col gap-1.5'>
+        {normalizationRows.map((row) => (
+          <div
+            key={row.label}
+            className='text-muted-foreground grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-[11px] sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'
+          >
+            <span>{row.label}:</span>
+            <span className='min-w-0 font-mono break-words'>{row.value}</span>
+          </div>
+        ))}
+
+        {formula.terms.map((term) => (
+          <div
+            key={term.varName}
+            className='grid min-w-0 grid-cols-[5.25rem_minmax(0,1fr)] gap-2 text-xs sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-3'
+          >
+            <span className='text-muted-foreground'>{t(term.varLabel)}:</span>
+            <span className='min-w-0 font-mono break-words'>
+              {fmtTokens(term.tokens)} tokens ×{' '}
+              {fmtRatePrice(term.pricePerMillionUSD)}/M ={' '}
+              <span className='font-semibold'>{fmtPrice(term.productUSD)}</span>
+            </span>
+          </div>
+        ))}
+
+        <Separator className='my-1' />
+        <div className='min-w-0 font-mono text-xs font-semibold break-words'>
+          {multiplierSteps.length > 0 ? (
             <>
-              {'\n'}= {fmtPrice(formula.subtotalUSD)} × {formula.groupRatio} (
-              {groupLabel})
+              ({fmtPrice(formula.subtotalUSD)}) × {multiplierSteps.join(' × ')}{' '}
+              = {fmtPrice(formula.totalUSD)}
+            </>
+          ) : (
+            <>
+              {t('Total Cost')}: {fmtPrice(formula.totalUSD)}
             </>
           )}
-          {'\n'}
-          <span className='font-semibold'>= {fmtPrice(formula.totalUSD)}</span>
-        </pre>
+        </div>
       </div>
       {formula.cacheHitRate !== null && (
         <DetailRow
@@ -405,7 +475,7 @@ function BillingFormulaBlock(props: { formula: BillingFormula }) {
           mono
         />
       )}
-    </>
+    </DetailSection>
   )
 }
 
@@ -596,6 +666,19 @@ export function DetailsDialog(props: DetailsDialogProps) {
           <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-hidden py-1 sm:space-y-3'>
             {/* Overview section - key identifiers */}
             <div className='min-w-0 space-y-1'>
+              {props.log.usage_refund && (
+                <>
+                  <DetailRow
+                    label={t('Already refunded')}
+                    value={formatLogQuota(props.log.usage_refund.quota)}
+                  />
+                  <DetailRow
+                    label={t('Refund batch')}
+                    value={props.log.usage_refund.batch_id}
+                    mono
+                  />
+                </>
+              )}
               {props.log.request_id && (
                 <DetailRow
                   label={t('Request ID')}
@@ -736,15 +819,20 @@ export function DetailsDialog(props: DetailsDialogProps) {
             )}
 
             {/* Reject reason (admin only) */}
-            {props.isAdmin && other?.reject_reason && (
-              <DetailSection
-                icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
-                label={t('Reject Reason')}
-                variant='danger'
-              >
-                <p className='text-xs break-words'>{other.reject_reason}</p>
-              </DetailSection>
-            )}
+            {props.isAdmin &&
+              (other?.admin_info?.reject_reason || other?.reject_reason) && (
+                <DetailSection
+                  icon={
+                    <AlertTriangle className='size-3.5' aria-hidden='true' />
+                  }
+                  label={t('Reject Reason')}
+                  variant='danger'
+                >
+                  <p className='text-xs break-words'>
+                    {other.admin_info?.reject_reason || other.reject_reason}
+                  </p>
+                </DetailSection>
+              )}
 
             {/* Violation fee info */}
             {isViolation && other && (
@@ -777,6 +865,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
             {/* Refund details (type=6) */}
             {isRefund && other && (other.task_id || other.reason) && (
               <DetailSection label={t('Refund Details')}>
+                {other.usage_refund_batch_id && (
+                  <DetailRow
+                    label={t('Refund batch')}
+                    value={other.usage_refund_batch_id}
+                    mono
+                  />
+                )}
                 {other.task_id && (
                   <DetailRow label={t('Task ID')} value={other.task_id} mono />
                 )}
@@ -877,13 +972,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 value={
                   <StatusBadge
                     label={other.reasoning_effort}
-                    variant={
-                      other.reasoning_effort === 'high'
-                        ? 'orange'
-                        : other.reasoning_effort === 'medium'
-                          ? 'yellow'
-                          : 'green'
-                    }
+                    variant={getReasoningEffortVariant(other.reasoning_effort)}
                     size='sm'
                     copyable={false}
                   />
@@ -906,21 +995,29 @@ export function DetailsDialog(props: DetailsDialogProps) {
               />
             )}
 
-            {/* Model mapping */}
-            {other?.is_model_mapped && other?.upstream_model_name && (
-              <DetailSection label={t('Model Mapping')}>
-                <DetailRow
-                  label={t('Request Model')}
-                  value={props.log.model_name}
-                  mono
-                />
-                <DetailRow
-                  label={t('Actual Model')}
-                  value={other.upstream_model_name}
-                  mono
-                />
+            {/* eflow: 上游声明了响应模型时展示请求/上游/响应三者对照（含不一致警示），
+                否则沿用旧的模型映射展示 */}
+            {other?.response_model && (
+              <DetailSection label={t('Response Model')}>
+                <ResponseModelDetails observation={other.response_model} />
               </DetailSection>
             )}
+            {!other?.response_model &&
+              other?.is_model_mapped &&
+              other?.upstream_model_name && (
+                <DetailSection label={t('Model Mapping')}>
+                  <DetailRow
+                    label={t('Request Model')}
+                    value={props.log.model_name}
+                    mono
+                  />
+                  <DetailRow
+                    label={t('Actual Model')}
+                    value={other.upstream_model_name}
+                    mono
+                  />
+                </DetailSection>
+              )}
 
             {/* Token breakdown (for consume/error types with token data) */}
             {isDisplayableType(props.log.type) && other && (

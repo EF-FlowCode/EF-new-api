@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 // GroupList stores a normalized JSON string while exposing a JSON array to APIs.

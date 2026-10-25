@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import { DEFAULT_PRICING_PAGE_SIZE, DEFAULT_TOKEN_UNIT } from '../constants'
-import type { PricingModel, TokenUnit } from '../types'
+import type { PricingEndpointOverride, PricingModel, TokenUnit } from '../types'
 import { ModelCard } from './model-card'
 import type { ModelPerfBadgeData } from './model-perf-badge'
 
@@ -17,11 +17,13 @@ export interface ModelCardGridProps {
   tokenUnit?: TokenUnit
   showRechargePrice?: boolean
   selectedGroup?: string
+  groupEndpointOverrides?: Record<string, PricingEndpointOverride>
 }
 
 export function ModelCardGrid(props: ModelCardGridProps) {
   const { t } = useTranslation()
   const [page, setPage] = useState(1)
+  const [pricingNow, setPricingNow] = useState(() => new Date())
   const pageSize = DEFAULT_PRICING_PAGE_SIZE
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const totalPages = Math.max(1, Math.ceil(props.models.length / pageSize))
@@ -31,6 +33,11 @@ export function ModelCardGrid(props: ModelCardGridProps) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(1)
   }, [props.models])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setPricingNow(new Date()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const pagedModels = useMemo(() => {
     const start = (page - 1) * pageSize
@@ -58,8 +65,8 @@ export function ModelCardGrid(props: ModelCardGridProps) {
   }
 
   return (
-    <div className='space-y-4 sm:space-y-5'>
-      <div className='grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3'>
+    <div className='flex flex-col gap-4 sm:gap-5'>
+      <div className='grid grid-cols-1 items-stretch gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3'>
         {pagedModels.map((model) => (
           <ModelCard
             key={model.id ?? model.model_name}
@@ -69,6 +76,8 @@ export function ModelCardGrid(props: ModelCardGridProps) {
             usdExchangeRate={props.usdExchangeRate}
             showRechargePrice={props.showRechargePrice}
             selectedGroup={props.selectedGroup}
+            groupEndpointOverrides={props.groupEndpointOverrides}
+            now={pricingNow}
             perf={perfMap.get(model.model_name || '')}
             onClick={() => props.onModelClick(model.model_name || '')}
           />
@@ -90,9 +99,8 @@ export function ModelCardGrid(props: ModelCardGridProps) {
               size='sm'
               onClick={() => setPage((current) => Math.max(1, current - 1))}
               disabled={page <= 1}
-              className='gap-1.5'
             >
-              <ChevronLeft className='size-4' />
+              <ChevronLeft data-icon='inline-start' />
               {t('Previous')}
             </Button>
             <Button
@@ -103,10 +111,9 @@ export function ModelCardGrid(props: ModelCardGridProps) {
                 setPage((current) => Math.min(totalPages, current + 1))
               }
               disabled={page >= totalPages}
-              className='gap-1.5'
             >
               {t('Next')}
-              <ChevronRight className='size-4' />
+              <ChevronRight data-icon='inline-end' />
             </Button>
           </div>
         </div>

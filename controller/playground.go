@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )

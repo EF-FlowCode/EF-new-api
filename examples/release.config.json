@@ -1,0 +1,15 @@
+{
+  "host": "<SSH_HOST_ALIAS>",
+  "remote_root": "/opt/new-api",
+  "mysql_container": "<MYSQL_CONTAINER>",
+  "bootstrap": {
+    "revision": "<DEPLOYED_GIT_REVISION>",
+    "web_image": "<DEPLOYED_WEB_IMAGE_ID>",
+    "contract": "<DEPLOYED_CONTRACT>",
+    "worker_image": "<DEPLOYED_WORKER_IMAGE_ID>"
+  },
+  "public_checks": [
+    "https://example.com/api/status",
+    "https://example.com/api/pricing"
+  ]
+}

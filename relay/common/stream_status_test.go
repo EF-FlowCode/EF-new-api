@@ -1,6 +1,8 @@
 package common
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -82,7 +84,7 @@ func TestStreamStatus_RecordError_CapAtMax(t *testing.T) {
 	t.Parallel()
 	s := NewStreamStatus()
 
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		s.RecordError(fmt.Sprintf("error_%d", i))
 	}
 
@@ -101,7 +103,7 @@ func TestStreamStatus_RecordError_Concurrent(t *testing.T) {
 	s := NewStreamStatus()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -208,4 +210,35 @@ func TestStreamStatus_Summary_NilSafe(t *testing.T) {
 	t.Parallel()
 	var s *StreamStatus
 	assert.Equal(t, "StreamStatus<nil>", s.Summary())
+}
+
+func TestStreamStatus_ReconcileDeliveredCompletion(t *testing.T) {
+	t.Parallel()
+
+	cancelled := NewStreamStatus()
+	cancelled.SetEndReason(StreamEndReasonClientGone, context.Canceled)
+	cancelled.SetEndReason(StreamEndReasonDone, nil)
+	assert.True(t, cancelled.ResponseFailed())
+	cancelled.ReconcileDeliveredCompletion()
+	assert.Equal(t, StreamEndReasonDone, cancelled.EndReason)
+	assert.NoError(t, cancelled.EndError)
+	assert.False(t, cancelled.ResponseFailed())
+
+	withError := NewStreamStatus()
+	withError.SetEndReason(StreamEndReasonClientGone, context.Canceled)
+	withError.RecordError("write failed")
+	withError.ReconcileDeliveredCompletion()
+	assert.Equal(t, StreamEndReasonClientGone, withError.EndReason)
+
+	otherFailure := NewStreamStatus()
+	otherFailure.SetEndReason(StreamEndReasonClientGone, context.Canceled)
+	otherFailure.SetEndReason(StreamEndReasonPingFail, errors.New("ping"))
+	otherFailure.ReconcileDeliveredCompletion()
+	assert.Equal(t, StreamEndReasonClientGone, otherFailure.EndReason)
+	assert.True(t, otherFailure.ResponseFailed())
+
+	deadline := NewStreamStatus()
+	deadline.SetEndReason(StreamEndReasonClientGone, context.DeadlineExceeded)
+	deadline.ReconcileDeliveredCompletion()
+	assert.Equal(t, StreamEndReasonClientGone, deadline.EndReason)
 }

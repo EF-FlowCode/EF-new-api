@@ -49,6 +49,7 @@ export function TagBatchEditDialog({
   const [models, setModels] = useState('')
   const [modelMapping, setModelMapping] = useState('')
   const [groups, setGroups] = useState<string[]>([])
+  const [baseUrl, setBaseUrl] = useState('')
 
   // Fetch available groups
   const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
@@ -114,6 +115,12 @@ export function TagBatchEditDialog({
       }
     }
 
+    const trimmedBaseUrl = baseUrl.trim()
+    if (trimmedBaseUrl && !/^https?:\/\/[^/\s]+/i.test(trimmedBaseUrl)) {
+      toast.error(t('Base URL must start with http:// or https://'))
+      return
+    }
+
     setIsSaving(true)
     try {
       const params: Record<string, string | undefined> = {
@@ -134,6 +141,10 @@ export function TagBatchEditDialog({
 
       if (groups.length > 0) {
         params.groups = groups.join(',')
+      }
+
+      if (trimmedBaseUrl) {
+        params.base_url = trimmedBaseUrl
       }
 
       // Check if there are any changes
@@ -166,6 +177,7 @@ export function TagBatchEditDialog({
     setModels('')
     setModelMapping('')
     setGroups([])
+    setBaseUrl('')
     onOpenChange(false)
   }
 
@@ -211,6 +223,26 @@ export function TagBatchEditDialog({
                 />
                 <p className='text-muted-foreground text-xs'>
                   {t('Leave empty to disband the tag')}
+                </p>
+              </div>
+
+              {/* eflow: Base URL，同一供应商换地址时一次改完 */}
+              <div className='space-y-2'>
+                <Label htmlFor='tag-base-url'>{t('Base URL')}</Label>
+                <Input
+                  id='tag-base-url'
+                  placeholder={t(
+                    'e.g. https://api.example.com (leave empty to keep current)'
+                  )}
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  disabled={isSaving}
+                  className='font-mono'
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {t(
+                    'Overwrites the upstream address of every channel in this tag'
+                  )}
                 </p>
               </div>
 

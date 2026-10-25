@@ -7,10 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/attachment"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service/attachment"
+	"eflow.local/new-api/setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 )
@@ -70,23 +71,24 @@ func runTicketAttachmentCleanupOnce() {
 		return
 	}
 
-	storage, err := attachment.Current()
-	if err != nil {
-		// 后端配置有误时不能阻塞清理循环；下一轮再试。
-		logger.LogWarn(ctx, "ticket attachment storage unavailable during cleanup: "+err.Error())
-		return
-	}
+	settings := setting.GetTicketAttachmentSettings()
 
 	removed := 0
 	for _, a := range orphans {
-		// 幂等删除：存储实现对 NotFound 不会报错。
-		if err := storage.Delete(ctx, a.StorageKey); err != nil {
-			logger.LogWarn(ctx, "delete orphan ticket attachment storage failed: "+err.Error())
-			continue
-		}
-		if err := model.DeleteAttachment(a.Id); err != nil {
+		// 先条件软删记录：期间被绑定到消息的附件保持不动；成功后再幂等删文件。
+		deleted, err := model.DeleteUnboundAttachment(a.Id)
+		if err != nil {
 			logger.LogWarn(ctx, "soft delete orphan ticket attachment record failed: "+err.Error())
 			continue
+		}
+		if !deleted {
+			continue
+		}
+		storage, err := attachment.ForStorageType(settings, a.StorageType)
+		if err != nil {
+			logger.LogWarn(ctx, "ticket attachment storage unavailable during cleanup: "+err.Error())
+		} else if err := storage.Delete(ctx, a.StorageKey); err != nil {
+			logger.LogWarn(ctx, "delete orphan ticket attachment storage failed: "+err.Error())
 		}
 		removed++
 	}

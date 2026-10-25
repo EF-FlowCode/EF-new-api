@@ -85,6 +85,16 @@ export const ADMIN_SETTINGS_DOMAINS: AdminSettingsDomain[] = [
     ],
   },
   {
+    id: 'usage-refunds',
+    sections: [
+      {
+        area: 'maintenance',
+        section: 'usage-refunds',
+        titleKey: 'Batch balance return',
+      },
+    ],
+  },
+  {
     id: 'ticket',
     sections: [
       { area: 'integrations', section: 'ticket', titleKey: 'Ticket System' },
@@ -156,6 +166,11 @@ export const ADMIN_SETTINGS_DOMAINS: AdminSettingsDomain[] = [
       { area: 'maintenance', section: 'performance', titleKey: 'Performance' },
       { area: 'content', section: 'dashboard', titleKey: 'Data Dashboard' },
       { area: 'general', section: 'behavior', titleKey: 'System Behavior' },
+      {
+        area: 'integrations',
+        section: 'web-group-access',
+        titleKey: 'Web Group Access',
+      },
     ],
   },
 ]

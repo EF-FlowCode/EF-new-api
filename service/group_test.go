@@ -3,27 +3,25 @@ package service
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/internal/testconfig"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/ratio_setting"
 )
 
 func TestGetUserEffectiveGroupsMergesPrimaryAndAdditionalCustomerTiers(t *testing.T) {
 	originalRatios := ratio_setting.GroupRatio2JSONString()
 	originalUsable := setting.UserUsableGroups2JSONString()
-	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
-	originalSpecial := specialGroups.ReadAll()
 	t.Cleanup(func() {
 		_ = ratio_setting.UpdateGroupRatioByJSONString(originalRatios)
 		_ = setting.UpdateUserUsableGroupsByJSONString(originalUsable)
-		specialGroups.Clear()
-		specialGroups.AddAll(originalSpecial)
 	})
 	_ = ratio_setting.UpdateGroupRatioByJSONString(`{"base":1,"vip_only":1,"svip_only":1}`)
 	_ = setting.UpdateUserUsableGroupsByJSONString(`{"base":"Base"}`)
-	specialGroups.Clear()
-	specialGroups.AddAll(map[string]map[string]string{
-		"VIP":  {"+:vip_only": "VIP only"},
-		"SVIP": {"+:svip_only": "SVIP only"},
+	testconfig.Set(t, "group_ratio_setting", map[string]string{
+		"group_special_usable_group": testconfig.JSON(t, map[string]map[string]string{
+			"VIP":  {"+:vip_only": "VIP only"},
+			"SVIP": {"+:svip_only": "SVIP only"},
+		}),
 	})
 
 	groups := GetUserEffectiveGroups("VIP", []string{"SVIP"})

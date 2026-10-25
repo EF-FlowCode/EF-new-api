@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { useSystemConfig } from '@/hooks/use-system-config'
+import { HtmlContent } from '@/components/html-content'
 
 interface FooterLink {
   text: string
@@ -67,7 +68,7 @@ export function ProjectAttribution(props: { currentYear: number }) {
           href='https://github.com/QuantumNous/new-api'
           target='_blank'
           rel='noopener noreferrer'
-          className='text-foreground/70 font-medium transition-colors hover:text-foreground'
+          className='text-foreground/70 hover:text-foreground font-medium transition-colors'
         >
           {t('New API')}
         </a>
@@ -76,13 +77,13 @@ export function ProjectAttribution(props: { currentYear: number }) {
       {/* eflow: AGPLv3 §7 author attribution kept verbatim (do NOT translate this
           exact sentence — it is the notice required by upstream's NOTICE file),
           followed by the §13 link to THIS modified version's corresponding source. */}
-      <span className='mt-0.5 block text-muted-foreground/45'>
+      <span className='text-muted-foreground/45 mt-0.5 block'>
         Frontend design and development by New API contributors.{' '}
         <a
           href='https://github.com/EF-FlowCode/EF-new-api'
           target='_blank'
           rel='noopener noreferrer'
-          className='text-foreground/70 font-medium transition-colors hover:text-foreground'
+          className='text-foreground/70 hover:text-foreground font-medium transition-colors'
         >
           {t('Modified version source')}
         </a>
@@ -166,12 +167,18 @@ export function Footer(props: FooterProps) {
 
   if (footerHtml) {
     return (
-      <footer className={cn('border-border/40 relative z-10 border-t', props.className)}>
+      <footer
+        className={cn(
+          'border-border/40 relative z-10 border-t',
+          props.className
+        )}
+      >
         <div className='mx-auto w-full max-w-6xl px-6 py-5'>
           <div className='bg-muted/20 border-border/50 flex flex-col items-center justify-between gap-4 rounded-2xl border px-4 py-4 backdrop-blur-sm sm:flex-row sm:px-5'>
-            <div
+            <HtmlContent
+              content={footerHtml}
+              prose={false}
               className='custom-footer text-muted-foreground min-w-0 text-center text-sm sm:text-left'
-              dangerouslySetInnerHTML={{ __html: footerHtml }}
             />
             <div className='border-border/60 w-full border-t pt-4 sm:w-auto sm:border-t-0 sm:border-l sm:pt-0 sm:pl-5'>
               <ProjectAttribution currentYear={currentYear} />

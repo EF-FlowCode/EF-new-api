@@ -24,15 +24,16 @@ export type GroupSummary = {
   aggregation_interval_minutes?: number
 }
 
+// Mirrors model.ChannelMonitoringStat; rates are -1 when there is no data.
 export type ChannelStat = {
   channel_id: number
   channel_name?: string
-  enabled?: boolean
+  channel_status?: number
   availability_rate?: number | null
   cache_hit_rate?: number | null
-  first_response_time?: number | null
-  test_model?: string
-  last_test_time?: number | string | null
+  avg_frt?: number | null
+  is_online?: boolean
+  updated_at?: number
 }
 
 export type GroupDetail = GroupSummary & {
@@ -66,4 +67,25 @@ export type GroupMonitoringSettingsPatch = {
   monitoring_groups: string[]
   group_categories: Record<string, string>
   category_order: string[]
+}
+
+export type ModelPerformancePoint = {
+  ts: number
+  avg_ttft_ms: number
+  avg_latency_ms: number
+  avg_tps: number
+  success_rate: number
+}
+
+export type MonitoringModel = Omit<ModelPerformancePoint, 'ts'> & {
+  model_name: string
+  group: string
+  series: ModelPerformancePoint[]
+}
+
+export type MonitoringModelsResult = {
+  groups: Record<string, MonitoringModel[]>
+  start_time: number
+  end_time: number
+  bucket_seconds: number
 }

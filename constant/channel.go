@@ -55,12 +55,22 @@ const (
 	ChannelTypeSora           = 55
 	ChannelTypeReplicate      = 56
 	ChannelTypeCodex          = 57
-	ChannelTypeAliHappyhorse  = 58
-	ChannelTypeAliTTS         = 59
-	ChannelTypeAliASR         = 60
-	ChannelTypeAliASRRealtime = 61
-	ChannelTypeDummy          // this one is only for count, do not add any channel after this
+	ChannelTypeDummy          = 58 // this one is only for count, do not add any channel after this
 
+	// ChannelTypeTaskPlugin matches upstream's dedicated task-plugin channel type.
+	ChannelTypeTaskPlugin = 61
+
+	// vLLM / SGLang use upstream's numbers. They are named channels backed by
+	// fixed Advanced Custom route presets (see model.AdvancedCustomPreset).
+	ChannelTypeVLLM   = 62
+	ChannelTypeSGLang = 63
+
+	// eflow: 私有渠道类型放在远离上游的号段，上游 58–63 号可以原样采用。
+	// 2026-10 之前它们是 58–61，存量数据由 MigrateChannelTypeRenumberV1 迁移。
+	ChannelTypeAliHappyhorse  = 1001
+	ChannelTypeAliTTS         = 1002
+	ChannelTypeAliASR         = 1003
+	ChannelTypeAliASRRealtime = 1004
 )
 
 var ChannelBaseURLs = []string{
@@ -122,10 +132,33 @@ var ChannelBaseURLs = []string{
 	"https://api.openai.com",                    //55
 	"https://api.replicate.com",                 //56
 	"https://chatgpt.com",                       //57
-	"https://dashscope.aliyuncs.com",            //58 AliHappyhorse
-	"https://dashscope.aliyuncs.com",            //59 AliTTS
-	"https://dashscope.aliyuncs.com",            //60 AliASR
-	"https://dashscope.aliyuncs.com",            //61 AliASRRealtime
+}
+
+// EflowChannelTypes lists eflow's private channel types outside the upstream range.
+var EflowChannelTypes = []int{
+	ChannelTypeAliHappyhorse,
+	ChannelTypeAliTTS,
+	ChannelTypeAliASR,
+	ChannelTypeAliASRRealtime,
+}
+
+var eflowChannelBaseURLs = map[int]string{
+	ChannelTypeAliHappyhorse:  "https://dashscope.aliyuncs.com",
+	ChannelTypeAliTTS:         "https://dashscope.aliyuncs.com",
+	ChannelTypeAliASR:         "https://dashscope.aliyuncs.com",
+	ChannelTypeAliASRRealtime: "https://dashscope.aliyuncs.com",
+}
+
+// GetChannelBaseURL returns the built-in default base URL of a channel type.
+// Unknown types return "" instead of indexing out of range.
+func GetChannelBaseURL(channelType int) string {
+	if url, ok := eflowChannelBaseURLs[channelType]; ok {
+		return url
+	}
+	if channelType < 0 || channelType >= len(ChannelBaseURLs) {
+		return ""
+	}
+	return ChannelBaseURLs[channelType]
 }
 
 var ChannelTypeNames = map[int]string{
@@ -183,10 +216,25 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeSora:           "Sora",
 	ChannelTypeReplicate:      "Replicate",
 	ChannelTypeCodex:          "Codex",
+	ChannelTypeVLLM:           "vLLM",
+	ChannelTypeSGLang:         "SGLang",
 	ChannelTypeAliHappyhorse:  "AliHappyhorse",
 	ChannelTypeAliTTS:         "AliTTS",
 	ChannelTypeAliASR:         "AliASR",
 	ChannelTypeAliASRRealtime: "AliASRRealtime",
+}
+
+// SupportsAdvancedCustomRoutes reports whether a channel type is relayed by
+// Advanced Custom route configuration. eflow stores user-defined Advanced
+// Custom routes on the legacy Custom type (8) and only uses them when a relay
+// route is configured; vLLM and SGLang always carry a fixed route preset.
+func SupportsAdvancedCustomRoutes(channelType int) bool {
+	switch channelType {
+	case ChannelTypeCustom, ChannelTypeVLLM, ChannelTypeSGLang:
+		return true
+	default:
+		return false
+	}
 }
 
 func GetChannelTypeName(channelType int) string {

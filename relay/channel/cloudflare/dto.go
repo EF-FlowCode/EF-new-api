@@ -1,6 +1,6 @@
 package cloudflare
 
-import "github.com/QuantumNous/new-api/dto"
+import "eflow.local/new-api/dto"
 
 type CfRequest struct {
 	Messages    []dto.Message `json:"messages,omitempty"`

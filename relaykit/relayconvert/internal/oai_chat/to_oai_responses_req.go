@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	relaymedia "eflow.local/new-api/relaykit/relayconvert/internal/media"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
 	"github.com/samber/lo"
 )
 
@@ -224,9 +226,20 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 					"text": part.Text,
 				})
 			case dto.ContentTypeImageURL:
+				var sourceDetail string
+				if img := part.GetImageMedia(); img != nil {
+					sourceDetail = img.Detail
+				}
+				// Message parsing fills a missing detail with "high", so "high"
+				// cannot be told apart from no hint. Keep the Responses default
+				// for it rather than force high-resolution billing on every image.
+				if strings.EqualFold(strings.TrimSpace(sourceDetail), "high") {
+					sourceDetail = ""
+				}
 				contentParts = append(contentParts, map[string]any{
 					"type":      "input_image",
 					"image_url": normalizeChatImageURLToString(part.ImageUrl),
+					"detail":    relaymedia.ResponsesImageDetail(sourceDetail),
 				})
 			case dto.ContentTypeInputAudio:
 				contentParts = append(contentParts, map[string]any{
@@ -355,6 +368,19 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		parallelToolCallsRaw, _ = kitutil.Marshal(*req.ParallelTooCalls)
 	}
 
+	var frequencyPenaltyRaw, presencePenaltyRaw json.RawMessage
+	if req.FrequencyPenalty != nil {
+		frequencyPenaltyRaw, _ = kitutil.Marshal(req.FrequencyPenalty)
+	}
+	if req.PresencePenalty != nil {
+		presencePenaltyRaw, _ = kitutil.Marshal(req.PresencePenalty)
+	}
+
+	var promptCacheKeyRaw json.RawMessage
+	if req.PromptCacheKey != "" {
+		promptCacheKeyRaw, _ = kitutil.Marshal(req.PromptCacheKey)
+	}
+
 	textRaw := convertChatResponseFormatToResponsesText(req.ResponseFormat)
 
 	maxOutputTokens := lo.FromPtrOr(req.MaxTokens, uint(0))
@@ -382,10 +408,13 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		ToolChoice:        toolChoiceRaw,
 		Tools:             toolsRaw,
 		TopP:              topP,
+		FrequencyPenalty:  frequencyPenaltyRaw,
+		PresencePenalty:   presencePenaltyRaw,
 		User:              req.User,
 		ParallelToolCalls: parallelToolCallsRaw,
 		Store:             req.Store,
 		Metadata:          req.Metadata,
+		PromptCacheKey:    promptCacheKeyRaw,
 		EnableThinking:    req.EnableThinking,
 		ThinkingBudget:    req.ThinkingBudget,
 	}
@@ -400,5 +429,14 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		}
 	}
 
+	if req.ReasoningConversion != nil {
+		intent, err := reasoning.FromOpenAIChat(req)
+		if err != nil {
+			return nil, reasoning.AsClientError(err)
+		}
+		if err := reasoning.ApplyToOpenAIResponses(out, intent); err != nil {
+			return nil, reasoning.AsClientError(err)
+		}
+	}
 	return out, nil
 }

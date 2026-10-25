@@ -1,8 +1,8 @@
 package relay
 
 import (
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/types"
 )
 
 func newAPIErrorFromParamOverride(err error) *types.NewAPIError {

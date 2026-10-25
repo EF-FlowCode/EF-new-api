@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting"
+	"github.com/shopspring/decimal"
 	pancake "github.com/waffo-com/waffo-pancake-sdk-go"
 )
 
@@ -26,6 +27,7 @@ type WaffoPancakeCreateSessionParams struct {
 	BuyerEmail              string
 	ExpiresInSeconds        *int
 	OrderMerchantExternalID string
+	RuntimeConfig           setting.WaffoPancakeConfig
 }
 
 // WaffoPancakeCheckoutSession is the response of CreateWaffoPancakeCheckoutSession.
@@ -76,10 +78,10 @@ func (e *WaffoPancakeWebhookEvent) NormalizedEventType() string {
 // runtime checkout / webhook paths use this; configuration endpoints use
 // newWaffoPancakeClientFromCreds so the operator can verify typed-but-not-
 // yet-saved credentials.
-func newWaffoPancakeClient() (*pancake.Client, error) {
+func newWaffoPancakeClient(config setting.WaffoPancakeConfig) (*pancake.Client, error) {
 	return pancake.New(pancake.Config{
-		MerchantID: setting.WaffoPancakeMerchantID,
-		PrivateKey: setting.WaffoPancakePrivateKey,
+		MerchantID: config.MerchantID,
+		PrivateKey: config.PrivateKey,
 	})
 }
 
@@ -106,7 +108,7 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 	if strings.TrimSpace(params.OrderMerchantExternalID) == "" {
 		return nil, fmt.Errorf("missing order merchant external id")
 	}
-	client, err := newWaffoPancakeClient()
+	client, err := newWaffoPancakeClient(params.RuntimeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("build Waffo Pancake client: %w", err)
 	}
@@ -159,10 +161,11 @@ func WaffoPancakeBuyerIdentityFromUserID(userID int) string {
 	return fmt.Sprintf("new-api-user-%d", userID)
 }
 
-// VerifyConfiguredWaffoPancakeWebhook verifies the signature header. The SDK
-// picks the matching test / prod public key from the payload's `mode` field.
-func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string) (*WaffoPancakeWebhookEvent, error) {
-	evt, err := pancake.VerifyWebhookTyped[pancake.WebhookEventData](payload, signatureHeader, nil)
+// VerifyConfiguredWaffoPancakeWebhook verifies the signature header against the
+// given environment's public key only, so a test-key signature can never pass
+// as a production event.
+func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string, env pancake.Environment) (*WaffoPancakeWebhookEvent, error) {
+	evt, err := pancake.VerifyWebhookTyped[pancake.WebhookEventData](payload, signatureHeader, &pancake.VerifyWebhookOptions{Environment: env})
 	if err != nil {
 		return nil, err
 	}
@@ -408,4 +411,29 @@ func ListWaffoPancakeCatalog(ctx context.Context, merchantID, privateKey string)
 		stores[i].OnetimeProducts = active
 	}
 	return &WaffoPancakeCatalog{Stores: stores}, nil
+}
+
+// ValidateWaffoPancakePaidOrder binds a verified completion event to this
+// store and the local order: another merchant's event, a different currency,
+// or an amount below the order price must never credit the wallet.
+func ValidateWaffoPancakePaidOrder(event *WaffoPancakeWebhookEvent, storeID string, orderMoney float64) error {
+	if event == nil {
+		return fmt.Errorf("missing webhook event")
+	}
+	if strings.TrimSpace(storeID) == "" || event.StoreID != strings.TrimSpace(storeID) {
+		return fmt.Errorf("waffo pancake store mismatch: expected=%q actual=%q", storeID, event.StoreID)
+	}
+	if !strings.EqualFold(strings.TrimSpace(event.Data.Currency), "USD") {
+		return fmt.Errorf("waffo pancake currency mismatch: %q", event.Data.Currency)
+	}
+	paid, err := decimal.NewFromString(strings.TrimSpace(event.Data.Amount))
+	if err != nil {
+		return fmt.Errorf("invalid waffo pancake amount %q", event.Data.Amount)
+	}
+	// Tax is added on top of the pre-tax price snapshot, so only an
+	// underpayment is rejected.
+	if paid.LessThan(decimal.NewFromFloat(orderMoney).Sub(decimal.New(1, -2))) {
+		return fmt.Errorf("waffo pancake amount %s below order %.2f", paid.String(), orderMoney)
+	}
+	return nil
 }

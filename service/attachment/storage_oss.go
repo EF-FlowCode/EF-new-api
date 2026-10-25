@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/setting"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 )
 
@@ -23,14 +23,19 @@ type OSSStorage struct {
 	bucket *oss.Bucket
 
 	customDomain string
+	defaultTTL   time.Duration
 }
 
 // NewOSSStorage 按当前 setting 构造 OSS 客户端；任何必填项缺失都返回 ErrStorageNotConfigured。
 func NewOSSStorage() (Storage, error) {
-	endpoint := strings.TrimSpace(setting.TicketAttachmentOSSEndpoint)
-	bucketName := strings.TrimSpace(setting.TicketAttachmentOSSBucket)
-	ak := strings.TrimSpace(setting.TicketAttachmentOSSAccessKeyId)
-	sk := strings.TrimSpace(setting.TicketAttachmentOSSAccessKeySecret)
+	return newOSSStorage(setting.GetTicketAttachmentSettings())
+}
+
+func newOSSStorage(settings setting.TicketAttachmentSettings) (Storage, error) {
+	endpoint := strings.TrimSpace(settings.OSSEndpoint)
+	bucketName := strings.TrimSpace(settings.OSSBucket)
+	ak := strings.TrimSpace(settings.OSSAccessKeyID)
+	sk := strings.TrimSpace(settings.OSSAccessKeySecret)
 	if endpoint == "" || bucketName == "" || ak == "" || sk == "" {
 		return nil, ErrStorageNotConfigured
 	}
@@ -45,7 +50,8 @@ func NewOSSStorage() (Storage, error) {
 	return &OSSStorage{
 		client:       client,
 		bucket:       bucket,
-		customDomain: strings.TrimRight(strings.TrimSpace(setting.TicketAttachmentOSSCustomDomain), "/"),
+		customDomain: strings.TrimRight(strings.TrimSpace(settings.OSSCustomDomain), "/"),
+		defaultTTL:   time.Duration(settings.SignedURLTTL) * time.Second,
 	}, nil
 }
 
@@ -96,7 +102,7 @@ func (s *OSSStorage) Exists(ctx context.Context, key string) (bool, error) {
 
 func (s *OSSStorage) SignedURL(ctx context.Context, key string, ttl time.Duration, filename string) (string, error) {
 	if ttl <= 0 {
-		ttl = time.Duration(setting.TicketAttachmentSignedURLTTL) * time.Second
+		ttl = s.defaultTTL
 	}
 	var opts []oss.Option
 	if filename != "" {

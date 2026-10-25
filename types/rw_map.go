@@ -1,9 +1,10 @@
 package types
 
 import (
+	"maps"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 type RWMap[K comparable, V any] struct {
@@ -46,9 +47,7 @@ func (m *RWMap[K, V]) Set(key K, value V) {
 func (m *RWMap[K, V]) AddAll(other map[K]V) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	for k, v := range other {
-		m.data[k] = v
-	}
+	maps.Copy(m.data, other)
 }
 
 func (m *RWMap[K, V]) Clear() {
@@ -62,9 +61,7 @@ func (m *RWMap[K, V]) ReadAll() map[K]V {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 	copiedMap := make(map[K]V)
-	for k, v := range m.data {
-		copiedMap[k] = v
-	}
+	maps.Copy(copiedMap, m.data)
 	return copiedMap
 }
 

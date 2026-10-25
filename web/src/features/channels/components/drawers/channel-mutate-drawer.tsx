@@ -87,6 +87,7 @@ import { MultiSelect } from '@/components/multi-select'
 import {
   SecureVerificationDialog,
   useSecureVerification,
+  type SecurityProof,
 } from '@/features/auth/secure-verification'
 import {
   createChannel,
@@ -101,21 +102,22 @@ import {
 } from '../../api'
 import {
   ADD_MODE_OPTIONS,
+  CLAUDE_FIELD_PASSTHROUGH_TYPES,
   CHANNEL_TYPE_OPTIONS,
   CHANNEL_TYPE_WARNINGS,
   ERROR_MESSAGES,
   FIELD_DESCRIPTIONS,
   FIELD_PLACEHOLDERS,
-  MODEL_FETCHABLE_TYPES,
+  FIELD_PASSTHROUGH_TYPES,
+  isModelFetchableChannel,
+  OPENAI_FIELD_PASSTHROUGH_TYPES,
+  REQUEST_ENDPOINT_TYPE_OPTIONS,
   SUCCESS_MESSAGES,
 } from '../../constants'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
   channelsQueryKeys,
-  transformChannelToFormDefaults,
-  transformFormDataToCreatePayload,
-  transformFormDataToUpdatePayload,
   type ChannelFormValues,
   deduplicateKeys,
   getChannelTypeIcon,
@@ -125,16 +127,21 @@ import {
   HTTP_PROTOCOL_HTTP1,
   extractRedirectModels,
   extractMappingSourceModels,
-  hasModelConfigChanged,
-  findMissingModelsInMapping,
-  validateModelMappingJson,
+  getChannelEndpointSupport,
 } from '../../lib'
 import {
-  collectInvalidStatusCodeEntries,
-  collectNewDisallowedStatusCodeRedirects,
-} from '../../lib/status-code-risk-guard'
+  cancelPendingChannelMutationConfirmations,
+  createChannelKeyRequestGuard,
+  executeChannelMutation,
+  executeModelDiscovery,
+  hydrateChannelMutation,
+  loadUnlockedChannelKey,
+  planModelDiscovery,
+  settlePendingConfirmation,
+} from '../../lib/channel-mutation-workflow'
 import type { Channel, FetchModelsPreviewParams } from '../../types'
 import { useChannels } from '../channels-provider'
+import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { CodexOAuthDialog } from '../dialogs/codex-oauth-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
 import {
@@ -147,6 +154,7 @@ import { ChannelRateLimitEditor } from '../editors/channel-rate-limit-editor'
 import { ErrorFilterRulesEditor } from '../editors/error-filter-rules-editor'
 import { RiskControlHeadersEditor } from '../editors/risk-control-headers-editor'
 import { ModelMappingEditor } from '../model-mapping-editor'
+import { EndpointSupportSummary } from './endpoint-support-summary'
 
 type ChannelMutateDrawerProps = {
   open: boolean
@@ -228,6 +236,8 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.thinking_to_content ||
     values.pass_through_body_enabled ||
     values.system_prompt_override ||
+    (values.supported_endpoint_types &&
+      values.supported_endpoint_types.length > 0) ||
     values.claude_beta_query ||
     values.upstream_model_update_check_enabled ||
     values.upstream_model_update_auto_sync_enabled ||
@@ -301,12 +311,19 @@ export function ChannelMutateDrawer({
     useState<FetchModelsPreviewParams | null>(null)
   const [channelKey, setChannelKey] = useState<string | null>(null)
   const [isChannelKeyLoading, setIsChannelKeyLoading] = useState(false)
+  const channelKeyRequestGuardRef = useRef<ReturnType<
+    typeof createChannelKeyRequestGuard
+  > | null>(null)
+  if (!channelKeyRequestGuardRef.current) {
+    channelKeyRequestGuardRef.current = createChannelKeyRequestGuard()
+  }
   const [codexOAuthDialogOpen, setCodexOAuthDialogOpen] = useState(false)
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
   const initialModelsRef = useRef<string[]>([])
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
+  const initialStatusRef = useRef<number | undefined>(undefined)
   const [statusCodeRiskOpen, setStatusCodeRiskOpen] = useState(false)
   const [statusCodeRiskDetailItems, setStatusCodeRiskDetailItems] = useState<
     string[]
@@ -321,9 +338,24 @@ export function ChannelMutateDrawer({
   >(null)
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
+  const [advancedCustomEditorOpen, setAdvancedCustomEditorOpen] =
+    useState(false)
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
+  const channelKeyOwnerId = open ? channelId : null
+  channelKeyRequestGuardRef.current.setOwner(channelKeyOwnerId)
+
+  const cancelPendingConfirmations = useCallback(() => {
+    cancelPendingChannelMutationConfirmations(
+      missingModelsResolveRef,
+      statusCodeRiskResolveRef
+    )
+    setMissingModelsDialogOpen(false)
+    setMissingModelsList([])
+    setStatusCodeRiskOpen(false)
+    setStatusCodeRiskDetailItems([])
+  }, [])
 
   // Fetch channel details if editing
   const { data: channelData } = useQuery({
@@ -357,7 +389,7 @@ export function ChannelMutateDrawer({
     methods: verificationMethods,
     state: verificationState,
     executeVerification,
-    withVerification,
+    startVerification,
     cancel: cancelVerification,
     setCode: setVerificationCode,
     switchMethod: switchVerificationMethod,
@@ -365,12 +397,11 @@ export function ChannelMutateDrawer({
 
   useEffect(() => {
     if (!open) {
-      setChannelKey(null)
-      setIsChannelKeyLoading(false)
-    } else if (channelId) {
-      setChannelKey(null)
+      cancelPendingConfirmations()
     }
-  }, [open, channelId])
+    setChannelKey(null)
+    setIsChannelKeyLoading(false)
+  }, [open, channelId, cancelPendingConfirmations])
 
   // Check if this is a multi-key channel
   const isMultiKeyChannel =
@@ -388,6 +419,12 @@ export function ChannelMutateDrawer({
   const keyMode = form.watch('key_mode')
   const currentGroups = form.watch('group')
   const currentType = form.watch('type')
+  const currentAdvancedCustom = form.watch('advanced_custom')
+  const currentSupportedEndpointTypes = form.watch('supported_endpoint_types')
+  const endpointSupport = useMemo(
+    () => getChannelEndpointSupport(currentType, currentAdvancedCustom),
+    [currentType, currentAdvancedCustom]
+  )
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
   const currentModelMapping = form.watch('model_mapping')
@@ -599,24 +636,24 @@ export function ChannelMutateDrawer({
   // Load channel data into form when editing
   useEffect(() => {
     if (isEditing && channelData?.data) {
-      const defaults = transformChannelToFormDefaults(channelData.data)
-      form.reset(defaults)
+      const hydration = hydrateChannelMutation(channelData.data)
+      form.reset(hydration.formValues)
       setAdvancedSettingsOpen(
-        readAdvancedSettingsPreference() || hasAdvancedSettingsValues(defaults)
+        readAdvancedSettingsPreference() ||
+          hasAdvancedSettingsValues(hydration.formValues)
       )
-      // Store initial values for comparison
-      initialModelsRef.current = parseModelsString(
-        channelData.data.models || ''
-      )
-      initialModelMappingRef.current = channelData.data.model_mapping || ''
-      initialStatusCodeMappingRef.current =
-        channelData.data.status_code_mapping || ''
+      initialModelsRef.current = hydration.baseline.models
+      initialModelMappingRef.current = hydration.baseline.modelMapping
+      initialStatusCodeMappingRef.current = hydration.baseline.statusCodeMapping
+      initialStatusRef.current = hydration.baseline.status
     } else if (!isEditing) {
-      form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+      const hydration = hydrateChannelMutation()
+      form.reset(hydration.formValues)
       setAdvancedSettingsOpen(false)
-      initialModelsRef.current = []
-      initialModelMappingRef.current = ''
-      initialStatusCodeMappingRef.current = ''
+      initialModelsRef.current = hydration.baseline.models
+      initialModelMappingRef.current = hydration.baseline.modelMapping
+      initialStatusCodeMappingRef.current = hydration.baseline.statusCodeMapping
+      initialStatusRef.current = hydration.baseline.status
     }
   }, [isEditing, channelData, form])
 
@@ -686,32 +723,43 @@ export function ChannelMutateDrawer({
     }
   }
 
-  const fetchChannelKey = useCallback(async () => {
-    if (!channelId) {
-      throw new Error('Channel is not selected')
-    }
+  const fetchChannelKey = useCallback(
+    async (proof?: SecurityProof) => {
+      if (!channelId) return ''
 
-    setIsChannelKeyLoading(true)
-    try {
-      const res = await getChannelKey(channelId)
-      if (!res.success) {
-        throw new Error(res.message || 'Failed to fetch channel key')
+      const requestScope = channelKeyRequestGuardRef.current!.begin(channelId)
+      if (!requestScope.isCurrent()) return ''
+
+      setIsChannelKeyLoading(true)
+      try {
+        const keyValue = await loadUnlockedChannelKey(channelId, (id) =>
+          getChannelKey(id, proof?.proof_token)
+        )
+        if (!requestScope.isCurrent()) return ''
+        setChannelKey(keyValue)
+        toast.success(t('Channel key unlocked'))
+        return keyValue
+      } catch (error) {
+        if (!requestScope.isCurrent()) return ''
+        throw error
+      } finally {
+        if (requestScope.isCurrent()) {
+          setIsChannelKeyLoading(false)
+        }
       }
-
-      const keyValue = res.data?.key ?? ''
-      setChannelKey(keyValue)
-      toast.success(t('Channel key unlocked'))
-      return res
-    } finally {
-      setIsChannelKeyLoading(false)
-    }
-  }, [channelId, t])
+    },
+    [channelId, t]
+  )
 
   const handleRevealKey = useCallback(async () => {
     if (!channelId) return
 
     try {
-      await withVerification(fetchChannelKey, {
+      await startVerification(fetchChannelKey, {
+        operation: {
+          scope: 'channel.key.read',
+          context: { channel_id: channelId },
+        },
         preferredMethod: 'passkey',
         title: 'Verify to view channel key',
         description:
@@ -722,7 +770,7 @@ export function ChannelMutateDrawer({
         toast.error(error.message)
       }
     }
-  }, [channelId, withVerification, fetchChannelKey])
+  }, [channelId, startVerification, fetchChannelKey])
 
   const handleRefreshCodexCredential = useCallback(async () => {
     if (!channelId) return
@@ -757,58 +805,40 @@ export function ChannelMutateDrawer({
 
   // Handle fetching models from upstream
   const handleFetchModels = useCallback(async () => {
-    const type = form.getValues('type')
+    const plan = planModelDiscovery({
+      formValues: form.getValues(),
+      currentChannel: isEditing ? currentRow : null,
+    })
 
-    if (!MODEL_FETCHABLE_TYPES.has(type)) {
-      toast.error(t('This channel type does not support fetching models'))
-      return
-    }
-
-    // For editing mode, fetch with unsaved connection values when a new key is
-    // provided. Otherwise keep using the saved channel key by ID.
-    if (isEditing && currentRow) {
-      const key = form.getValues('key')?.trim() || ''
-      const baseUrl = form.getValues('base_url')?.trim() || ''
-      const savedBaseUrl = currentRow.base_url?.trim() || ''
-      const connectionChanged =
-        type !== currentRow.type || baseUrl !== savedBaseUrl
-
-      if (connectionChanged && !key) {
+    if (plan.kind === 'blocked') {
+      if (plan.reason === 'unsupported-channel') {
+        toast.error(t('This channel type does not support fetching models'))
+      } else if (plan.reason === 'changed-connection-key-required') {
         toast.error(
           t(
             'Enter a new API key to fetch models with unsaved connection settings'
           )
         )
-        return
+      } else {
+        toast.error(t('Please enter API key first'))
       }
-
-      setFetchModelsPreviewRequest(
-        key ? { type, key, base_url: baseUrl } : null
-      )
-      setFetchModelsDialogOpen(true)
       return
     }
 
-    // For creation mode, fetch and fill all models
-    const key = form.getValues('key')
-    if (!key?.trim()) {
-      toast.error(t('Please enter API key first'))
+    if (plan.kind === 'preview') {
+      setFetchModelsPreviewRequest(plan.request)
+      setFetchModelsDialogOpen(true)
       return
     }
 
     setIsFetchingModels(true)
     try {
-      const response = await fetchModels({
-        type,
-        key,
-        base_url: form.getValues('base_url') || '',
-      })
-
-      if (response.success && response.data) {
-        updateModels(response.data, true)
+      const result = await executeModelDiscovery(plan, fetchModels)
+      if (result.kind === 'fetched') {
+        updateModels(result.models, true)
         toast.success(
           t('Fetched {{count}} model(s) from upstream', {
-            count: response.data.length,
+            count: result.models.length,
           })
         )
       } else {
@@ -904,10 +934,9 @@ export function ChannelMutateDrawer({
 
   // Handle successful submission
   const handleSuccess = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     onOpenChange(false)
     setOpen(null)
-  }, [queryClient, onOpenChange, setOpen])
+  }, [onOpenChange, setOpen])
 
   // Show missing models confirmation dialog
   const confirmMissingModelMappings = useCallback(
@@ -925,10 +954,7 @@ export function ChannelMutateDrawer({
   const handleMissingModelsAction = useCallback(
     (action: MissingModelsAction) => {
       setMissingModelsDialogOpen(false)
-      if (missingModelsResolveRef.current) {
-        missingModelsResolveRef.current(action)
-        missingModelsResolveRef.current = null
-      }
+      settlePendingConfirmation(missingModelsResolveRef, action)
     },
     []
   )
@@ -946,138 +972,90 @@ export function ChannelMutateDrawer({
   const handleStatusCodeRiskAction = useCallback((confirmed: boolean) => {
     setStatusCodeRiskOpen(false)
     setStatusCodeRiskDetailItems([])
-    if (statusCodeRiskResolveRef.current) {
-      statusCodeRiskResolveRef.current(confirmed)
-      statusCodeRiskResolveRef.current = null
-    }
+    settlePendingConfirmation(statusCodeRiskResolveRef, confirmed)
   }, [])
 
-  useEffect(() => {
-    return () => {
-      if (statusCodeRiskResolveRef.current) {
-        statusCodeRiskResolveRef.current(false)
-        statusCodeRiskResolveRef.current = null
-      }
-    }
-  }, [])
+  useEffect(
+    () => () => cancelPendingConfirmations(),
+    [cancelPendingConfirmations]
+  )
 
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
-      // Validate key is required when creating
-      if (!isEditing && !data.key?.trim()) {
-        form.setError('key', {
-          type: 'manual',
-          message: 'API key is required',
-        })
-        return
-      }
-
-      // Validate status_code_mapping entries
-      if (data.status_code_mapping?.trim()) {
-        const invalidEntries = collectInvalidStatusCodeEntries(
-          data.status_code_mapping
-        )
-        if (invalidEntries.length > 0) {
-          toast.error(
-            t('Invalid status code mapping entries: {{entries}}', {
-              entries: invalidEntries.join(', '),
-            })
-          )
-          return
-        }
-
-        const riskyRedirects = collectNewDisallowedStatusCodeRedirects(
-          initialStatusCodeMappingRef.current,
-          data.status_code_mapping
-        )
-        if (riskyRedirects.length > 0) {
-          const confirmed = await confirmStatusCodeRisk(riskyRedirects)
-          if (!confirmed) return
-        }
-      }
-
-      // Validate model_mapping JSON format
-      const hasModelMapping =
-        typeof data.model_mapping === 'string' &&
-        data.model_mapping.trim() !== ''
-
-      if (hasModelMapping) {
-        const validation = validateModelMappingJson(data.model_mapping!)
-        if (!validation.valid) {
-          toast.error(t(validation.error || 'Invalid model mapping'))
-          return
-        }
-      }
-
-      // Normalize models array
-      const normalizedModels = parseModelsString(data.models || '')
-
-      // Check for missing models in model_mapping
-      if (hasModelMapping) {
-        const missingModels = findMissingModelsInMapping(
-          data.model_mapping!,
-          normalizedModels
-        )
-
-        const shouldPromptMissing =
-          missingModels.length > 0 &&
-          hasModelConfigChanged(
-            normalizedModels,
-            data.model_mapping || '',
-            initialModelsRef.current,
-            initialModelMappingRef.current
-          )
-
-        if (shouldPromptMissing) {
-          const confirmAction = await confirmMissingModelMappings(missingModels)
-          if (confirmAction === 'cancel') {
-            return
-          }
-          if (confirmAction === 'add') {
-            const updatedModels = Array.from(
-              new Set([...normalizedModels, ...missingModels])
-            )
-            data.models = formatModelsArray(updatedModels)
-            form.setValue('models', data.models)
-          }
-        }
-      }
-
-      setIsSubmitting(true)
-      try {
-        if (isEditing && currentRow) {
-          // Update existing channel
-          const payload = transformFormDataToUpdatePayload(data, currentRow.id)
-          const payloadWithKeyMode =
-            isMultiKeyChannel && data.key_mode
+      const outcome = await executeChannelMutation(
+        {
+          formValues: data,
+          baseline: {
+            models: initialModelsRef.current,
+            modelMapping: initialModelMappingRef.current,
+            statusCodeMapping: initialStatusCodeMappingRef.current,
+            status: initialStatusRef.current,
+          },
+          target:
+            isEditing && currentRow
               ? {
-                  ...payload,
-                  key_mode: data.key_mode,
+                  kind: 'update',
+                  channelId: currentRow.id,
+                  isMultiKey: isMultiKeyChannel,
                 }
-              : payload
-
-          const response = await updateChannel(
-            currentRow.id,
-            payloadWithKeyMode
-          )
-          if (response.success) {
-            toast.success(t(SUCCESS_MESSAGES.UPDATED))
-            handleSuccess()
-          }
-        } else {
-          // Create new channel(s)
-          const payload = transformFormDataToCreatePayload(data)
-          const response = await createChannel(payload)
-          if (response.success) {
-            toast.success(t(SUCCESS_MESSAGES.CREATED))
-            handleSuccess()
-          }
+              : { kind: 'create' },
+        },
+        {
+          confirmMissingModels: confirmMissingModelMappings,
+          confirmStatusCodeRisk,
+          createChannel,
+          updateChannel,
+          refreshChannels: () => {
+            void queryClient.invalidateQueries({
+              queryKey: channelsQueryKeys.lists(),
+            })
+          },
+          onModelsChanged: (models) => form.setValue('models', models),
+          onRequestStateChange: setIsSubmitting,
         }
-      } catch (error: unknown) {
-        toast.error(getErrorMessage(error) || t(ERROR_MESSAGES.CREATE_FAILED))
-      } finally {
-        setIsSubmitting(false)
+      )
+
+      if (outcome.status === 'field-error') {
+        form.setError(outcome.field, {
+          type: 'manual',
+          message: outcome.message,
+        })
+      } else if (
+        outcome.status === 'validation-error' &&
+        outcome.reason === 'invalid-status-code-mapping'
+      ) {
+        toast.error(
+          t('Invalid status code mapping entries: {{entries}}', {
+            entries: outcome.entries.join(', '),
+          })
+        )
+      } else if (outcome.status === 'validation-error') {
+        toast.error(t(outcome.message))
+      } else if (outcome.status === 'rejected') {
+        toast.error(
+          outcome.message ||
+            t(
+              outcome.operation === 'update'
+                ? ERROR_MESSAGES.UPDATE_FAILED
+                : ERROR_MESSAGES.CREATE_FAILED
+            )
+        )
+      } else if (outcome.status === 'request-error') {
+        toast.error(
+          getErrorMessage(outcome.error) ||
+            t(
+              outcome.operation === 'update'
+                ? ERROR_MESSAGES.UPDATE_FAILED
+                : ERROR_MESSAGES.CREATE_FAILED
+            )
+        )
+      } else if (outcome.status === 'created') {
+        toast.success(t(SUCCESS_MESSAGES.CREATED))
+        handleSuccess()
+      } else if (outcome.status === 'updated') {
+        toast.success(t(SUCCESS_MESSAGES.UPDATED))
+        handleSuccess()
       }
     },
     [
@@ -1088,6 +1066,7 @@ export function ChannelMutateDrawer({
       handleSuccess,
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
+      queryClient,
       t,
     ]
   )
@@ -1097,11 +1076,12 @@ export function ChannelMutateDrawer({
     (v: boolean) => {
       onOpenChange(v)
       if (!v) {
+        cancelPendingConfirmations()
         form.reset(CHANNEL_FORM_DEFAULT_VALUES)
         setAdvancedSettingsOpen(false)
       }
     },
-    [onOpenChange, form]
+    [onOpenChange, form, cancelPendingConfirmations]
   )
 
   const handleAdvancedSettingsOpenChange = useCallback((nextOpen: boolean) => {
@@ -1325,33 +1305,73 @@ export function ChannelMutateDrawer({
 
                 {/* Custom (type 8) */}
                 {currentType === 8 && (
-                  <FormField
-                    control={form.control}
-                    name='base_url'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>
-                          {t('Full Base URL (supports')} {'{'}
-                          {t('model')}
-                          {'}'} {t('variable) *')}
-                        </FormLabel>
-                        <FormControl>
-                          <Input
-                            placeholder={t(
-                              'e.g., https://api.openai.com/v1/chat/completions'
-                            )}
-                            {...field}
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          {t('Enter the complete URL, supports')} {'{'}
-                          {t('model')}
-                          {'}'} {t('variable')}
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                  <div className='space-y-4'>
+                    <FormField
+                      control={form.control}
+                      name='base_url'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>
+                            {t('Full Base URL (supports')} {'{'}
+                            {t('model')}
+                            {'}'} {t('variable) *')}
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder={t(
+                                'e.g., https://api.openai.com/v1/chat/completions'
+                              )}
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t('Enter the complete URL, supports')} {'{'}
+                            {t('model')}
+                            {'}'} {t('variable')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={form.control}
+                      name='advanced_custom'
+                      render={({ field }) => (
+                        <FormItem>
+                          <div className='flex items-center justify-between gap-3'>
+                            <div>
+                              <FormLabel>
+                                {t('Advanced Custom Routes')}
+                              </FormLabel>
+                              <FormDescription>
+                                {t(
+                                  'Optional route rules and management endpoints for this Custom channel.'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <Button
+                              type='button'
+                              variant='outline'
+                              size='sm'
+                              onClick={() => setAdvancedCustomEditorOpen(true)}
+                            >
+                              <Code
+                                className='mr-1.5 size-4'
+                                aria-hidden='true'
+                              />
+                              {field.value?.trim()
+                                ? t('Edit routes')
+                                : t('Configure')}
+                            </Button>
+                          </div>
+                          <FormControl>
+                            <input type='hidden' {...field} />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
                 )}
 
                 {/* Xunfei/Spark (type 18) */}
@@ -1436,6 +1456,41 @@ export function ChannelMutateDrawer({
                             : t(
                                 'AK/SK mode: use AccessKey|SecretAccessKey|Region'
                               )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+                {currentType === 33 && (
+                  <FormField
+                    control={form.control}
+                    name='aws_api_type'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('AWS API')}</FormLabel>
+                        <Select
+                          onValueChange={field.onChange}
+                          value={field.value ?? 'invoke_model'}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value='invoke_model'>
+                              {t('InvokeModel (legacy)')}
+                            </SelectItem>
+                            <SelectItem value='mantle'>
+                              {t('Mantle (Messages API)')}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          {t(
+                            'Use Mantle for supported Claude models and automatic prompt caching. Keep InvokeModel for older models and Amazon Nova.'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -1597,6 +1652,29 @@ export function ChannelMutateDrawer({
                         </FormItem>
                       )}
                     />
+                    {form.watch('vertex_key_type') === 'api_key' && (
+                      <FormField
+                        control={form.control}
+                        name='vertex_project_id'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Vertex AI Project ID')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder={t('e.g., my-project-123')}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Optional. Without it, Google picks the region; with it, requests go to the deployment region below.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
                     {form.watch('vertex_key_type') === 'json' && (
                       <FormItem>
                         <FormLabel>
@@ -2094,7 +2172,8 @@ export function ChannelMutateDrawer({
                   />
                 )}
 
-                {!isEditing && multiKeyMode === 'multi_to_single' && (
+                {(isMultiKeyChannel ||
+                  (!isEditing && multiKeyMode === 'multi_to_single')) && (
                   <FormField
                     control={form.control}
                     name='multi_key_type'
@@ -2183,7 +2262,10 @@ export function ChannelMutateDrawer({
                               <Plus className='mr-2 h-4 w-4' />
                               {t('Fill All Models')}
                             </Button>
-                            {MODEL_FETCHABLE_TYPES.has(currentType) && (
+                            {isModelFetchableChannel(
+                              currentType,
+                              currentAdvancedCustom
+                            ) && (
                               <Button
                                 type='button'
                                 variant='outline'
@@ -2823,7 +2905,53 @@ export function ChannelMutateDrawer({
                       title={t('Channel Extra Settings')}
                       icon={<Settings className='h-4 w-4' />}
                     />
-                    {(currentType === 1 || currentType === 14) && (
+                    <div className='space-y-2'>
+                      <div className='text-sm font-medium'>
+                        {t('Supported request endpoints')}
+                      </div>
+                      <EndpointSupportSummary
+                        support={endpointSupport}
+                        overridden={
+                          endpointSupport.source === 'type' &&
+                          (currentSupportedEndpointTypes?.length ?? 0) > 0
+                        }
+                        currentType={currentType}
+                        onEditRoutes={() => setAdvancedCustomEditorOpen(true)}
+                      />
+                    </div>
+                    {endpointSupport.source === 'type' && (
+                      <FormField
+                        control={form.control}
+                        name='supported_endpoint_types'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              {t('Manual endpoint override (optional)')}
+                            </FormLabel>
+                            <FormDescription>
+                              {t(
+                                'Only needed when the upstream supports fewer endpoints than the channel type. When set, it replaces the automatic list.'
+                              )}
+                            </FormDescription>
+                            <FormControl>
+                              <MultiSelect
+                                options={REQUEST_ENDPOINT_TYPE_OPTIONS.map(
+                                  (option) => ({
+                                    ...option,
+                                    label: t(option.label),
+                                  })
+                                )}
+                                selected={field.value || []}
+                                onChange={field.onChange}
+                                placeholder={t('Select supported endpoints')}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    )}
+                    {FIELD_PASSTHROUGH_TYPES.has(currentType) && (
                       <div className='space-y-3 rounded-lg border p-4'>
                         <SubHeading
                           title={t('Field passthrough controls')}
@@ -2854,7 +2982,7 @@ export function ChannelMutateDrawer({
                             )}
                           />
 
-                          {currentType === 1 && (
+                          {OPENAI_FIELD_PASSTHROUGH_TYPES.has(currentType) && (
                             <>
                               <FormField
                                 control={form.control}
@@ -2964,7 +3092,7 @@ export function ChannelMutateDrawer({
                             </>
                           )}
 
-                          {currentType === 14 && (
+                          {CLAUDE_FIELD_PASSTHROUGH_TYPES.has(currentType) && (
                             <>
                               <FormField
                                 control={form.control}
@@ -3327,6 +3455,11 @@ export function ChannelMutateDrawer({
                                   }
                                 />
                               </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Optional for nap_ access tokens; required for legacy system access tokens.'
+                                )}
+                              </FormDescription>
                               <FormMessage />
                             </FormItem>
                           )}
@@ -3334,7 +3467,10 @@ export function ChannelMutateDrawer({
                       </div>
                     </div>
 
-                    {MODEL_FETCHABLE_TYPES.has(currentType) && (
+                    {isModelFetchableChannel(
+                      currentType,
+                      currentAdvancedCustom
+                    ) && (
                       <div className='space-y-3 rounded-lg border p-4'>
                         <SubHeading
                           title={t('Upstream Model Detection Settings')}
@@ -3544,6 +3680,20 @@ export function ChannelMutateDrawer({
         />
       )}
 
+      {advancedCustomEditorOpen && (
+        <AdvancedCustomEditorDialog
+          open={advancedCustomEditorOpen}
+          value={form.watch('advanced_custom') || ''}
+          onOpenChange={setAdvancedCustomEditorOpen}
+          onSave={(nextValue) => {
+            form.setValue('advanced_custom', nextValue, {
+              shouldDirty: true,
+              shouldValidate: true,
+            })
+          }}
+        />
+      )}
+
       {/* Fetch Models Dialog (for editing mode) */}
       {isEditing && currentRow && (
         <FetchModelsDialog
@@ -3570,6 +3720,7 @@ export function ChannelMutateDrawer({
             cancelVerification()
           }
         }}
+        // The server only offers 2FA or Passkey for channel keys.
         methods={verificationMethods}
         state={verificationState}
         onVerify={async (method, code) => {
@@ -3585,7 +3736,9 @@ export function ChannelMutateDrawer({
         open={missingModelsDialogOpen}
         missingModels={missingModelsList}
         onConfirm={handleMissingModelsAction}
-        onOpenChange={setMissingModelsDialogOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) handleMissingModelsAction('cancel')
+        }}
       />
 
       <StatusCodeRiskDialog

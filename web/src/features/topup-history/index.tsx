@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
 import { Coins, ReceiptText, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getRequestErrorMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useIsAdmin, useIsStaff } from '@/hooks/use-admin'
-import { useDebounce } from '@/hooks/use-debounce'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,10 +35,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  ServerPagination,
+  useLatestRequest,
+  useServerPagination,
+} from '@/components/data-table'
 import { DateTimePicker } from '@/components/datetime-picker'
 import { InvoiceTicketDialog } from '@/features/tickets/components/invoice-ticket-dialog'
 import { adminCompleteTopup, fetchTopups, type TopupListParams } from './api'
 import type { TopupRecord, TopupStatus } from './types'
+
+const route = getRouteApi('/_authenticated/topup-history/')
 
 const STATUS_OPTIONS: Array<{ value: 'all' | TopupStatus; labelKey: string }> =
   [
@@ -78,8 +86,6 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   wxpay: 'WeChat Pay',
 }
 
-const PAGE_SIZES = [10, 20, 50, 100]
-
 function formatTimestamp(unixSec: number | undefined): string {
   if (!unixSec) return '—'
   return new Date(unixSec * 1000).toLocaleString([], {
@@ -100,15 +106,30 @@ export function TopupHistory() {
   const admin = useIsStaff()
   const canCompleteTopup = useIsAdmin()
 
-  const [keyword, setKeyword] = useState('')
-  const [status, setStatus] = useState<'all' | TopupStatus>('all')
-  const [startDate, setStartDate] = useState<Date | undefined>()
-  const [endDate, setEndDate] = useState<Date | undefined>()
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
   const [items, setItems] = useState<TopupRecord[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const pagination = useServerPagination({
+    search,
+    navigate,
+    total,
+    defaultPageSize: 10,
+  })
+  const { page, pageSize } = pagination
+  const runListRequest = useLatestRequest()
+  const appliedKeyword = search.filter ?? ''
+  const status: 'all' | TopupStatus = search.status ?? 'all'
+  const startDate = useMemo(
+    () => (search.startTime ? new Date(search.startTime * 1000) : undefined),
+    [search.startTime]
+  )
+  const endDate = useMemo(
+    () => (search.endTime ? new Date(search.endTime * 1000) : undefined),
+    [search.endTime]
+  )
+  const [keyword, setKeyword] = useState(appliedKeyword)
   const [completingTradeNo, setCompletingTradeNo] = useState<string | null>(
     null
   )
@@ -117,66 +138,69 @@ export function TopupHistory() {
   >(null)
   const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false)
 
-  const debouncedKeyword = useDebounce(keyword, 350)
+  useEffect(() => setKeyword(appliedKeyword), [appliedKeyword])
 
   const params = useMemo<TopupListParams>(
     () => ({
       page,
       pageSize,
-      keyword: debouncedKeyword || undefined,
+      keyword: appliedKeyword || undefined,
       status: status === 'all' ? undefined : status,
-      startTime: startDate ? Math.floor(startDate.getTime() / 1000) : undefined,
-      endTime: endDate ? Math.floor(endDate.getTime() / 1000) : undefined,
+      startTime: search.startTime,
+      endTime: search.endTime,
       admin,
     }),
-    [page, pageSize, debouncedKeyword, status, startDate, endDate, admin]
+    [
+      page,
+      pageSize,
+      appliedKeyword,
+      status,
+      search.startTime,
+      search.endTime,
+      admin,
+    ]
+  )
+  const paramsRef = useRef(params)
+  paramsRef.current = params
+
+  const refresh = useCallback(
+    async (requestParams: TopupListParams) => {
+      setLoading(true)
+      await runListRequest((signal) => fetchTopups(requestParams, signal), {
+        onSuccess: (data) => {
+          setItems(data.items || [])
+          setTotal(data.total || 0)
+        },
+        onError: (error) => {
+          toast.error(
+            getRequestErrorMessage(error, t('Failed to load topup history'))
+          )
+          setItems([])
+          setTotal(0)
+        },
+        onSettled: () => setLoading(false),
+      })
+    },
+    [runListRequest, t]
   )
 
   useEffect(() => {
-    let active = true
-    setLoading(true)
-    fetchTopups(params)
-      .then((data) => {
-        if (!active) return
-        setItems(data.items || [])
-        setTotal(data.total || 0)
-      })
-      .catch((e) => {
-        if (!active) return
-        toast.error(
-          e instanceof Error ? e.message : t('Failed to load topup history')
-        )
-        setItems([])
-        setTotal(0)
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
-    }
-  }, [params, t])
+    void refresh(params)
+  }, [params, refresh])
 
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setPage(1)
-  }, [debouncedKeyword, status, startDate, endDate, pageSize])
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  const applyKeyword = () => {
+    const nextKeyword = keyword.trim()
+    pagination.resetPage({ filter: nextKeyword || undefined })
+  }
 
   const handleAdminComplete = async (tradeNo: string) => {
     setCompletingTradeNo(tradeNo)
     try {
       await adminCompleteTopup(tradeNo)
       toast.success(t('Order completed'))
-      // Refetch
-      const data = await fetchTopups(params)
-      setItems(data.items || [])
-      setTotal(data.total || 0)
+      await refresh(paramsRef.current)
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to complete order')
-      )
+      toast.error(getRequestErrorMessage(e, t('Failed to complete order')))
     } finally {
       setCompletingTradeNo(null)
       setPendingCompleteTradeNo(null)
@@ -211,7 +235,11 @@ export function TopupHistory() {
           </Button>
           <Select
             value={status}
-            onValueChange={(v) => setStatus(v as 'all' | TopupStatus)}
+            onValueChange={(value) =>
+              pagination.resetPage({
+                status: value === 'all' ? undefined : value,
+              })
+            }
           >
             <SelectTrigger className='w-full sm:w-[140px]'>
               <SelectValue />
@@ -226,24 +254,49 @@ export function TopupHistory() {
           </Select>
           <DateTimePicker
             value={startDate}
-            onChange={setStartDate}
+            onChange={(value) =>
+              pagination.resetPage({
+                startTime: value
+                  ? Math.floor(value.getTime() / 1000)
+                  : undefined,
+              })
+            }
             placeholder={t('Start time')}
             className='col-span-2 w-full sm:w-[200px]'
           />
           <DateTimePicker
             value={endDate}
-            onChange={setEndDate}
+            onChange={(value) =>
+              pagination.resetPage({
+                endTime: value ? Math.floor(value.getTime() / 1000) : undefined,
+              })
+            }
             placeholder={t('End time')}
             className='col-span-2 w-full sm:w-[200px]'
           />
-          <div className='relative col-span-2 w-full sm:w-[220px]'>
+          <div className='relative col-span-2 flex w-full items-center gap-2 sm:w-[300px]'>
             <Search className='text-muted-foreground absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2' />
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  applyKeyword()
+                }
+              }}
               placeholder={t('Search trade number')}
-              className='pl-8'
+              className='min-w-0 flex-1 pl-8'
             />
+            <Button
+              variant='outline'
+              size='sm'
+              className='h-9 shrink-0 sm:h-8'
+              onClick={applyKeyword}
+            >
+              <Search className='size-3.5' />
+              {t('Search')}
+            </Button>
           </div>
         </div>
 
@@ -445,52 +498,11 @@ export function TopupHistory() {
           </Table>
         </div>
 
-        {/* Pagination */}
-        {total > 0 && (
-          <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-            <div className='text-muted-foreground text-xs'>
-              {t('Total {{n}} records', { n: total })}
-            </div>
-            <div className='flex flex-wrap items-center gap-2'>
-              <Select
-                value={String(pageSize)}
-                onValueChange={(v) => setPageSize(Number(v))}
-              >
-                <SelectTrigger className='w-[100px]'>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAGE_SIZES.map((size) => (
-                    <SelectItem key={size} value={String(size)}>
-                      {t('{{n}} / page', { n: size })}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                disabled={page <= 1 || loading}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-              >
-                {t('Previous')}
-              </Button>
-              <span className='text-muted-foreground text-xs'>
-                {t('Page {{p}} / {{total}}', { p: page, total: totalPages })}
-              </span>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                disabled={page >= totalPages || loading}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              >
-                {t('Next')}
-              </Button>
-            </div>
-          </div>
-        )}
+        <ServerPagination
+          table={pagination.table}
+          total={total}
+          loading={loading}
+        />
       </div>
 
       <InvoiceTicketDialog

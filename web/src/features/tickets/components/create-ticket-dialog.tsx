@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { api } from '@/lib/api'
+import { displayAmountToQuota, formatQuotaWithCurrency } from '@/lib/currency'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -19,26 +22,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs'
-import {
-  displayAmountToQuota,
-  formatQuotaWithCurrency,
-} from '@/lib/currency'
-import { api } from '@/lib/api'
-import { useAuthStore } from '@/stores/auth-store'
 import { createRefundTicket, createTicket } from '../api'
 import { useTicketAttachments } from '../hooks/use-ticket-attachments'
-import {
-  TICKET_PRIORITY,
-  type TicketPriority,
-  type TicketType,
-} from '../types'
+import { TICKET_PRIORITY, type TicketPriority, type TicketType } from '../types'
 import { AttachmentPicker } from './attachment-picker'
 
 type Props = {
@@ -114,9 +102,7 @@ function GeneralTicketForm({
       onCreated()
       onClose()
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to create ticket')
-      )
+      toast.error(e instanceof Error ? e.message : t('Failed to create ticket'))
     } finally {
       setSubmitting(false)
     }
@@ -282,9 +268,7 @@ function RefundTicketForm({
       onCreated()
       onClose()
     } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to create ticket')
-      )
+      toast.error(e instanceof Error ? e.message : t('Failed to create ticket'))
     } finally {
       setSubmitting(false)
     }
@@ -376,7 +360,9 @@ function RefundTicketForm({
             />
             {payeeAccount.trim().length > 0 && !phoneValid && (
               <p className='text-destructive text-xs'>
-                {t('Please enter a valid 11-digit mainland China mobile number')}
+                {t(
+                  'Please enter a valid 11-digit mainland China mobile number'
+                )}
               </p>
             )}
           </div>
@@ -440,7 +426,9 @@ export function CreateTicketDialog({ open, onOpenChange, onCreated }: Props) {
         <DialogHeader>
           <DialogTitle>{t('New ticket')}</DialogTitle>
           <DialogDescription>
-            {t('Submit a question, request, or refund. Invoice requests live on the topup history page.')}
+            {t(
+              'Submit a question, request, or refund. Invoice requests live on the topup history page.'
+            )}
           </DialogDescription>
         </DialogHeader>
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabValue)}>

@@ -21,15 +21,14 @@ import {
   MATCH_LT,
   MATCH_RANGE,
   SOURCE_TIME,
+  formatTierConditionSummary,
   normalizeTierLabel,
   parseTiersFromExpr,
   splitBillingExprAndRequestRules,
   tryParseRequestRuleExpr,
-  type ParamTierCondition,
   type ParsedTier,
   type RequestCondition,
   type RequestRuleGroup,
-  type TierCondition,
 } from '../lib/billing-expr'
 
 type DynamicPricingBreakdownProps = {
@@ -49,54 +48,12 @@ type DynamicPricingBreakdownProps = {
   hideCacheColumns?: boolean
 }
 
-const VAR_LABELS: Record<string, string> = {
-  p: 'Input',
-  c: 'Output',
-  len: 'Length',
-}
-const OP_LABELS: Record<string, string> = {
-  '<': '<',
-  '<=': '≤',
-  '>': '>',
-  '>=': '≥',
-}
 const TIME_FUNC_LABELS: Record<string, string> = {
   hour: 'Hour',
   minute: 'Minute',
   weekday: 'Weekday',
   month: 'Month',
   day: 'Day',
-}
-
-function formatTokenHint(value: string | number): string {
-  const n = Number(value)
-  if (!Number.isFinite(n) || n === 0) return ''
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
-  }
-  if (n >= 1000) {
-    return `${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}K`
-  }
-  return String(n)
-}
-
-function formatConditionSummary(
-  conditions: TierCondition[],
-  t: (key: string) => string,
-  paramConditions: ParamTierCondition[] = []
-): string {
-  const tokenParts = conditions
-    .map((c) => {
-      const varLabel = t(VAR_LABELS[c.var] || c.var)
-      const hint = formatTokenHint(c.value)
-      return `${varLabel} ${OP_LABELS[c.op] || c.op} ${hint || c.value}`
-    })
-    .filter(Boolean)
-  // eflow: also show param conditions (e.g. `resolution = "1080p"`)
-  const paramParts = paramConditions.map(
-    (c) => `${c.path} ${c.op === '!=' ? '≠' : '='} "${c.value}"`
-  )
-  return [...tokenParts, ...paramParts].join(' && ')
 }
 
 // eflow: short unit suffix for per-param pricing display (e.g. ¥0.50/秒)
@@ -269,7 +226,7 @@ export function DynamicPricingBreakdown({
           </div>
           <div className='space-y-1.5 sm:hidden'>
             {tiers.map((tier, i) => {
-              const condSummary = formatConditionSummary(
+              const condSummary = formatTierConditionSummary(
                 tier.conditions,
                 t,
                 tier.paramConditions
@@ -283,8 +240,7 @@ export function DynamicPricingBreakdown({
                   key={`tier-mobile-${i}`}
                   className={cn(
                     'rounded-md border p-2',
-                    isMatched &&
-                      'border-emerald-500/40 bg-emerald-500/10'
+                    isMatched && 'border-emerald-500/40 bg-emerald-500/10'
                   )}
                 >
                   <div className='mb-1.5 flex flex-wrap items-center gap-1.5'>
@@ -374,11 +330,11 @@ export function DynamicPricingBreakdown({
               </TableHeader>
               <TableBody>
                 {tiers.map((tier, i) => {
-                  const condSummary = formatConditionSummary(
-                tier.conditions,
-                t,
-                tier.paramConditions
-              )
+                  const condSummary = formatTierConditionSummary(
+                    tier.conditions,
+                    t,
+                    tier.paramConditions
+                  )
                   const isMatched =
                     normalizedMatchedTierLabel !== '' &&
                     normalizeTierLabel(tier.label) ===

@@ -27,6 +27,8 @@ export function useProfile() {
 
       if (response.success && response.data) {
         setProfile(response.data)
+      } else if (!silent) {
+        toast.error(response.message || i18next.t('Failed to load profile'))
       }
     } catch (error) {
       // eslint-disable-next-line no-console

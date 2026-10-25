@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay/channel/codex"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/relay/channel/codex"
+	"eflow.local/new-api/service"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -23,6 +23,8 @@ import (
 type codexOAuthCompleteRequest struct {
 	Input string `json:"input"`
 }
+
+const codexOAuthFlowMaxAge = 10 * time.Minute
 
 func codexOAuthSessionKey(channelID int, field string) string {
 	return fmt.Sprintf("codex_oauth_%s_%d", field, channelID)
@@ -166,7 +168,14 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 	session := sessions.Default(c)
 	expectedState, _ := session.Get(codexOAuthSessionKey(channelID, "state")).(string)
 	verifier, _ := session.Get(codexOAuthSessionKey(channelID, "verifier")).(string)
-	if strings.TrimSpace(expectedState) == "" || strings.TrimSpace(verifier) == "" {
+	createdAt, _ := session.Get(codexOAuthSessionKey(channelID, "created_at")).(int64)
+	// eflow: 授权流程一次有效：读出后立即清除，state 不符、交换失败或超过有效期都要重新发起。
+	session.Delete(codexOAuthSessionKey(channelID, "state"))
+	session.Delete(codexOAuthSessionKey(channelID, "verifier"))
+	session.Delete(codexOAuthSessionKey(channelID, "created_at"))
+	_ = session.Save()
+	if strings.TrimSpace(expectedState) == "" || strings.TrimSpace(verifier) == "" ||
+		createdAt == 0 || time.Since(time.Unix(createdAt, 0)) > codexOAuthFlowMaxAge {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "oauth flow not started or session expired"})
 		return
 	}
@@ -206,11 +215,6 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 		common.ApiError(c, err)
 		return
 	}
-
-	session.Delete(codexOAuthSessionKey(channelID, "state"))
-	session.Delete(codexOAuthSessionKey(channelID, "verifier"))
-	session.Delete(codexOAuthSessionKey(channelID, "created_at"))
-	_ = session.Save()
 
 	if channelID > 0 {
 		if err := model.DB.Model(&model.Channel{}).Where("id = ?", channelID).Update("key", string(encoded)).Error; err != nil {

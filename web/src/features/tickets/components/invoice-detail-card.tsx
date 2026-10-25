@@ -1,11 +1,11 @@
 import { useState } from 'react'
+import { Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { cn } from '@/lib/utils'
 import { updateInvoiceStatus } from '../api'
 import { formatTicketTimestamp } from '../lib/ticket-utils'
 import {
@@ -149,9 +149,7 @@ export function InvoiceDetailCard({
           </div>
         </div>
         <div>
-          <div className='text-muted-foreground text-xs'>
-            {t('Tax number')}
-          </div>
+          <div className='text-muted-foreground text-xs'>{t('Tax number')}</div>
           <div className='mt-0.5 text-sm'>
             <CopyableText value={invoice.tax_number} />
           </div>
@@ -207,9 +205,7 @@ export function InvoiceDetailCard({
       </div>
 
       <div className='mt-4'>
-        <div className='text-muted-foreground text-xs'>
-          {t('Total amount')}
-        </div>
+        <div className='text-muted-foreground text-xs'>{t('Total amount')}</div>
         <div className='text-primary mt-1 text-xl font-semibold'>
           ¥{(invoice.total_money ?? 0).toFixed(2)}
         </div>

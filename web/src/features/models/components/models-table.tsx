@@ -237,6 +237,7 @@ export function ModelsTable() {
       <div className='space-y-3 sm:space-y-4'>
         <DataTableToolbar
           table={table}
+          searchMode='manual'
           searchPlaceholder={t('Filter by model name...')}
           filters={[
             {

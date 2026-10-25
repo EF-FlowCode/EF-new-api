@@ -1,13 +1,17 @@
 package service
 
 import (
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/system_setting"
 )
 
 func GetCallbackAddress() string {
-	if operation_setting.CustomCallbackAddress == "" {
-		return system_setting.ServerAddress
+	return GetCallbackAddressWithConfig(operation_setting.GetEpayConfig())
+}
+
+func GetCallbackAddressWithConfig(config operation_setting.EpayConfig) string {
+	if config.CustomCallbackAddress == "" {
+		return system_setting.GetServerAddress()
 	}
-	return operation_setting.CustomCallbackAddress
+	return config.CustomCallbackAddress
 }

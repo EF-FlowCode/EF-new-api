@@ -16,7 +16,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const schema = z.object({
   enabled: z.boolean(),
@@ -36,7 +36,7 @@ export function CheckinSettingsSection({
   }
 }) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm<Values>({
     resolver: zodResolver(schema) as unknown as Resolver<Values>,
@@ -79,9 +79,7 @@ export function CheckinSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await updateOptions.mutateAsync(updates)
 
     form.reset(values)
   }
@@ -116,7 +114,7 @@ export function CheckinSettingsSection({
                   <Switch
                     checked={field.value}
                     onCheckedChange={field.onChange}
-                    disabled={updateOption.isPending || isSubmitting}
+                    disabled={updateOptions.isPending || isSubmitting}
                   />
                 </FormControl>
               </FormItem>
@@ -173,9 +171,9 @@ export function CheckinSettingsSection({
 
           <Button
             type='submit'
-            disabled={!isDirty || updateOption.isPending || isSubmitting}
+            disabled={!isDirty || updateOptions.isPending || isSubmitting}
           >
-            {updateOption.isPending || isSubmitting
+            {updateOptions.isPending || isSubmitting
               ? t('Saving...')
               : t('Save check-in settings')}
           </Button>

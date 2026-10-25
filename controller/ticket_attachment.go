@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/attachment"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service/attachment"
+	"eflow.local/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -49,7 +49,8 @@ type uploadAttachmentResponse struct {
 //   - 服务端以 UUID + ext 生成 storedName；上传者/尺寸/类型全部重新嗅探判定。
 //   - 上传成功后返回 id 与可预览标识，供前端在发消息时携带。
 func UploadTicketAttachment(c *gin.Context) {
-	if !setting.TicketAttachmentEnabled {
+	attachmentSettings := setting.GetTicketAttachmentSettings()
+	if !attachmentSettings.Enabled {
 		common.ApiErrorMsg(c, "ticket attachment is disabled")
 		return
 	}
@@ -61,13 +62,13 @@ func UploadTicketAttachment(c *gin.Context) {
 
 	// 先限制请求体大小，防御超大 multipart 耗尽磁盘/内存。
 	// 上浮 10% 给 multipart 边界与表单字段开销。
-	maxBody := setting.TicketAttachmentMaxSize + (setting.TicketAttachmentMaxSize / 10)
+	maxBody := attachmentSettings.MaxSize + (attachmentSettings.MaxSize / 10)
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBody)
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		if strings.Contains(err.Error(), "http: request body too large") {
-			common.ApiErrorMsg(c, fmt.Sprintf("file too large, max %d bytes", setting.TicketAttachmentMaxSize))
+			common.ApiErrorMsg(c, fmt.Sprintf("file too large, max %d bytes", attachmentSettings.MaxSize))
 			return
 		}
 		common.ApiErrorMsg(c, "missing file")
@@ -77,8 +78,8 @@ func UploadTicketAttachment(c *gin.Context) {
 		common.ApiErrorMsg(c, "empty file")
 		return
 	}
-	if fileHeader.Size > setting.TicketAttachmentMaxSize {
-		common.ApiErrorMsg(c, fmt.Sprintf("file too large, max %d bytes", setting.TicketAttachmentMaxSize))
+	if fileHeader.Size > attachmentSettings.MaxSize {
+		common.ApiErrorMsg(c, fmt.Sprintf("file too large, max %d bytes", attachmentSettings.MaxSize))
 		return
 	}
 
@@ -96,13 +97,13 @@ func UploadTicketAttachment(c *gin.Context) {
 		return
 	}
 	declaredMime := fileHeader.Header.Get("Content-Type")
-	result, err := attachment.Validate(fileHeader.Filename, declaredMime, fileHeader.Size, head)
+	result, err := attachment.ValidateWithSettings(attachmentSettings, fileHeader.Filename, declaredMime, fileHeader.Size, head)
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 
-	storage, err := attachment.Current()
+	storage, err := attachment.CurrentWithSettings(attachmentSettings)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -161,6 +162,7 @@ func UploadTicketAttachment(c *gin.Context) {
 // DeleteTicketAttachment 撤回尚未绑定到消息的附件（仅上传者本人）。
 // 已绑定的附件不允许删除，避免破坏工单消息完整性。
 func DeleteTicketAttachment(c *gin.Context) {
+	attachmentSettings := setting.GetTicketAttachmentSettings()
 	userId := c.GetInt("id")
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -185,13 +187,19 @@ func DeleteTicketAttachment(c *gin.Context) {
 		return
 	}
 
-	storage, err := attachment.Current()
-	if err == nil {
-		_ = storage.Delete(c.Request.Context(), record.StorageKey)
-	}
-	if err := model.DeleteAttachment(record.Id); err != nil {
+	deleted, err := model.DeleteUnboundAttachment(record.Id)
+	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if !deleted {
+		common.ApiErrorMsg(c, "attachment already bound to a message")
+		return
+	}
+	if storage, err := attachment.ForStorageType(attachmentSettings, record.StorageType); err == nil {
+		if err := storage.Delete(c.Request.Context(), record.StorageKey); err != nil {
+			common.SysLog("ticket attachment delete: remove file failed: " + err.Error())
+		}
 	}
 	common.ApiSuccess(c, gin.H{"id": record.Id})
 }
@@ -204,6 +212,7 @@ func DeleteTicketAttachment(c *gin.Context) {
 //   - 本地存储直接由后端流式返回，文件永不暴露到静态路径。
 //   - 图片/文本类以 inline 打开，其它附件强制 attachment 下载。
 func DownloadTicketAttachment(c *gin.Context) {
+	attachmentSettings := setting.GetTicketAttachmentSettings()
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidId)
@@ -224,7 +233,7 @@ func DownloadTicketAttachment(c *gin.Context) {
 		return
 	}
 
-	storage, err := attachment.Current()
+	storage, err := attachment.ForStorageType(attachmentSettings, record.StorageType)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -235,10 +244,11 @@ func DownloadTicketAttachment(c *gin.Context) {
 	if inline {
 		disposition = "inline"
 	}
+	contentType := attachmentResponseContentType(record.MimeType)
 	dispHeader := fmt.Sprintf(`%s; filename*=UTF-8''%s`, disposition, url.PathEscape(record.FileName))
 
 	// 云存储优先走签名 URL（省带宽、便于 CDN 回源）。
-	ttl := time.Duration(setting.TicketAttachmentSignedURLTTL) * time.Second
+	ttl := time.Duration(attachmentSettings.SignedURLTTL) * time.Second
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
@@ -263,11 +273,13 @@ func DownloadTicketAttachment(c *gin.Context) {
 	}
 	defer reader.Close()
 
-	c.Writer.Header().Set("Content-Type", record.MimeType)
+	c.Writer.Header().Set("Content-Type", contentType)
 	c.Writer.Header().Set("Content-Disposition", dispHeader)
 	c.Writer.Header().Set("Content-Length", strconv.FormatInt(record.Size, 10))
 	// 显式关闭嗅探，杜绝浏览器把 txt 当成 HTML 执行。
 	c.Writer.Header().Set("X-Content-Type-Options", "nosniff")
+	// 附件与主站同源：即使历史记录里存在可执行类型，也在沙箱中打开，不能读写站点 Cookie/存储。
+	c.Writer.Header().Set("Content-Security-Policy", "sandbox")
 	// 预览缓存：附件一旦创建不可变，直接 immutable，一周。
 	c.Writer.Header().Set("Cache-Control", "private, max-age=604800, immutable")
 	c.Status(http.StatusOK)
@@ -294,6 +306,13 @@ func canAccessAttachment(c *gin.Context, a *model.TicketAttachment) bool {
 	if a.TicketId <= 0 {
 		return false
 	}
+	if role >= common.RoleCustomerServiceUser {
+		// 客服按工单访问权判定（负责人或本人类型的待认领工单）。
+		ticket, err := model.GetTicketById(a.TicketId)
+		if err == nil && ticket != nil && ticketAccessibleByActor(c, ticket) {
+			return true
+		}
+	}
 	ticket, err := model.GetUserTicketById(a.TicketId, userId)
 	if err != nil || ticket == nil {
 		return false
@@ -301,23 +320,36 @@ func canAccessAttachment(c *gin.Context, a *model.TicketAttachment) bool {
 	return true
 }
 
-// isPreviewableMime 返回该 MIME 是否适合浏览器 inline 预览。
-// 仅图片 + 纯文本类，避免把 PDF/二进制放 inline 触发不可控的浏览器行为。
-func isPreviewableMime(mime string) bool {
+// normalizeAttachmentMime 去掉参数并小写。
+func normalizeAttachmentMime(mime string) string {
 	mime = strings.ToLower(strings.TrimSpace(mime))
-	if mime == "" {
-		return false
-	}
 	if idx := strings.Index(mime, ";"); idx >= 0 {
 		mime = strings.TrimSpace(mime[:idx])
 	}
-	if strings.HasPrefix(mime, "image/") {
-		// SVG 已在上传层禁用，这里再保底一次。
-		return mime != "image/svg+xml"
-	}
-	switch mime {
-	case "application/json", "application/xml":
+	return mime
+}
+
+// isPreviewableMime 返回该 MIME 是否允许浏览器 inline 预览：仅常见位图与纯文本。
+// HTML/XML/SVG 等会被浏览器当作文档执行的类型一律下载。
+func isPreviewableMime(mime string) bool {
+	switch normalizeAttachmentMime(mime) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "text/plain":
 		return true
 	}
-	return strings.HasPrefix(mime, "text/")
+	return false
+}
+
+// attachmentResponseContentType 决定下载响应的 Content-Type：文本类统一按纯文本
+// 下发，可执行文档类型改为二进制流，避免历史记录中的类型被浏览器渲染。
+func attachmentResponseContentType(mime string) string {
+	normalized := normalizeAttachmentMime(mime)
+	switch {
+	case isPreviewableMime(normalized) && strings.HasPrefix(normalized, "image/"):
+		return normalized
+	case normalized == "application/pdf":
+		return normalized
+	case strings.HasPrefix(normalized, "text/"), normalized == "application/json":
+		return "text/plain; charset=utf-8"
+	}
+	return "application/octet-stream"
 }

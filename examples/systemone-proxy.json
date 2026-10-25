@@ -1,0 +1,19 @@
+{
+  "public_listen": "127.0.0.1:8091",
+  "upstream_listen": "127.0.0.1:8092",
+  "gateway_chat_endpoint": "http://127.0.0.1:3000/v1/chat/completions",
+  "targets": {
+    "provider": {
+      "protocol": "typesafe",
+      "endpoint": "https://systemone-provider.example/v1/systemone"
+    },
+    "typesafe": {
+      "protocol": "typesafe",
+      "endpoint": "https://api.typesafe.ai/v1/systemone"
+    },
+    "openrouter": {
+      "protocol": "openrouter",
+      "endpoint": "https://openrouter.ai/api/alpha/decisions"
+    }
+  }
+}

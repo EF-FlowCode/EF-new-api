@@ -3,12 +3,13 @@ import { useParams } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useStatus } from '@/hooks/use-status'
 import { getDomainTabItems } from '@/components/layout/config/admin-domains'
-import { SettingsSectionTabs } from '../components/settings-section-tabs'
+import { SettingsWorkbench } from '../components/settings-workbench'
 import { getOptionValue, useSystemOptions } from '../hooks/use-system-options'
 import { DEFAULT_MAINTENANCE_SETTINGS } from './config'
 import {
   MAINTENANCE_DEFAULT_SECTION,
   getMaintenanceSectionContent,
+  type MaintenanceSectionId,
 } from './section-registry.tsx'
 
 export function MaintenanceSettings() {
@@ -32,13 +33,8 @@ export function MaintenanceSettings() {
     )
   }
 
-  const activeSection = (params?.section ?? MAINTENANCE_DEFAULT_SECTION) as
-    | 'update-checker'
-    | 'notice'
-    | 'logs'
-    | 'header-navigation'
-    | 'sidebar-modules'
-    | 'performance'
+  const activeSection = (params?.section ??
+    MAINTENANCE_DEFAULT_SECTION) as MaintenanceSectionId
   const sectionContent = getMaintenanceSectionContent(
     activeSection,
     settings,
@@ -48,15 +44,12 @@ export function MaintenanceSettings() {
 
   return (
     <div className='flex h-full w-full flex-1 flex-col'>
-      <div className='faded-bottom h-full w-full overflow-y-auto scroll-smooth pe-4 pb-12'>
-        <div className='space-y-4'>
-          <SettingsSectionTabs
-            items={getDomainTabItems(t, 'maintenance', activeSection)}
-            activeSection={`maintenance/${activeSection}`}
-          />
-          {sectionContent}
-        </div>
-      </div>
+      <SettingsWorkbench
+        items={getDomainTabItems(t, 'maintenance', activeSection)}
+        activeSection={`maintenance/${activeSection}`}
+      >
+        {sectionContent}
+      </SettingsWorkbench>
     </div>
   )
 }

@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { pricingSettingsUrl } from '@/features/system-settings/models/lib/pricing-settings-link'
 import { MESSAGE_STATUS } from '../constants'
-import { getVersionText } from '../lib/message-utils'
+import { getCurrentVersion, getVersionText } from '../lib/message-utils'
 import type { Message } from '../types'
 
 interface MessageErrorProps {
@@ -27,7 +28,7 @@ export function MessageError({ message, className = '' }: MessageErrorProps) {
 
   // content 可能是 string | ContentPart[]，错误展示统一取纯文本
   const errorContent = getVersionText(
-    message.versions[0]?.content || 'An unknown error occurred'
+    getCurrentVersion(message).content || 'An unknown error occurred'
   )
 
   if (message.errorCode === 'model_price_error') {
@@ -42,7 +43,7 @@ export function MessageError({ message, className = '' }: MessageErrorProps) {
               variant='outline'
               size='sm'
               onClick={() =>
-                window.open('/console/setting?tab=ratio', '_blank')
+                window.open(pricingSettingsUrl(), '_blank', 'noopener')
               }
             >
               <Settings className='mr-1 h-3.5 w-3.5' />

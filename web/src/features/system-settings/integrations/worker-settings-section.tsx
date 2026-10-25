@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 import { removeTrailingSlash } from './utils'
 
 const createWorkerSchema = (t: (key: string) => string) =>
@@ -40,7 +40,7 @@ export function WorkerSettingsSection({
   defaultValues,
 }: WorkerSettingsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const workerSchema = createWorkerSchema(t)
 
   const form = useForm<WorkerFormValues>({
@@ -62,7 +62,12 @@ export function WorkerSettingsSection({
       updates.push({ key: 'WorkerUrl', value: sanitizedUrl })
     }
 
-    if (sanitizedKey !== initialKey || sanitizedUrl === '') {
+    // Clearing the URL also clears the stored key; an already-empty URL must
+    // not wipe a key the form never loaded.
+    if (
+      sanitizedKey !== initialKey ||
+      (sanitizedUrl === '' && initialUrl !== '')
+    ) {
       updates.push({ key: 'WorkerValidKey', value: sanitizedKey })
     }
 
@@ -76,9 +81,8 @@ export function WorkerSettingsSection({
       })
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(updates)
   }
 
   return (
@@ -170,8 +174,8 @@ export function WorkerSettingsSection({
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending
               ? t('Saving...')
               : t('Save Worker settings')}
           </Button>

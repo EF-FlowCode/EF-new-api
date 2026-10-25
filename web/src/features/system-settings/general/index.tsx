@@ -2,7 +2,7 @@ import { useParams } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { parseCurrencyDisplayType } from '@/lib/currency'
 import { getDomainTabItems } from '@/components/layout/config/admin-domains'
-import { SettingsSectionTabs } from '../components/settings-section-tabs'
+import { SettingsWorkbench } from '../components/settings-workbench'
 import { useSystemOptions, getOptionValue } from '../hooks/use-system-options'
 import type { GeneralSettings } from '../types'
 import {
@@ -36,7 +36,8 @@ const defaultGeneralSettings: GeneralSettings = {
   'general_setting.custom_currency_exchange_rate': 1,
   RetryTimes: 0,
   DisplayInCurrencyEnabled: true,
-  DisplayTokenStatEnabled: true,
+  PricingGroupEndpointOverrides: '{}',
+  ModelContextWindows: '{}',
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,
@@ -85,15 +86,12 @@ export function GeneralSettings() {
 
   return (
     <div className='flex h-full w-full flex-1 flex-col'>
-      <div className='faded-bottom h-full w-full overflow-y-auto scroll-smooth pe-4 pb-12'>
-        <div className='space-y-4'>
-          <SettingsSectionTabs
-            items={getDomainTabItems(t, 'general', activeSection)}
-            activeSection={`general/${activeSection}`}
-          />
-          {sectionContent}
-        </div>
-      </div>
+      <SettingsWorkbench
+        items={getDomainTabItems(t, 'general', activeSection)}
+        activeSection={`general/${activeSection}`}
+      >
+        {sectionContent}
+      </SettingsWorkbench>
     </div>
   )
 }

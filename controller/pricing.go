@@ -1,10 +1,14 @@
 package controller
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"maps"
+	"strings"
+
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -43,21 +47,33 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	return filtered
 }
 
+func filterPricingGroupEndpointOverrides(overrides map[string]model.PricingGroupEndpointOverride, usableGroup map[string]string) map[string]model.PricingGroupEndpointOverride {
+	filtered := make(map[string]model.PricingGroupEndpointOverride)
+	for group, override := range overrides {
+		if group == "default" {
+			filtered[group] = override
+		} else if _, ok := usableGroup[group]; ok {
+			filtered[group] = override
+		}
+	}
+	return filtered
+}
+
 func GetPricing(c *gin.Context) {
 	pricing := model.GetPricing()
 	userId, exists := c.Get("id")
 	usableGroup := map[string]string{}
 	groupRatio := map[string]float64{}
-	for s, f := range ratio_setting.GetGroupRatioCopy() {
-		groupRatio[s] = f
-	}
+	maps.Copy(groupRatio, ratio_setting.GetGroupRatioCopy())
 	var group string
 	var additionalTiers []string
+	isRoot := false
 	if exists {
 		user, err := model.GetUserCache(userId.(int))
 		if err == nil {
 			group = user.Group
 			additionalTiers = user.AdditionalCustomerTiers.Values()
+			isRoot = user.Role >= common.RoleRootUser
 			for g := range groupRatio {
 				groupRatio[g], _ = service.GetUserGroupRatio(group, additionalTiers, g)
 			}
@@ -65,7 +81,27 @@ func GetPricing(c *gin.Context) {
 	}
 
 	usableGroup = service.GetUserEffectiveGroups(group, additionalTiers)
+	region := strings.ToUpper(strings.TrimSpace(c.GetHeader("CF-IPCountry")))
+	if _, matched := operation_setting.GetWebGroupSetting().GetRegionRule(region); matched {
+		for groupName := range usableGroup {
+			if !operation_setting.GetWebGroupSetting().IsGroupAvailable(region, groupName) {
+				delete(usableGroup, groupName)
+			}
+		}
+	}
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
+	// Plugin source identity and task rules are Root editor data; the shared
+	// cache holds the full view, so strip per request for everyone else.
+	if !isRoot {
+		for i := range pricing {
+			pricing[i] = model.PublicPricing(pricing[i])
+		}
+	}
+	configuredEndpointOverrides := model.GetPricingGroupEndpointOverrides()
+	groupEndpointOverrides := filterPricingGroupEndpointOverrides(
+		configuredEndpointOverrides,
+		usableGroup,
+	)
 	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {
@@ -74,14 +110,15 @@ func GetPricing(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{
-		"success":            true,
-		"data":               pricing,
-		"vendors":            model.GetVendors(),
-		"group_ratio":        groupRatio,
-		"usable_group":       usableGroup,
-		"supported_endpoint": model.GetSupportedEndpointMap(),
-		"auto_groups":        service.GetUserAutoGroup(group, additionalTiers),
-		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
+		"success":                  true,
+		"data":                     pricing,
+		"vendors":                  model.GetVendors(),
+		"group_ratio":              groupRatio,
+		"usable_group":             usableGroup,
+		"supported_endpoint":       model.GetSupportedEndpointMap(),
+		"group_endpoint_overrides": groupEndpointOverrides,
+		"auto_groups":              service.GetUserAutoGroup(group, additionalTiers),
+		"pricing_version":          "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }
 

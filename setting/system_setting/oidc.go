@@ -3,7 +3,7 @@ package system_setting
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 type OIDCSettings struct {
@@ -26,7 +26,8 @@ func init() {
 }
 
 func GetOIDCSettings() *OIDCSettings {
-	return &defaultOIDCSettings
+	setting := config.MustSnapshot[OIDCSettings]("oidc")
+	return &setting
 }
 
 func (s *OIDCSettings) GetEffectiveDisplayName() string {

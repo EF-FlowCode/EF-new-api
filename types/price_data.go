@@ -1,6 +1,7 @@
 package types
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 )
@@ -12,22 +13,25 @@ type GroupRatioInfo struct {
 }
 
 type PriceData struct {
-	FreeModel            bool
-	ModelPrice           float64
-	ModelRatio           float64
-	CompletionRatio      float64
-	CacheRatio           float64
-	CacheCreationRatio   float64
-	CacheCreation5mRatio float64
-	CacheCreation1hRatio float64
-	ImageRatio           float64
-	AudioRatio           float64
-	AudioCompletionRatio float64
-	OtherRatios          map[string]float64
-	UsePrice             bool
-	Quota                int // 按次计费的最终额度（MJ / Task）
-	QuotaToPreConsume    int // 按量计费的预消耗额度
-	GroupRatioInfo       GroupRatioInfo
+	TaskRuleSnapshot         json.RawMessage `json:"-"`
+	FreeModel                bool
+	ModelPrice               float64
+	ModelRatio               float64
+	CompletionRatio          float64
+	CacheRatio               float64
+	CacheCreationRatio       float64
+	CacheCreation5mRatio     float64
+	CacheCreation1hRatio     float64
+	ImageRatio               float64
+	AudioRatio               float64
+	AudioCompletionRatio     float64
+	OtherRatios              map[string]float64
+	UsePrice                 bool
+	TaskFixedTotal           bool `json:"-"` // Task expression already evaluated the complete price.
+	TaskModelRatioConfigured bool `json:"-"` // Capture lookup success with the price, including explicit zero.
+	Quota                    int  // 按次计费的最终额度（MJ / Task）
+	QuotaToPreConsume        int  // 按量计费的预消耗额度
+	GroupRatioInfo           GroupRatioInfo
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

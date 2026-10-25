@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
-import { getOAuthState } from '../api'
+import { getOAuthState, getTelegramAuthorizationURL } from '../api'
 import {
   buildGitHubOAuthUrl,
   buildDiscordOAuthUrl,
@@ -20,7 +20,10 @@ type LogoutRequestConfig = AxiosRequestConfig & {
 /**
  * Hook for managing OAuth login
  */
-export function useOAuthLogin(status: SystemStatus | null) {
+export function useOAuthLogin(
+  status: SystemStatus | null,
+  invitationCode?: string
+) {
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [githubButtonText, setGithubButtonText] = useState('')
@@ -75,7 +78,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
 
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState(invitationCode)
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         if (githubTimeoutRef.current) {
@@ -106,7 +109,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState(invitationCode)
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return
@@ -127,7 +130,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState(invitationCode)
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return
@@ -152,7 +155,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState(invitationCode)
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return
@@ -167,8 +170,23 @@ export function useOAuthLogin(status: SystemStatus | null) {
     }
   }
 
-  const handleTelegramLogin = () => {
-    toast.info(t('Telegram login requires widget integration; coming soon'))
+  const handleTelegramLogin = async () => {
+    setIsLoading(true)
+    try {
+      await resetSession()
+      const url = await getTelegramAuthorizationURL(invitationCode)
+      if (!url) {
+        toast.error(t('Telegram sign-in is not configured'))
+        return
+      }
+      window.open(url, '_self')
+    } catch (_error) {
+      toast.error(
+        t('Failed to start {{provider}} login', { provider: 'Telegram' })
+      )
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   const handleCustomOAuthLogin = async (provider: CustomOAuthProviderInfo) => {
@@ -177,7 +195,7 @@ export function useOAuthLogin(status: SystemStatus | null) {
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await getOAuthState()
+      const state = await getOAuthState(invitationCode)
       if (!state) {
         toast.error(t('Failed to initialize OAuth'))
         return

@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,17 +10,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
+	gopool "eflow.local/new-api/internal/drainpool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -85,7 +86,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
 
-	adaptor := GetAdaptor(info.ApiType)
+	adaptor := GetAdaptorForInfo(info)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
@@ -98,10 +99,16 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
+			// eflow: 适配器已经分类过的拒绝（状态码与重试策略）原样返回，不降级成可重试的
+			// 转换失败，避免同一请求换渠道重复尝试（上游 03563a4a7）。
+			var apiErr *types.NewAPIError
+			if errors.As(err, &apiErr) {
+				return apiErr
+			}
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed)
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
@@ -124,13 +131,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			}
 
 			logger.LogDebug(c, "image request body: %s", jsonData)
-			body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 			defer closer.Close()
 			jsonData = nil
-			info.UpstreamRequestBodySize = size
 			requestBody = body
 		}
 	}

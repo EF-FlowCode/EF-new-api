@@ -5,15 +5,15 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	openaichannel "eflow.local/new-api/relay/channel/openai"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -30,7 +30,7 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 
 	containSystemPrompt := false
 	for _, message := range request.Messages {
-		if message.Role == systemRole {
+		if message.Role == systemRole && len(message.Tools) == 0 {
 			containSystemPrompt = true
 			break
 		}
@@ -50,7 +50,7 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, true)
 	for i, message := range request.Messages {
-		if message.Role != systemRole {
+		if message.Role != systemRole || len(message.Tools) > 0 {
 			continue
 		}
 		if message.IsStringContent() {
@@ -124,13 +124,12 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 	defer closer.Close()
 	jsonData = nil
-	info.UpstreamRequestBodySize = size
 	var requestBody io.Reader = body
 
 	var httpResp *http.Response

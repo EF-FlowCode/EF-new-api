@@ -7,21 +7,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
+	relaytypes "eflow.local/new-api/relaykit/types"
 )
 
-type OpenAIError struct {
-	Message  string          `json:"message"`
-	Type     string          `json:"type"`
-	Param    string          `json:"param"`
-	Code     any             `json:"code"`
-	Metadata json.RawMessage `json:"metadata,omitempty"`
-}
-
-type ClaudeError struct {
-	Type    string `json:"type,omitempty"`
-	Message string `json:"message,omitempty"`
-}
+type OpenAIError = relaytypes.OpenAIError
+type ClaudeError = relaytypes.ClaudeError
 
 type ErrorType string
 
@@ -66,6 +58,7 @@ const (
 	ErrorCodeReadRequestBodyFailed ErrorCode = "read_request_body_failed"
 	ErrorCodeConvertRequestFailed  ErrorCode = "convert_request_failed"
 	ErrorCodeAccessDenied          ErrorCode = "access_denied"
+	ErrorCodeUserModelRateLimited  ErrorCode = "user:model_rate_limited"
 
 	// request error
 	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
@@ -316,6 +309,10 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 	}
 	for _, op := range ops {
 		op(e)
+	}
+	if reasoning.IsClientError(err) {
+		e.StatusCode = http.StatusBadRequest
+		e.skipRetry = true
 	}
 	return e
 }

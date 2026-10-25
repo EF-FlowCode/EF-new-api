@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,9 @@ func GetDiskCacheDir() string {
 	cachePath := GetDiskCachePath()
 	if cachePath == "" {
 		cachePath = os.TempDir()
+	}
+	if DeploymentRole != "" {
+		return filepath.Join(cachePath, diskCacheDir, NodeName)
 	}
 	return filepath.Join(cachePath, diskCacheDir)
 }
@@ -52,6 +56,7 @@ func CreateDiskCacheFile(cacheType DiskCacheType) (string, *os.File, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to create cache file: %w", err)
 	}
+	liveDiskCacheFiles.Store(filePath, struct{}{})
 
 	return filePath, file, nil
 }
@@ -67,12 +72,12 @@ func WriteDiskCacheFile(cacheType DiskCacheType, data []byte) (string, error) {
 	_, err = file.Write(data)
 	if err != nil {
 		file.Close()
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return "", fmt.Errorf("failed to write cache file: %w", err)
 	}
 
 	if err := file.Close(); err != nil {
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return "", fmt.Errorf("failed to close cache file: %w", err)
 	}
 
@@ -98,14 +103,25 @@ func ReadDiskCacheFileString(filePath string) (string, error) {
 	return string(data), nil
 }
 
+// liveDiskCacheFiles holds files this process created and still uses, so the
+// age-based cleanup never deletes a body or file cache an in-flight request
+// (for example a long stream that is retried) still needs.
+var liveDiskCacheFiles sync.Map
+
+// ReleaseDiskCacheFile marks a cache file as no longer used by this process.
+func ReleaseDiskCacheFile(filePath string) {
+	liveDiskCacheFiles.Delete(filePath)
+}
+
 // RemoveDiskCacheFile 删除磁盘缓存文件
 func RemoveDiskCacheFile(filePath string) error {
+	ReleaseDiskCacheFile(filePath)
 	return os.Remove(filePath)
 }
 
 // CleanupOldDiskCacheFiles 清理旧的缓存文件
 // maxAge: 文件最大存活时间
-// 注意：此函数只删除文件，不更新统计（因为无法知道每个文件的原始大小）
+// 仍被本进程使用的文件不会删除；这里删除的只是残留文件（崩溃或其他进程遗留）
 func CleanupOldDiskCacheFiles(maxAge time.Duration) error {
 	dir := GetDiskCacheDir()
 
@@ -122,16 +138,17 @@ func CleanupOldDiskCacheFiles(maxAge time.Duration) error {
 		if entry.IsDir() {
 			continue
 		}
+		if _, live := liveDiskCacheFiles.Load(filepath.Join(dir, entry.Name())); live {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
 		if now.Sub(info.ModTime()) > maxAge {
-			// 注意：后台清理任务删除文件时，由于无法得知原始 base64Size，
-			// 只能按磁盘文件大小扣减。这在目前 base64 存储模式下是准确的。
-			if err := os.Remove(filepath.Join(dir, entry.Name())); err == nil {
-				DecrementDiskFiles(info.Size())
-			}
+			// Leftovers were never counted by this process (or were already
+			// decremented on release), so the usage statistics stay unchanged.
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
 	return nil

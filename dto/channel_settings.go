@@ -108,9 +108,21 @@ const (
 	AwsKeyTypeApiKey AwsKeyType = "api_key"
 )
 
+// AwsApiType selects the Bedrock interface. Empty keeps InvokeModel.
+type AwsApiType string
+
+const (
+	AwsApiTypeInvokeModel AwsApiType = "invoke_model"
+	AwsApiTypeMantle      AwsApiType = "mantle"
+)
+
 type ChannelOtherSettings struct {
+	// SupportedEndpointTypes optionally limits which inbound API surfaces may
+	// select this channel. An empty value preserves the legacy routing behavior.
+	SupportedEndpointTypes                []string      `json:"supported_endpoint_types,omitempty"`
 	AzureResponsesVersion                 string        `json:"azure_responses_version,omitempty"`
-	VertexKeyType                         VertexKeyType `json:"vertex_key_type,omitempty"` // "json" or "api_key"
+	VertexKeyType                         VertexKeyType `json:"vertex_key_type,omitempty"`   // "json" or "api_key"
+	VertexProjectID                       string        `json:"vertex_project_id,omitempty"` // 仅 vertex_key_type=api_key 时使用；JSON 模式从 service account 解析
 	OpenRouterEnterprise                  *bool         `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery                       bool          `json:"claude_beta_query,omitempty"`         // Claude 渠道是否强制追加 ?beta=true
 	AllowServiceTier                      bool          `json:"allow_service_tier,omitempty"`        // 是否允许 service_tier 透传（默认过滤以避免额外计费）
@@ -120,6 +132,7 @@ type ChannelOtherSettings struct {
 	DisableStore                          bool          `json:"disable_store,omitempty"`             // 是否禁用 store 透传（默认允许透传，禁用后可能导致 Codex 无法使用）
 	AllowIncludeObfuscation               bool          `json:"allow_include_obfuscation,omitempty"` // 是否允许 stream_options.include_obfuscation 透传（默认过滤以避免关闭流混淆保护）
 	AwsKeyType                            AwsKeyType    `json:"aws_key_type,omitempty"`
+	AwsApiType                            AwsApiType    `json:"aws_api_type,omitempty"`                               // invoke_model（默认）或 mantle
 	UpstreamModelUpdateCheckEnabled       bool          `json:"upstream_model_update_check_enabled,omitempty"`        // 是否检测上游模型更新
 	UpstreamModelUpdateAutoSyncEnabled    bool          `json:"upstream_model_update_auto_sync_enabled,omitempty"`    // 是否自动同步上游模型更新
 	UpstreamModelUpdateLastCheckTime      int64         `json:"upstream_model_update_last_check_time,omitempty"`      // 上次检测时间
@@ -128,6 +141,9 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateIgnoredModels      []string      `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
 	RatioSyncAccessToken                  string        `json:"ratio_sync_access_token,omitempty"`                    // 上游价格接口访问令牌
 	RatioSyncUserID                       int           `json:"ratio_sync_user_id,omitempty"`                         // 上游 New-Api-User
+	// AdvancedCustom is optional for eflow's legacy Custom channel (type 8).
+	// It stays configuration-only; the dedicated upstream type 58 is not adopted yet.
+	AdvancedCustom *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

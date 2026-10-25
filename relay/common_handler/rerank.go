@@ -4,14 +4,14 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel/xinference"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/relay/channel/xinference"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -65,7 +65,11 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		if err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 		}
-		jinaResp.Usage.PromptTokens = jinaResp.Usage.TotalTokens
+		usage, usageErr := service.KnowledgeUsage(c, info, responseBody, false)
+		if usageErr != nil {
+			return nil, types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		}
+		jinaResp.Usage = *usage
 	}
 
 	c.Writer.Header().Set("Content-Type", "application/json")

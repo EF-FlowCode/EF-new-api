@@ -1,8 +1,4 @@
-// ----------------------------------------------------------------------------
-// Risk Center types — mirrors backend dto/risk shapes.
-// ----------------------------------------------------------------------------
-
-export type RiskScope = 'token' | 'user' | 'ip'
+export type RiskScope = 'token' | 'user'
 
 export type RiskAction = 'observe' | 'block'
 
@@ -34,40 +30,51 @@ export type RiskRule = {
   created_time?: number
 }
 
+export type RiskRuleUpsertRequest = Omit<RiskRule, 'id' | 'created_time'>
+
 export type RiskSubject = {
   id: number
-  scope: RiskScope
-  identifier: string
+  subject_type: RiskScope
+  subject_id: number
   username?: string
   status: 'normal' | 'observe' | 'blocked'
   risk_score: number
-  hit_count_24h: number
-  last_hit_time?: number
+  rule_hit_count_24h: number
+  last_incident_at?: number
   last_decision?: string
   notes?: string
 }
 
 export type RiskIncident = {
   id: number
-  scope: RiskScope
-  identifier: string
+  subject_type: RiskScope
+  subject_id: number
   username?: string
   rule_id?: number
   rule_name?: string
-  decision: 'allow' | 'observe' | 'block'
+  decision: 'allow' | 'observe' | 'flag' | 'block'
   reason?: string
-  created_time: number
+  created_at: number
 }
 
 export type RiskOverview = {
-  total_subjects?: number
-  blocked_subjects?: number
-  observed_subjects?: number
-  total_incidents_24h?: number
-  blocked_incidents_24h?: number
-  observed_incidents_24h?: number
-  rule_count?: number
-  enabled_rule_count?: number
+  observed_subjects: number
+  blocked_subjects: number
+  high_risk_subjects: number
+  rule_count: number
+}
+
+export type ModerationOverview = {
+  rule_count: number
+  unconfigured_rule_count: number
+  flagged_24h: number
+}
+
+export type EnforcementOverview = {
+  hits_24h: number
+  auto_bans_24h: number
+  ban_threshold: number
+  window_hours: number
 }
 
 export type RiskGroups = {
@@ -80,96 +87,119 @@ export type RiskGroups = {
 
 export type RiskConfig = Record<string, unknown>
 
-// ----------------------------------------------------------------------------
-// Moderation engine types
-// ----------------------------------------------------------------------------
+export type ModerationCondition = {
+  category: string
+  op: string
+  value: number
+  apply_input_type?: boolean
+  applied_input_type?: 'text' | 'image'
+}
 
 export type ModerationRule = {
   id: number
   name: string
   enabled: boolean
-  category: string
-  threshold: number
-  action: RiskAction
+  match_mode: 'all' | 'any'
+  conditions: ModerationCondition[]
+  action: 'observe' | 'flag' | 'block'
+  score_weight: number
   groups: string[]
-  description?: string
-  priority?: number
+  description: string
+  priority: number
   created_time?: number
 }
 
 export type ModerationConfig = {
-  enabled?: boolean
-  provider?: string
-  endpoint?: string
-  model?: string
-  keys_json?: string
-  request_timeout_ms?: number
-  max_concurrent?: number
-  cache_ttl_seconds?: number
-  default_action?: RiskAction
-  observe_response_message?: string
-  block_response_status_code?: number
-  block_response_message?: string
-  [key: string]: unknown
+  enabled: boolean
+  mode: 'off' | 'observe_only' | 'enforce'
+  base_url: string
+  model: string
+  api_keys: string[]
+  event_queue_size: number
+  worker_count: number
+  http_timeout_ms: number
+  max_retries: number
+  redis_queue_enabled: boolean
+  sampling_rate_percent: number
+  image_max_size_kb: number
+  enabled_groups: string[]
+  group_modes: Record<string, string>
+  debug_result_retain_minutes: number
+  flagged_retention_hours: number
+  benign_retention_hours: number
+  record_unmatched_inputs: boolean
+}
+
+export type ModerationConfigResponse = {
+  config: ModerationConfig
+  key_count: number
 }
 
 export type ModerationCategory = {
   name: string
-  description?: string
-  default_threshold?: number
+  label: string
+  image_scored: boolean
 }
 
 export type ModerationIncident = {
   id: number
   rule_id?: number
-  rule_name?: string
-  category?: string
-  score?: number
-  decision: 'allow' | 'observe' | 'block'
+  primary_rule?: string
+  max_category?: string
+  max_score?: number
+  decision: 'allow' | 'observe' | 'flag' | 'block'
   user_id?: number
   username?: string
   group?: string
-  text_excerpt?: string
-  created_time: number
+  input_summary?: string
+  created_at: number
 }
 
 export type ModerationQueueStats = {
-  in_flight?: number
-  queued?: number
-  processed_24h?: number
-  blocked_24h?: number
+  queue_depth_memory?: number
+  queue_depth_redis?: number
+  worker_count?: number
+  worker_state?: Array<{
+    state: string
+  }>
 }
 
-// ----------------------------------------------------------------------------
-// Enforcement engine types
-// ----------------------------------------------------------------------------
-
 export type EnforcementConfig = {
-  auto_disable_enabled?: boolean
-  auto_disable_threshold?: number
-  alert_email_enabled?: boolean
-  alert_email_recipient?: string
-  alert_webhook_url?: string
-  cooldown_seconds?: number
-  [key: string]: unknown
+  enabled: boolean
+  email_on_hit: boolean
+  email_on_auto_ban: boolean
+  count_window_hours: number
+  ban_threshold: number
+  ban_threshold_per_source: Record<string, number>
+  enabled_sources: string[]
+  email_hit_template: string
+  email_ban_template: string
+  email_hit_subject: string
+  email_ban_subject: string
+  hit_email_window_minutes: number
+  hit_email_max_per_window: number
+  ban_email_window_minutes: number
+  ban_email_max_per_window: number
+  email_rate_limit_window_minutes?: number
+  email_rate_limit_max_per_window?: number
 }
 
 export type EnforcementCounter = {
-  scope: RiskScope
-  identifier: string
-  username?: string
-  count: number
-  last_action_time?: number
+  id: number
+  username: string
+  enforcement_hit_count_risk: number
+  enforcement_hit_count_moderation: number
+  enforcement_last_hit_at: number
 }
 
 export type EnforcementIncident = {
   id: number
-  scope: RiskScope
-  identifier: string
-  action: 'disable' | 'alert' | 'notify'
+  user_id: number
+  source: string
+  action: 'hit' | 'auto_ban' | 'manual_unban' | 'counter_reset' | 'test_email'
   reason?: string
-  triggered_by?: string
-  created_time: number
+  rule_hint?: string
+  created_at: number
 }
 
 // ----------------------------------------------------------------------------

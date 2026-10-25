@@ -21,11 +21,15 @@ type DataTablePaginationProps<TData> = {
   table: Table<TData>
   // eflow: 是否显示「跳至第 N 页」输入框（日志这类深翻页场景用）。默认关，不影响其它表。
   showJumpToPage?: boolean
+  disabled?: boolean
+  pageSizeOptions?: readonly number[]
 }
 
 export function DataTablePagination<TData>({
   table,
   showJumpToPage = false,
+  disabled = false,
+  pageSizeOptions = [10, 20, 30, 40, 50, 100],
 }: DataTablePaginationProps<TData>) {
   const { t } = useTranslation()
   const currentPage = table.getState().pagination.pageIndex + 1
@@ -61,6 +65,7 @@ export function DataTablePagination<TData>({
         </div>
         <div className='flex items-center gap-2 @max-2xl/content:flex-row-reverse'>
           <Select
+            disabled={disabled}
             value={`${table.getState().pagination.pageSize}`}
             onValueChange={(value) => {
               table.setPageSize(Number(value))
@@ -70,7 +75,7 @@ export function DataTablePagination<TData>({
               <SelectValue placeholder={table.getState().pagination.pageSize} />
             </SelectTrigger>
             <SelectContent side='top'>
-              {[10, 20, 30, 40, 50, 100].map((pageSize) => (
+              {pageSizeOptions.map((pageSize) => (
                 <SelectItem key={pageSize} value={`${pageSize}`}>
                   {pageSize}
                 </SelectItem>
@@ -95,7 +100,7 @@ export function DataTablePagination<TData>({
             variant='outline'
             className='size-8 p-0 @max-md/content:hidden'
             onClick={() => table.setPageIndex(0)}
-            disabled={!table.getCanPreviousPage()}
+            disabled={disabled || !table.getCanPreviousPage()}
           >
             <span className='sr-only'>{t('Go to first page')}</span>
             <DoubleArrowLeftIcon className='h-4 w-4' />
@@ -104,7 +109,7 @@ export function DataTablePagination<TData>({
             variant='outline'
             className='size-8 p-0'
             onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
+            disabled={disabled || !table.getCanPreviousPage()}
           >
             <span className='sr-only'>{t('Go to previous page')}</span>
             <ChevronLeftIcon className='h-4 w-4' />
@@ -120,6 +125,7 @@ export function DataTablePagination<TData>({
                   variant={currentPage === pageNumber ? 'default' : 'outline'}
                   className='h-8 min-w-8 px-2'
                   onClick={() => table.setPageIndex((pageNumber as number) - 1)}
+                  disabled={disabled}
                 >
                   <span className='sr-only'>Go to page {pageNumber}</span>
                   {pageNumber}
@@ -132,7 +138,7 @@ export function DataTablePagination<TData>({
             variant='outline'
             className='size-8 p-0'
             onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
+            disabled={disabled || !table.getCanNextPage()}
           >
             <span className='sr-only'>{t('Go to next page')}</span>
             <ChevronRightIcon className='h-4 w-4' />
@@ -141,7 +147,7 @@ export function DataTablePagination<TData>({
             variant='outline'
             className='size-8 p-0 @max-md/content:hidden'
             onClick={() => table.setPageIndex(table.getPageCount() - 1)}
-            disabled={!table.getCanNextPage()}
+            disabled={disabled || !table.getCanNextPage()}
           >
             <span className='sr-only'>{t('Go to last page')}</span>
             <DoubleArrowRightIcon className='h-4 w-4' />
@@ -156,6 +162,7 @@ export function DataTablePagination<TData>({
                 min={1}
                 max={totalPages}
                 value={jumpValue}
+                disabled={disabled}
                 onChange={(e) => setJumpValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') applyJump()
@@ -167,7 +174,7 @@ export function DataTablePagination<TData>({
                 variant='outline'
                 className='h-8 px-2.5'
                 onClick={applyJump}
-                disabled={!jumpValue}
+                disabled={disabled || !jumpValue}
               >
                 {t('Go')}
               </Button>

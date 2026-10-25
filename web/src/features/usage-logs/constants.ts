@@ -2,7 +2,7 @@
  * Shared constants for usage logs feature
  */
 import type { StatusBadgeProps } from '@/components/status-badge'
-import type { LogStatistics, LogCategory } from './types'
+import type { LogStatistics } from './types'
 
 // ============================================================================
 // Default Values
@@ -41,20 +41,6 @@ export const LOG_TYPE_ENUM = {
   ERROR: 5,
   REFUND: 6,
 } as const
-
-// ============================================================================
-// Time Range Presets
-// ============================================================================
-
-/**
- * Quick time range presets for filter dialog
- */
-export const TIME_RANGE_PRESETS = [
-  { days: 1, label: '24 Hours' },
-  { days: 7, label: '7 Days' },
-  { days: 14, label: '14 Days' },
-  { days: 30, label: '30 Days' },
-] as const
 
 // ============================================================================
 // Common Logs Configuration
@@ -160,6 +146,9 @@ export const TASK_STATUS = {
   NOT_START: 'NOT_START', // 未启动
   SUBMITTED: 'SUBMITTED', // 队列中
   IN_PROGRESS: 'IN_PROGRESS', // 执行中
+  SUBMITTING: 'SUBMITTING',
+  SUBMIT_UNKNOWN: 'SUBMIT_UNKNOWN',
+  BILLING_PENDING: 'BILLING_PENDING', // 上游已完成，等待结算
   SUCCESS: 'SUCCESS', // 成功
   FAILURE: 'FAILURE', // 失败
   QUEUED: 'QUEUED', // 排队中
@@ -272,6 +261,15 @@ export const TASK_ACTION_MAPPINGS: Record<string, StatusMapping> = {
  * Task status mappings
  */
 export const TASK_STATUS_MAPPINGS: Record<string, StatusMapping> = {
+  [TASK_STATUS.SUBMITTING]: { label: 'Submitting', variant: 'yellow' },
+  [TASK_STATUS.SUBMIT_UNKNOWN]: {
+    label: 'Submission Outcome Unknown',
+    variant: 'yellow',
+  },
+  [TASK_STATUS.BILLING_PENDING]: {
+    label: 'Pending Settlement',
+    variant: 'yellow',
+  },
   [TASK_STATUS.SUCCESS]: { label: 'Success', variant: 'green' },
   [TASK_STATUS.NOT_START]: { label: 'Not Started', variant: 'neutral' },
   [TASK_STATUS.SUBMITTED]: { label: 'Queued', variant: 'yellow' },
@@ -290,19 +288,6 @@ export const TASK_PLATFORM_MAPPINGS: Record<string, StatusMapping> = {
   [TASK_PLATFORMS.RUNWAY]: { label: 'runway', variant: 'violet' },
   [TASK_PLATFORMS.LUMA]: { label: 'luma', variant: 'orange' },
   [TASK_PLATFORMS.VIGGLE]: { label: 'viggle', variant: 'pink' },
-}
-
-// ============================================================================
-// Log Category Labels
-// ============================================================================
-
-/**
- * Log category display labels
- */
-export const LOG_CATEGORY_LABELS: Record<LogCategory, string> = {
-  common: 'Common',
-  drawing: 'Drawing',
-  task: 'Task',
 }
 
 // ============================================================================

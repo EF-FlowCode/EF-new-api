@@ -13,6 +13,11 @@ import {
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { PasswordInput } from '@/components/password-input'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 import { updateUserProfile } from '../../api'
 
 // ============================================================================
@@ -41,6 +46,8 @@ export function ChangePasswordDialog({
   const handleChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
   }
+
+  const verification = useSecureVerification()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -71,12 +78,14 @@ export function ChangePasswordDialog({
       return
     }
 
-    try {
-      setLoading(true)
-      const response = await updateUserProfile({
-        original_password: formData.originalPassword,
-        password: formData.newPassword,
-      })
+    const submit = async (proof?: SecurityProof) => {
+      const response = await updateUserProfile(
+        {
+          original_password: formData.originalPassword,
+          password: formData.newPassword,
+        },
+        proof?.proof_token
+      )
 
       if (response.success) {
         toast.success(t('Password changed successfully'))
@@ -89,6 +98,14 @@ export function ChangePasswordDialog({
       } else {
         toast.error(response.message || t('Failed to change password'))
       }
+    }
+
+    try {
+      setLoading(true)
+      await verification.startVerification(submit, {
+        operation: { scope: 'account.password.change' },
+        description: t('Confirm your identity before changing your password.'),
+      })
     } catch (_error) {
       toast.error(t('Failed to change password'))
     } finally {
@@ -172,6 +189,7 @@ export function ChangePasswordDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+      <SecureVerificationDialog {...verification.dialogProps} />
     </Dialog>
   )
 }

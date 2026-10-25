@@ -1,6 +1,6 @@
 package types
 
-import relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+import relaytypes "eflow.local/new-api/relaykit/types"
 
 type FileSource = relaytypes.FileSource
 type URLSource = relaytypes.URLSource

@@ -17,6 +17,8 @@ type OAuthProvidersProps = {
   className?: string
   onWeChatLogin?: () => void
   isWeChatLoading?: boolean
+  /** Sign-up page invitation code, forwarded to OAuth registration. */
+  invitationCode?: string
 }
 
 type ProviderButton = {
@@ -33,6 +35,7 @@ export function OAuthProviders({
   className,
   onWeChatLogin,
   isWeChatLoading = false,
+  invitationCode,
 }: OAuthProvidersProps) {
   const { t } = useTranslation()
   const {
@@ -45,7 +48,7 @@ export function OAuthProviders({
     handleLinuxDOLogin,
     handleTelegramLogin,
     handleCustomOAuthLogin,
-  } = useOAuthLogin(status)
+  } = useOAuthLogin(status, invitationCode)
 
   const providerButtons: ProviderButton[] = []
 

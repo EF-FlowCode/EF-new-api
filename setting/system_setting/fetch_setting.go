@@ -1,6 +1,6 @@
 package system_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type FetchSetting struct {
 	EnableSSRFProtection   bool     `json:"enable_ssrf_protection"` // 是否启用SSRF防护
@@ -30,5 +30,6 @@ func init() {
 }
 
 func GetFetchSetting() *FetchSetting {
-	return &defaultFetchSetting
+	setting := config.MustSnapshot[FetchSetting]("fetch_setting")
+	return &setting
 }

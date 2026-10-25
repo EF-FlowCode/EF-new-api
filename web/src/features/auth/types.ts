@@ -46,6 +46,10 @@ export interface LoginResponse {
   message: string
   data?: {
     require_2fa?: boolean
+    require_verification?: boolean
+    flow_token?: string
+    expires_at?: number
+    methods?: { method: string; available: boolean; reason?: string }[]
     id?: number
   }
 }
@@ -84,6 +88,7 @@ export interface SystemStatus {
     linuxdo_oauth?: boolean
     linuxdo_client_id?: string
     telegram_oauth?: boolean
+    telegram_oidc?: boolean
     passkey_login?: boolean
     wechat_login?: boolean
     wechat_qrcode?: string
@@ -101,7 +106,6 @@ export interface SystemStatus {
     group_monitoring_available?: boolean
     self_use_mode_enabled?: boolean
     display_in_currency?: boolean
-    display_token_stat_enabled?: boolean
     quota_per_unit?: number
     quota_display_type?: string
     usd_exchange_rate?: number
@@ -131,6 +135,7 @@ export interface SystemStatus {
   linuxdo_oauth?: boolean
   linuxdo_client_id?: string
   telegram_oauth?: boolean
+  telegram_oidc?: boolean
   passkey_login?: boolean
   wechat_login?: boolean
   wechat_qrcode?: string
@@ -148,7 +153,6 @@ export interface SystemStatus {
   group_monitoring_available?: boolean
   self_use_mode_enabled?: boolean
   display_in_currency?: boolean
-  display_token_stat_enabled?: boolean
   quota_per_unit?: number
   quota_display_type?: string
   usd_exchange_rate?: number

@@ -53,7 +53,7 @@ export function getChannelTypeIcon(type: number): string {
     16: 'Zhipu', // Zhipu
     26: 'Zhipu', // Zhipu V4
     17: 'Qwen', // Ali
-    58: 'Qwen', // AliHappyhorse (video)
+    1001: 'Qwen', // AliHappyhorse (video)
     18: 'Spark', // Xunfei
     23: 'Hunyuan', // Tencent
     19: 'Ai360', // 360
@@ -64,6 +64,8 @@ export function getChannelTypeIcon(type: number): string {
 
     // Other AI providers
     4: 'Ollama', // Ollama
+    62: 'Vllm', // vLLM
+    63: 'SGLang', // SGLang (no lobe icon; falls back to the initial)
     27: 'Perplexity', // Perplexity
     34: 'Cohere', // Cohere
     42: 'Mistral', // Mistral

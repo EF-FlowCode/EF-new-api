@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
 	"github.com/go-redis/redis/v8"
 )
 
@@ -27,11 +27,11 @@ var redisReleaseScript string
 var redisCoolScript string
 
 type redisBackend struct {
-	client      *redis.Client
-	acquireSHA  string
-	peekSHA     string
-	releaseSHA  string
-	coolSHA     string
+	client     *redis.Client
+	acquireSHA string
+	peekSHA    string
+	releaseSHA string
+	coolSHA    string
 }
 
 func newRedisBackend() (*redisBackend, error) {
@@ -106,7 +106,7 @@ func isNoScript(err error) bool {
 // evalShaOrReload 先按缓存 SHA 执行 Lua；命中 NOSCRIPT 则自动重新 SCRIPT LOAD 并重试一次。
 // sha 是指向 redisBackend 上对应 SHA 字段的指针，重载成功后会原地更新，
 // 后续请求直接走新 SHA，不再重复加载。
-func (b *redisBackend) evalShaOrReload(ctx context.Context, sha *string, script string, keys []string, args ...interface{}) *redis.Cmd {
+func (b *redisBackend) evalShaOrReload(ctx context.Context, sha *string, script string, keys []string, args ...any) *redis.Cmd {
 	res := b.client.EvalSha(ctx, *sha, keys, args...)
 	if isNoScript(res.Err()) {
 		common.SysLog(fmt.Sprintf("multi_key_scheduler: NOSCRIPT detected, reloading Lua script"))

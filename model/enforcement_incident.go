@@ -3,7 +3,7 @@ package model
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 // EnforcementIncident is the audit row for the unified post-hit handling

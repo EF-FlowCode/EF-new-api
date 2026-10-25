@@ -51,7 +51,9 @@ export function MiniSparkline({
       const y = pad + frac * innerH
       return [x, y] as const
     })
-    const line = coords.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')
+    const line = coords
+      .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+      .join(' ')
     const [lastX, lastY] = coords[coords.length - 1]
     return { line, lastX, lastY }
   }, [values, invert, width, height])

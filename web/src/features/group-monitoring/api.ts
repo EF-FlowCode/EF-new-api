@@ -1,16 +1,33 @@
-import { api } from '@/lib/api'
+import {
+  api,
+  CALLER_HANDLED_REQUEST_CONFIG,
+  getRequestErrorMessage,
+  type ApiResult,
+  unwrapApiResult,
+} from '@/lib/api'
 import type {
+  ChannelStat,
   GroupDetail,
   GroupListResult,
   GroupMonitoringSettingsPatch,
   GroupSummary,
   HistoryResponse,
+  MonitoringModelsResult,
 } from './types'
 
-type ApiResponse<T> = {
-  success: boolean
-  message?: string
-  data: T
+export async function fetchMonitoringModels(
+  admin: boolean,
+  signal?: AbortSignal
+) {
+  const prefix = admin ? 'admin' : 'public'
+  const res = await api.get<ApiResult<MonitoringModelsResult>>(
+    `/api/monitoring/${prefix}/models`,
+    { ...CALLER_HANDLED_REQUEST_CONFIG, signal }
+  )
+  return unwrapApiResult(res.data, 'Failed to load model monitoring data')
+}
+
+type GroupApiResult<T> = ApiResult<T> & {
   // The history endpoint sometimes returns an extra top-level field.
   aggregation_interval_minutes?: number
   all_groups?: string[]
@@ -23,14 +40,14 @@ type ApiResponse<T> = {
 // 分类块渲染卡片；admin 视图额外拿到 all_groups + monitored_groups 来填管理 drawer。
 export async function fetchGroups(admin: boolean): Promise<GroupListResult> {
   const prefix = admin ? 'admin' : 'public'
-  const res = await api.get<ApiResponse<GroupSummary[]>>(
-    `/api/monitoring/${prefix}/groups`
+  const res = await api.get<GroupApiResult<GroupSummary[] | null>>(
+    `/api/monitoring/${prefix}/groups`,
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to fetch monitoring groups')
-  }
+  const groups =
+    unwrapApiResult(res.data, 'Failed to fetch monitoring groups') ?? []
   return {
-    groups: res.data.data || [],
+    groups,
     meta: {
       all_groups: res.data.all_groups,
       monitored_groups: res.data.monitored_groups,
@@ -40,16 +57,8 @@ export async function fetchGroups(admin: boolean): Promise<GroupListResult> {
   }
 }
 
-// eflow: 以 admin 身份保存监控分组管理（哪些分组在监控列表 + 类别 + 类别顺序）。
-// 按 group_monitoring_setting.<field> 逐键 PUT /api/option/——这是后端
-// handleConfigUpdate 唯一认的格式：它按首个 "." 拆 key，把子键 unmarshal 回
-// 已注册的 GroupMonitoringSetting 并热更新 atomic config（无需重启容器）。
-//
-// 不能走"先 GET 整段再合并 PUT"：
-//   1. 没有 GET /api/option/{key} 路由（只有 GET /api/option/ 列全量），单键 GET 必 404；
-//   2. PUT 整段 key="group_monitoring_setting"（无 "."）不会被 handleConfigUpdate
-//      识别为注册配置，只会写一条无效 option 行，atomic config 根本不更新。
-// 只写这三个子键，其余字段（聚合周期 / 排除规则等）天然不受影响，无需合并。
+// eflow: 以 admin 身份原子保存监控分组管理（哪些分组在监控列表 + 类别 + 类别顺序）。
+// 只写这三个子键，其余字段（聚合周期 / 排除规则等）天然不受影响。
 export async function updateGroupMonitoringSettings(
   patch: GroupMonitoringSettingsPatch
 ): Promise<void> {
@@ -67,12 +76,12 @@ export async function updateGroupMonitoringSettings(
       value: JSON.stringify(patch.category_order),
     },
   ]
-  for (const u of updates) {
-    const res = await api.put<ApiResponse<unknown>>('/api/option/', u)
-    if (!res.data?.success) {
-      throw new Error(res.data?.message || 'Failed to save monitoring settings')
-    }
-  }
+  const res = await api.put<ApiResult<unknown>>(
+    '/api/option/bulk',
+    { options: updates },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  unwrapApiResult(res.data, 'Failed to save monitoring settings')
 }
 
 export async function fetchGroupHistory(
@@ -81,12 +90,15 @@ export async function fetchGroupHistory(
 ): Promise<{ history: HistoryResponse['history']; intervalMinutes: number }> {
   const prefix = admin ? 'admin' : 'public'
   const res = await api.get<
-    ApiResponse<HistoryResponse | HistoryResponse['history']>
-  >(`/api/monitoring/${prefix}/groups/${encodeURIComponent(groupName)}/history`)
+    GroupApiResult<HistoryResponse | HistoryResponse['history'] | null>
+  >(
+    `/api/monitoring/${prefix}/groups/${encodeURIComponent(groupName)}/history`,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   if (!res.data.success) {
     return { history: [], intervalMinutes: 5 }
   }
-  const raw = res.data.data
+  const raw = unwrapApiResult(res.data, 'Failed to fetch group history')
   // The backend may return either { history, aggregation_interval_minutes }
   // wrapped in `data`, or just the history array.
   const wrapped = raw && !Array.isArray(raw) ? (raw as HistoryResponse) : null
@@ -103,18 +115,33 @@ export async function fetchGroupHistory(
 export async function fetchAdminGroupDetail(
   groupName: string
 ): Promise<GroupDetail | null> {
-  const res = await api.get<ApiResponse<GroupDetail>>(
-    `/api/monitoring/admin/groups/${encodeURIComponent(groupName)}`
+  // Backend returns channel_stats beside data, not inside it.
+  const res = await api.get<
+    ApiResult<GroupDetail | null> & { channel_stats?: ChannelStat[] }
+  >(
+    `/api/monitoring/admin/groups/${encodeURIComponent(groupName)}`,
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to fetch group detail')
-  }
-  return res.data.data
+  const group = unwrapApiResult(res.data, 'Failed to fetch group detail')
+  if (!group) return null
+  return { ...group, channel_stats: res.data.channel_stats ?? [] }
 }
 
 export async function refreshAdminMonitoring(): Promise<boolean> {
-  const res = await api.post<ApiResponse<unknown>>(
-    '/api/monitoring/admin/refresh'
-  )
-  return Boolean(res.data?.success)
+  let res
+  try {
+    res = await api.post<ApiResult<unknown>>(
+      '/api/monitoring/admin/refresh',
+      undefined,
+      CALLER_HANDLED_REQUEST_CONFIG
+    )
+  } catch (error) {
+    // 429/503 carry the reason in the body; surface it instead of axios' text.
+    throw new Error(
+      getRequestErrorMessage(error, 'Failed to refresh monitoring data'),
+      { cause: error }
+    )
+  }
+  unwrapApiResult(res.data, 'Failed to refresh monitoring data')
+  return true
 }

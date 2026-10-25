@@ -1,10 +1,17 @@
 import { z } from 'zod'
 import {
+  BASE_URL_REQUIRED_TYPES,
   CHANNEL_STATUS,
+  CLAUDE_FIELD_PASSTHROUGH_TYPES,
   ERROR_MESSAGES,
-  MODEL_FETCHABLE_TYPES,
+  OPENAI_FIELD_PASSTHROUGH_TYPES,
+  isModelFetchableChannel,
 } from '../constants'
 import type { Channel } from '../types'
+import {
+  parseAdvancedCustomConfig,
+  stringifyAdvancedCustomConfig,
+} from './advanced-custom'
 import {
   channelRateLimitSchema,
   errorFilterRuleSchema,
@@ -17,6 +24,7 @@ import {
   type ErrorFilterRule,
   type RiskControlHeaderRule,
 } from './channel-extra-rules'
+import { supportsEndpointOverride } from './endpoint-support'
 
 // ============================================================================
 // Form Validation Schema
@@ -119,9 +127,12 @@ export const channelFormSchema = z
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
     // Type-specific settings (stored in settings JSON)
+    supported_endpoint_types: z.array(z.string()).optional(),
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
+    vertex_project_id: z.string().optional(), // Vertex AI specific (api_key mode only)
     aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
+    aws_api_type: z.enum(['invoke_model', 'mantle']).optional(), // AWS interface
     azure_responses_version: z.string().optional(), // Azure specific
     // Field passthrough controls (stored in settings JSON)
     allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
@@ -131,6 +142,9 @@ export const channelFormSchema = z
     allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
     allow_speed: z.boolean().optional(), // Anthropic: speed mode control
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
+    // Advanced route configuration is stored in channel `settings`. In eflow
+    // it is currently available through the legacy Custom channel (type 8).
+    advanced_custom: z.string().optional(),
     // Upstream model update settings (stored in settings JSON)
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
@@ -157,6 +171,13 @@ export const channelFormSchema = z
         code: z.ZodIssueCode.custom,
         path: ['http2_connection_shards'],
         message: ERROR_MESSAGES.INVALID_HTTP1_WITH_SHARDS,
+      })
+    }
+    if (BASE_URL_REQUIRED_TYPES.has(data.type) && !data.base_url?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['base_url'],
+        message: ERROR_MESSAGES.REQUIRED_BASE_URL,
       })
     }
   })
@@ -203,9 +224,12 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt: '',
   system_prompt_override: false,
   // Type-specific settings
+  supported_endpoint_types: [],
   is_enterprise_account: false,
   vertex_key_type: 'json',
+  vertex_project_id: '',
   aws_key_type: 'ak_sk',
+  aws_api_type: 'invoke_model',
   azure_responses_version: '',
   // Field passthrough controls
   allow_service_tier: false,
@@ -215,6 +239,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   allow_inference_geo: false,
   allow_speed: false,
   claude_beta_query: false,
+  advanced_custom: '',
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
@@ -296,9 +321,12 @@ export function transformChannelToFormDefaults(
 
   // Parse type-specific settings from settings field
   let vertexKeyType: 'json' | 'api_key' = 'json'
+  let vertexProjectId = ''
+  let supportedEndpointTypes: string[] = []
   let azureResponsesVersion = ''
   let isEnterpriseAccount = false
   let awsKeyType: 'ak_sk' | 'api_key' = 'ak_sk'
+  let awsApiType: 'invoke_model' | 'mantle' = 'invoke_model'
   let allowServiceTier = false
   let disableStore = false
   let allowSafetyIdentifier = false
@@ -306,6 +334,7 @@ export function transformChannelToFormDefaults(
   let allowInferenceGeo = false
   let allowSpeed = false
   let claudeBetaQuery = false
+  let advancedCustom = ''
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
@@ -316,9 +345,16 @@ export function transformChannelToFormDefaults(
     try {
       const parsed = JSON.parse(channel.settings)
       vertexKeyType = parsed.vertex_key_type || 'json'
+      vertexProjectId = parsed.vertex_project_id || ''
+      supportedEndpointTypes = Array.isArray(parsed.supported_endpoint_types)
+        ? parsed.supported_endpoint_types.filter(
+            (value: unknown): value is string => typeof value === 'string'
+          )
+        : []
       azureResponsesVersion = parsed.azure_responses_version || ''
       isEnterpriseAccount = parsed.openrouter_enterprise === true
       awsKeyType = parsed.aws_key_type || 'ak_sk'
+      awsApiType = parsed.aws_api_type === 'mantle' ? 'mantle' : 'invoke_model'
       allowServiceTier = parsed.allow_service_tier === true
       disableStore = parsed.disable_store === true
       allowSafetyIdentifier = parsed.allow_safety_identifier === true
@@ -326,6 +362,12 @@ export function transformChannelToFormDefaults(
       allowInferenceGeo = parsed.allow_inference_geo === true
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
+      if (parsed.advanced_custom) {
+        const config = parseAdvancedCustomConfig(
+          JSON.stringify(parsed.advanced_custom)
+        )
+        if (config) advancedCustom = stringifyAdvancedCustomConfig(config)
+      }
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -374,16 +416,20 @@ export function transformChannelToFormDefaults(
     // Channel extra settings
     ...extraSettings,
     // Type-specific settings
+    supported_endpoint_types: supportedEndpointTypes,
     is_enterprise_account: isEnterpriseAccount,
     vertex_key_type: vertexKeyType,
+    vertex_project_id: vertexProjectId,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
+    aws_api_type: awsApiType,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
     allow_inference_geo: allowInferenceGeo,
     allow_speed: allowSpeed,
     claude_beta_query: claudeBetaQuery,
+    advanced_custom: advancedCustom,
     allow_safety_identifier: allowSafetyIdentifier,
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
@@ -458,11 +504,30 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     }
   }
 
+  // Advanced Custom and legacy Custom channels ignore the override server-side.
+  if (
+    supportsEndpointOverride(formData.type) &&
+    formData.supported_endpoint_types?.length
+  ) {
+    settingsObj.supported_endpoint_types = Array.from(
+      new Set(formData.supported_endpoint_types)
+    )
+  } else {
+    delete settingsObj.supported_endpoint_types
+  }
+
   // Add vertex_key_type for Vertex AI channels (type 41)
   if (formData.type === 41) {
     settingsObj.vertex_key_type = formData.vertex_key_type || 'json'
-  } else if ('vertex_key_type' in settingsObj) {
+    const vertexProjectId = formData.vertex_project_id?.trim()
+    if (settingsObj.vertex_key_type === 'api_key' && vertexProjectId) {
+      settingsObj.vertex_project_id = vertexProjectId
+    } else {
+      delete settingsObj.vertex_project_id
+    }
+  } else {
     delete settingsObj.vertex_key_type
+    delete settingsObj.vertex_project_id
   }
 
   // Add azure_responses_version for Azure channels (type 3)
@@ -479,23 +544,29 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.openrouter_enterprise
   }
 
-  // Add aws_key_type for AWS channels (type 33)
+  // Add aws_key_type for AWS channels (type 33). The interface selection is
+  // opt-in; existing channels retain InvokeModel.
   if (formData.type === 33) {
     settingsObj.aws_key_type = formData.aws_key_type || 'ak_sk'
-  } else if ('aws_key_type' in settingsObj) {
+    settingsObj.aws_api_type = formData.aws_api_type || 'invoke_model'
+  } else {
     delete settingsObj.aws_key_type
+    delete settingsObj.aws_api_type
   }
 
-  // Field passthrough controls:
-  // - OpenAI (type 1) and Anthropic (type 14): allow_service_tier
-  // - OpenAI only: disable_store, allow_safety_identifier
-  if (formData.type === 1 || formData.type === 14) {
+  // Field passthrough controls are keyed by eflow's actual channel mapping.
+  // In particular, eflow's Ali media channels (1001–1004) must not inherit the
+  // upstream Advanced Custom/Sub2API/New API controls.
+  if (
+    OPENAI_FIELD_PASSTHROUGH_TYPES.has(formData.type) ||
+    CLAUDE_FIELD_PASSTHROUGH_TYPES.has(formData.type)
+  ) {
     settingsObj.allow_service_tier = formData.allow_service_tier === true
   } else if ('allow_service_tier' in settingsObj) {
     delete settingsObj.allow_service_tier
   }
 
-  if (formData.type === 1) {
+  if (OPENAI_FIELD_PASSTHROUGH_TYPES.has(formData.type)) {
     settingsObj.disable_store = formData.disable_store === true
     settingsObj.allow_safety_identifier =
       formData.allow_safety_identifier === true
@@ -512,8 +583,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       delete settingsObj.allow_inference_geo
   }
 
-  // Anthropic (type 14): claude_beta_query, allow_inference_geo, allow_speed
-  if (formData.type === 14) {
+  // Anthropic (type 14): claude_beta_query, allow_inference_geo, allow_speed.
+  if (CLAUDE_FIELD_PASSTHROUGH_TYPES.has(formData.type)) {
     settingsObj.allow_inference_geo = formData.allow_inference_geo === true
     settingsObj.allow_speed = formData.allow_speed === true
     settingsObj.claude_beta_query = formData.claude_beta_query === true
@@ -522,8 +593,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     if ('claude_beta_query' in settingsObj) delete settingsObj.claude_beta_query
   }
 
+  if (formData.type === 8 && formData.advanced_custom?.trim()) {
+    const config = parseAdvancedCustomConfig(formData.advanced_custom)
+    if (config) {
+      settingsObj.advanced_custom = config
+    }
+  } else if ('advanced_custom' in settingsObj) {
+    delete settingsObj.advanced_custom
+  }
+
   // Upstream model update settings (for model-fetchable channel types)
-  if (MODEL_FETCHABLE_TYPES.has(formData.type)) {
+  if (isModelFetchableChannel(formData.type, formData.advanced_custom)) {
     settingsObj.upstream_model_update_check_enabled =
       formData.upstream_model_update_check_enabled === true
     settingsObj.upstream_model_update_auto_sync_enabled =
@@ -546,6 +626,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     if (typeof settingsObj.upstream_model_update_last_check_time !== 'number') {
       settingsObj.upstream_model_update_last_check_time = 0
     }
+  } else {
+    // These fields are meaningful only when the channel exposes a model-list
+    // endpoint. Clear stale values when an Advanced Custom route is removed
+    // (or the channel type changes), otherwise the backend will reject the
+    // saved configuration as an enabled sync without /v1/models.
+    delete settingsObj.upstream_model_update_check_enabled
+    delete settingsObj.upstream_model_update_auto_sync_enabled
+    delete settingsObj.upstream_model_update_ignored_models
+    delete settingsObj.upstream_model_update_last_check_time
+    delete settingsObj.upstream_model_update_last_detected_models
+    delete settingsObj.upstream_model_update_last_removed_models
   }
 
   const ratioSyncAccessToken = formData.ratio_sync_access_token?.trim()
@@ -620,7 +711,8 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
  */
 export function transformFormDataToUpdatePayload(
   formData: ChannelFormValues,
-  channelId: number
+  channelId: number,
+  baselineStatus?: number
 ): Partial<Channel> {
   const payload: Partial<Channel> = {
     id: channelId,
@@ -644,6 +736,10 @@ export function transformFormDataToUpdatePayload(
     header_override: formData.header_override || null,
     settings: buildSettingsJSON(formData),
     other: formData.other || '',
+  }
+
+  if (baselineStatus !== undefined && formData.status === baselineStatus) {
+    delete payload.status
   }
 
   // Only include key if it was changed (not empty)

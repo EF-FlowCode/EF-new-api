@@ -5,10 +5,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,6 +26,8 @@ func ConvertRerankRequest(request dto.RerankRequest) *AliRerankRequest {
 			Documents: request.Documents,
 		},
 		Parameters: AliRerankParameters{
+			Instruct:        request.Instruct,
+			FPS:             request.FPS,
 			TopN:            request.TopN,
 			ReturnDocuments: returnDocuments,
 		},
@@ -54,14 +56,17 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		}, resp.StatusCode), nil
 	}
 
-	usage := dto.Usage{
-		PromptTokens:     aliResponse.Usage.TotalTokens,
-		CompletionTokens: 0,
-		TotalTokens:      aliResponse.Usage.TotalTokens,
+	usage, usageErr := service.KnowledgeUsage(c, info, responseBody, false)
+	if usageErr != nil {
+		return types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway), nil
+	}
+	results := aliResponse.Output.Results
+	if results == nil {
+		results = aliResponse.Results
 	}
 	rerankResponse := dto.RerankResponse{
-		Results: aliResponse.Output.Results,
-		Usage:   usage,
+		Results: results,
+		Usage:   *usage,
 	}
 
 	jsonResponse, err := json.Marshal(rerankResponse)
@@ -71,5 +76,5 @@ func RerankHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	c.Writer.Header().Set("Content-Type", "application/json")
 	c.Writer.WriteHeader(resp.StatusCode)
 	c.Writer.Write(jsonResponse)
-	return nil, &usage
+	return nil, usage
 }

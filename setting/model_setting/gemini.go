@@ -1,7 +1,9 @@
 package model_setting
 
 import (
-	"github.com/QuantumNous/new-api/setting/config"
+	"slices"
+
+	"eflow.local/new-api/setting/config"
 )
 
 // GeminiSettings defines Gemini model configuration. 注意bool要以enabled结尾才可以生效编辑
@@ -49,30 +51,28 @@ func init() {
 
 // GetGeminiSettings 获取Gemini配置
 func GetGeminiSettings() *GeminiSettings {
-	return &geminiSettings
+	setting := config.MustSnapshot[GeminiSettings]("gemini")
+	return &setting
 }
 
 // GetGeminiSafetySetting 获取安全设置
 func GetGeminiSafetySetting(key string) string {
-	if value, ok := geminiSettings.SafetySettings[key]; ok {
+	settings := GetGeminiSettings()
+	if value, ok := settings.SafetySettings[key]; ok {
 		return value
 	}
-	return geminiSettings.SafetySettings["default"]
+	return settings.SafetySettings["default"]
 }
 
 // GetGeminiVersionSetting 获取版本设置
 func GetGeminiVersionSetting(key string) string {
-	if value, ok := geminiSettings.VersionSettings[key]; ok {
+	settings := GetGeminiSettings()
+	if value, ok := settings.VersionSettings[key]; ok {
 		return value
 	}
-	return geminiSettings.VersionSettings["default"]
+	return settings.VersionSettings["default"]
 }
 
 func IsGeminiModelSupportImagine(model string) bool {
-	for _, v := range geminiSettings.SupportedImagineModels {
-		if v == model {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(GetGeminiSettings().SupportedImagineModels, model)
 }

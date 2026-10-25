@@ -6,13 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/relay/channel"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,7 +74,8 @@ func shouldAppendClaudeBetaQuery(info *relaycommon.RelayInfo) bool {
 
 func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) {
 	// common headers operation
-	anthropicBeta := c.Request.Header.Get("anthropic-beta")
+	// eflow: 客户端可能发多行 anthropic-beta，上游只读一个逗号分隔列表，全部合并转发（上游 767a82b87）。
+	anthropicBeta := strings.Join(c.Request.Header.Values("anthropic-beta"), ",")
 	if anthropicBeta != "" {
 		req.Set("anthropic-beta", anthropicBeta)
 	}

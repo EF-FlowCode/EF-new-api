@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"gorm.io/gorm"
 )
 
@@ -46,14 +46,14 @@ var (
 )
 
 type Ticket struct {
-	Id          int    `json:"id"`
-	UserId      int    `json:"user_id" gorm:"index;not null"`
-	Username    string `json:"username" gorm:"type:varchar(64)"`
-	Subject     string `json:"subject" gorm:"type:varchar(255);not null"`
-	Type        string `json:"type" gorm:"type:varchar(32);index;default:'general'"`
-	Status      int    `json:"status" gorm:"type:int;index;default:1"`
-	Priority    int    `json:"priority" gorm:"type:int;default:2"`
-	AdminId     int    `json:"admin_id" gorm:"type:int;default:0"`
+	Id       int    `json:"id"`
+	UserId   int    `json:"user_id" gorm:"index;not null"`
+	Username string `json:"username" gorm:"type:varchar(64)"`
+	Subject  string `json:"subject" gorm:"type:varchar(255);not null"`
+	Type     string `json:"type" gorm:"type:varchar(32);index;default:'general'"`
+	Status   int    `json:"status" gorm:"type:int;index;default:1"`
+	Priority int    `json:"priority" gorm:"type:int;default:2"`
+	AdminId  int    `json:"admin_id" gorm:"type:int;default:0"`
 	// AssigneeId 当前分配到的客服/管理员用户 ID。0 表示尚未分配（待认领）。
 	// 与 AdminId 分开：AdminId 会被"最后一次回复的管理员"覆盖，而 AssigneeId 是明确的负责人。
 	AssigneeId  int            `json:"assignee_id" gorm:"type:int;index;default:0"`
@@ -72,13 +72,7 @@ type TicketQueryOptions struct {
 	// AssigneeId 用于客服视角：只返回分配给指定用户的工单；值为 -1 表示"未分配"。
 	// 0 表示不按分配过滤。
 	AssigneeId int
-	// IncludeUnassigned 仅在 AssigneeId > 0 时生效：为 true 时额外返回"未分配"的工单
-	// （组成客服的"我的 + 待认领"视图）。
-	IncludeUnassigned bool
-	// AssigneeIn 返回 AssigneeId 在给定列表中的工单；常与 IncludeUnassigned 搭配使用，
-	// 用于展示"本组池"。空列表表示不启用。
-	AssigneeIn []int
-	// TypeIn 限定工单类型必须在给定列表中；与 Type 的单值过滤互斥，仅在 Type 为空时生效。
+	// TypeIn 限定工单类型必须在给定列表中；与 Type/抬头搜索取交集，不能被搜索绕过。
 	// 用于"客服只看自己负责类型的待认领池"。空列表表示不启用。
 	TypeIn []string
 	// OrderBy 排序列，白名单：id / created_time / updated_time / status / priority。
@@ -235,10 +229,9 @@ func applyTicketFilters(query *gorm.DB, options TicketQueryOptions) *gorm.DB {
 	companyName := strings.TrimSpace(options.CompanyName)
 
 	// 发票抬头搜索只对发票工单生效：如果用户传了 CompanyName 又没指定类型，
-	// 自动加上 type=invoice 并 JOIN ticket_invoices 做 LIKE 匹配，避免在其他类型上误命中。
-	needInvoiceJoin := companyName != "" && (ticketType == "" || ticketType == TicketTypeInvoice)
-	if needInvoiceJoin {
-		query = query.Joins("LEFT JOIN ticket_invoices ON ticket_invoices.ticket_id = tickets.id")
+	// 自动加上 type=invoice。EXISTS 不会把发票表的同名字段覆盖到工单结果。
+	needInvoiceFilter := companyName != "" && (ticketType == "" || ticketType == TicketTypeInvoice)
+	if needInvoiceFilter {
 		ticketType = TicketTypeInvoice
 	}
 
@@ -250,21 +243,16 @@ func applyTicketFilters(query *gorm.DB, options TicketQueryOptions) *gorm.DB {
 	}
 	if ticketType != "" {
 		query = query.Where("tickets.type = ?", ticketType)
-	} else if len(options.TypeIn) > 0 {
+	}
+	if len(options.TypeIn) > 0 {
 		query = query.Where("tickets.type IN ?", options.TypeIn)
 	}
-	// 分配过滤：支持"仅某人"、"某人 + 未分配"、"一组人 + 未分配"三种模式。
+	// 分配过滤：-1 = 仅未分配，>0 = 仅某人。
 	switch {
 	case options.AssigneeId == -1:
 		query = query.Where("tickets.assignee_id = 0")
-	case options.AssigneeId > 0 && options.IncludeUnassigned:
-		query = query.Where("(tickets.assignee_id = ? OR tickets.assignee_id = 0)", options.AssigneeId)
 	case options.AssigneeId > 0:
 		query = query.Where("tickets.assignee_id = ?", options.AssigneeId)
-	case len(options.AssigneeIn) > 0 && options.IncludeUnassigned:
-		query = query.Where("(tickets.assignee_id IN ? OR tickets.assignee_id = 0)", options.AssigneeIn)
-	case len(options.AssigneeIn) > 0:
-		query = query.Where("tickets.assignee_id IN ?", options.AssigneeIn)
 	}
 	keyword := strings.TrimSpace(options.Keyword)
 	if keyword != "" {
@@ -275,9 +263,9 @@ func applyTicketFilters(query *gorm.DB, options TicketQueryOptions) *gorm.DB {
 			query = query.Where("(tickets.subject LIKE ? OR tickets.username LIKE ?)", like, like)
 		}
 	}
-	if needInvoiceJoin {
-		like := "%" + companyName + "%"
-		query = query.Where("ticket_invoices.company_name LIKE ?", like)
+	if needInvoiceFilter {
+		like := "%" + strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(companyName) + "%"
+		query = query.Where("EXISTS (SELECT 1 FROM ticket_invoices WHERE ticket_invoices.ticket_id = tickets.id AND ticket_invoices.company_name LIKE ? ESCAPE '!')", like)
 	}
 	return query
 }
@@ -424,7 +412,7 @@ func AddTicketMessage(ticketId int, userId int, username string, role int, conte
 		// 工单工作人员（客服或管理员）首次接手后自动进入处理中；
 		// 若工单尚未分配（assignee_id=0），同一事务里"谁先回复谁认领"。
 		// 普通用户在已解决状态追问时也会把工单回退到处理中。
-		updates := map[string]interface{}{
+		updates := map[string]any{
 			"updated_time": now,
 		}
 		if role >= common.RoleCustomerServiceUser {
@@ -472,7 +460,7 @@ func CloseUserTicket(ticketId int, userId int) (*Ticket, error) {
 		}
 
 		now := common.GetTimestamp()
-		if err := tx.Model(&Ticket{}).Where("id = ?", ticket.Id).Updates(map[string]interface{}{
+		if err := tx.Model(&Ticket{}).Where("id = ?", ticket.Id).Updates(map[string]any{
 			"status":       TicketStatusClosed,
 			"closed_time":  now,
 			"updated_time": now,
@@ -507,7 +495,7 @@ func UpdateTicketStatus(ticketId int, adminId int, status *int, priority *int) (
 		prevStatus = ticket.Status
 
 		now := common.GetTimestamp()
-		updates := map[string]interface{}{
+		updates := map[string]any{
 			"updated_time": now,
 			"admin_id":     adminId,
 		}
@@ -570,12 +558,16 @@ func AssignTicket(ticketId int, assigneeId int, expectedAssigneeId *int) (*Ticke
 			return nil
 		}
 		now := common.GetTimestamp()
-		if err := tx.Model(&Ticket{}).Where("id = ? AND assignee_id = ?", ticket.Id, prevAssign).
-			Updates(map[string]interface{}{
+		result := tx.Model(&Ticket{}).Where("id = ? AND assignee_id = ?", ticket.Id, prevAssign).
+			Updates(map[string]any{
 				"assignee_id":  assigneeId,
 				"updated_time": now,
-			}).Error; err != nil {
-			return err
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrTicketAssigneeInvalid
 		}
 		ticket.AssigneeId = assigneeId
 		ticket.UpdatedTime = now

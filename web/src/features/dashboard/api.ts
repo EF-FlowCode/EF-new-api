@@ -1,5 +1,57 @@
-import { api } from '@/lib/api'
+import { api, unwrapApiResult } from '@/lib/api'
 import type { QuotaDataItem, UptimeGroupResult } from './types'
+
+export type AccountSummary = {
+  quota: number
+  used_quota: number
+  refunded_quota: number
+  net_used_quota: number
+  request_count: number
+}
+
+export type RefundRecordKind = 'usage' | 'task' | 'ticket'
+export type PersonalRefundRecord = {
+  id: string
+  kind: RefundRecordKind
+  created_at: number
+  quota: number
+  reason: string
+  status: 'completed' | 'pending' | 'rejected'
+  request_id?: string
+  ticket_id?: number
+}
+
+const accountRequestOptions = {
+  skipErrorHandler: true,
+  skipBusinessError: true,
+}
+
+export async function getAccountSummary(signal?: AbortSignal) {
+  const res = await api.get('/api/user/self/usage-summary', {
+    ...accountRequestOptions,
+    signal,
+  })
+  return unwrapApiResult<AccountSummary>(
+    res.data,
+    'Failed to load account summary'
+  )
+}
+
+export async function getPersonalRefundRecords(
+  kind: RefundRecordKind,
+  page: number,
+  signal?: AbortSignal
+) {
+  const res = await api.get('/api/user/self/refund-records', {
+    ...accountRequestOptions,
+    signal,
+    params: { kind, p: page, page_size: 10 },
+  })
+  return unwrapApiResult<{ items: PersonalRefundRecord[]; has_more: boolean }>(
+    res.data,
+    'Failed to load refund records'
+  )
+}
 
 // ============================================================================
 // Dashboard APIs

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/types"
 	"gorm.io/gorm"
 )
 
@@ -139,7 +139,7 @@ func UpdateModerationRule(rule *ModerationRule) error {
 		return errors.New("invalid moderation rule")
 	}
 	rule.Name = strings.TrimSpace(rule.Name)
-	return DB.Model(&ModerationRule{}).Where("id = ?", rule.Id).Updates(map[string]interface{}{
+	return DB.Model(&ModerationRule{}).Where("id = ?", rule.Id).Updates(map[string]any{
 		"name":         rule.Name,
 		"description":  rule.Description,
 		"enabled":      rule.Enabled,
@@ -149,7 +149,6 @@ func UpdateModerationRule(rule *ModerationRule) error {
 		"score_weight": rule.ScoreWeight,
 		"conditions":   rule.Conditions,
 		"groups":       rule.Groups,
-		"metadata":     rule.Metadata,
 		"updated_at":   common.GetTimestamp(),
 		"updated_by":   rule.UpdatedBy,
 	}).Error

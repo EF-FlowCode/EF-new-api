@@ -5,6 +5,7 @@
 -- ARGV[2]: 滑动窗口秒数
 -- ARGV[3]: 并发上限 (0 = 不限)
 -- ARGV[4]: 唯一 token (用于 ZSET 成员去重，由调用方提供)
+-- ARGV[5]: 并发计数键过期秒数（须长于最长在途请求）
 -- 返回:
 --   {"1"}                      => 已通过
 --   {"0", "rpm_exceeded"}       => RPM 达限
@@ -16,6 +17,7 @@ local rpmLimit = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 local concLimit = tonumber(ARGV[3])
 local token = ARGV[4]
+local concTTL = tonumber(ARGV[5])
 
 local now = redis.call('TIME')
 local nowMs = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
@@ -44,6 +46,6 @@ if rpmLimit > 0 then
 end
 if concLimit > 0 then
     redis.call('INCR', concKey)
-    redis.call('EXPIRE', concKey, 60)
+    redis.call('EXPIRE', concKey, concTTL)
 end
 return { '1' }

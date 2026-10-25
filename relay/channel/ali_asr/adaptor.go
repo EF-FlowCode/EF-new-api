@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/relay/channel"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,7 +28,7 @@ import (
 //
 //   - qwen3-asr-flash : multimodal-generation 同步识别
 //   - fun-asr         : 异步录音转写（submit + 轮询 task），file_urls 直接
-//                       传 base64 data: URI（DashScope 自动转存 OSS）
+//     传 base64 data: URI（DashScope 自动转存 OSS）
 //
 // 计费：阿里 ASR 官方按「音频时长 元/秒」计（0.00022 元/秒）。沿用 AliTTS
 // 「按计费单位当 token」手法：把音频秒数当 PromptTokens，ModelRatio 编码
@@ -203,16 +203,16 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 		// 用 map 精确构造，避免 struct `omitempty` 把 system 的空
 		// {"text":""} 整个吞掉（→ DashScope 400 "content should be a
 		// message of a certain modal"）；audio item 也不能混入空 text。
-		body, err = common.Marshal(map[string]interface{}{
+		body, err = common.Marshal(map[string]any{
 			"model": a.model,
-			"input": map[string]interface{}{
-				"messages": []map[string]interface{}{
-					{"role": "system", "content": []map[string]interface{}{{"text": ""}}},
-					{"role": "user", "content": []map[string]interface{}{{"audio": dataURI}}},
+			"input": map[string]any{
+				"messages": []map[string]any{
+					{"role": "system", "content": []map[string]any{{"text": ""}}},
+					{"role": "user", "content": []map[string]any{{"audio": dataURI}}},
 				},
 			},
-			"parameters": map[string]interface{}{
-				"asr_options": map[string]interface{}{"enable_itn": false},
+			"parameters": map[string]any{
+				"asr_options": map[string]any{"enable_itn": false},
 			},
 		})
 	}

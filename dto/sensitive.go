@@ -1,6 +1,5 @@
 package dto
 
-type SensitiveResponse struct {
-	SensitiveWords []string `json:"sensitive_words"`
-	Content        string   `json:"content"`
-}
+import relaydto "eflow.local/new-api/relaykit/dto"
+
+type SensitiveResponse = relaydto.SensitiveResponse

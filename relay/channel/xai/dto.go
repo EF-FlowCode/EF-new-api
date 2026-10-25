@@ -1,6 +1,6 @@
 package xai
 
-import "github.com/QuantumNous/new-api/dto"
+import "eflow.local/new-api/dto"
 
 // ChatCompletionResponse represents the response from XAI chat completion API
 type ChatCompletionResponse struct {

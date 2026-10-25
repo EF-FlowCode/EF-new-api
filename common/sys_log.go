@@ -39,6 +39,7 @@ func FatalLog(v ...any) {
 func LogStartupSuccess(startTime time.Time, port string) {
 	duration := time.Since(startTime)
 	durationMs := duration.Milliseconds()
+	branding := GetBrandingSettings()
 
 	// Get network IPs
 	networkIps := GetNetworkIps()
@@ -47,7 +48,7 @@ func LogStartupSuccess(startTime time.Time, port string) {
 	defer LogWriterMu.RUnlock()
 
 	fmt.Fprintf(gin.DefaultWriter, "\n")
-	fmt.Fprintf(gin.DefaultWriter, "  \033[32m%s %s\033[0m  ready in %d ms\n", SystemName, Version, durationMs)
+	fmt.Fprintf(gin.DefaultWriter, "  \033[32m%s %s\033[0m  ready in %d ms\n", branding.SystemName, Version, durationMs)
 	fmt.Fprintf(gin.DefaultWriter, "\n")
 
 	if !IsRunningInContainer() {

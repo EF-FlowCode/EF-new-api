@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
+import { Mail, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Mail, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,6 +19,11 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
+  ServerPagination,
+  useLatestRequest,
+  useServerPagination,
+} from '@/components/data-table'
+import {
   fetchEnforcementConfig,
   fetchEnforcementCounters,
   fetchEnforcementIncidents,
@@ -32,16 +38,16 @@ import type {
   EnforcementCounter,
   EnforcementIncident,
   Paginated,
-  RiskOverview,
+  EnforcementOverview,
 } from '../types'
-import { PaginationFooter } from './distribution-tab'
 
 const PAGE_SIZE = 10
+const route = getRouteApi('/_authenticated/risk-center/')
 
 export function EnforcementTab() {
   const { t } = useTranslation()
-  const [overview, setOverview] = useState<RiskOverview>({})
-  const [config, setConfig] = useState<EnforcementConfig>({})
+  const [overview, setOverview] = useState<Partial<EnforcementOverview>>({})
+  const [config, setConfig] = useState<EnforcementConfig | null>(null)
   const [savingConfig, setSavingConfig] = useState(false)
   const [sendingTest, setSendingTest] = useState(false)
 
@@ -61,6 +67,27 @@ export function EnforcementTab() {
   })
   const [incidentsLoading, setIncidentsLoading] = useState(false)
 
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const countersPagination = useServerPagination({
+    search,
+    navigate,
+    total: counters.total,
+    pageKey: 'enforcementCountersPage',
+    pageSizeKey: 'enforcementCountersPageSize',
+    defaultPageSize: PAGE_SIZE,
+  })
+  const incidentsPagination = useServerPagination({
+    search,
+    navigate,
+    total: incidents.total,
+    pageKey: 'enforcementIncidentsPage',
+    pageSizeKey: 'enforcementIncidentsPageSize',
+    defaultPageSize: PAGE_SIZE,
+  })
+  const runCountersRequest = useLatestRequest()
+  const runIncidentsRequest = useLatestRequest()
+
   const reload = async () => {
     try {
       const [o, c] = await Promise.all([
@@ -76,42 +103,74 @@ export function EnforcementTab() {
     }
   }
 
-  const reloadCounters = async (page = counters.page) => {
+  const reloadCounters = async () => {
     setCountersLoading(true)
-    try {
-      const res = await fetchEnforcementCounters({ page, pageSize: PAGE_SIZE })
-      setCounters(res)
-    } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to load counters')
-      )
-    } finally {
-      setCountersLoading(false)
-    }
+    await runCountersRequest(
+      (signal) =>
+        fetchEnforcementCounters(
+          {
+            page: countersPagination.page,
+            pageSize: countersPagination.pageSize,
+          },
+          signal
+        ),
+      {
+        onSuccess: setCounters,
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load counters')
+          ),
+        onSettled: () => setCountersLoading(false),
+      }
+    )
   }
 
-  const reloadIncidents = async (page = incidents.page) => {
+  const reloadIncidents = async () => {
     setIncidentsLoading(true)
-    try {
-      const res = await fetchEnforcementIncidents({ page, pageSize: PAGE_SIZE })
-      setIncidents(res)
-    } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to load incidents')
-      )
-    } finally {
-      setIncidentsLoading(false)
-    }
+    await runIncidentsRequest(
+      (signal) =>
+        fetchEnforcementIncidents(
+          {
+            page: incidentsPagination.page,
+            pageSize: incidentsPagination.pageSize,
+          },
+          signal
+        ),
+      {
+        onSuccess: setIncidents,
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load incidents')
+          ),
+        onSettled: () => setIncidentsLoading(false),
+      }
+    )
   }
 
   useEffect(() => {
     reload()
-    reloadCounters(1)
-    reloadIncidents(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    reloadCounters()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countersPagination.page, countersPagination.pageSize])
+
+  useEffect(() => {
+    reloadIncidents()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidentsPagination.page, incidentsPagination.pageSize])
+
+  const updateConfig = (patch: Partial<EnforcementConfig>) =>
+    setConfig((previous) => (previous ? { ...previous, ...patch } : previous))
+
   const saveConfig = async () => {
+    if (!config || savingConfig) return
     setSavingConfig(true)
     try {
       await updateEnforcementConfig(config)
@@ -129,39 +188,32 @@ export function EnforcementTab() {
       await sendEnforcementTestEmail()
       toast.success(t('Test email sent'))
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : t('Failed to send test email'))
+      toast.error(
+        e instanceof Error ? e.message : t('Failed to send test email')
+      )
     } finally {
       setSendingTest(false)
     }
   }
 
-  const countersTotalPages = Math.max(
-    1,
-    Math.ceil(counters.total / PAGE_SIZE)
-  )
-  const incidentsTotalPages = Math.max(
-    1,
-    Math.ceil(incidents.total / PAGE_SIZE)
-  )
-
   return (
     <div className='space-y-5'>
       <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
         <OverviewCard
-          title={t('Total subjects')}
-          value={overview.total_subjects ?? 0}
-        />
-        <OverviewCard
-          title={t('Auto-disabled')}
-          value={overview.blocked_subjects ?? 0}
-        />
-        <OverviewCard
-          title={t('Alerts (24h)')}
-          value={overview.observed_incidents_24h ?? 0}
+          title={t('Hits (24h)')}
+          value={overview.hits_24h ?? '—'}
         />
         <OverviewCard
           title={t('Disables (24h)')}
-          value={overview.blocked_incidents_24h ?? 0}
+          value={overview.auto_bans_24h ?? '—'}
+        />
+        <OverviewCard
+          title={t('Auto-disable threshold')}
+          value={overview.ban_threshold ?? '—'}
+        />
+        <OverviewCard
+          title={t('Count window (hours)')}
+          value={overview.window_hours ?? '—'}
         />
       </div>
 
@@ -174,119 +226,86 @@ export function EnforcementTab() {
 
         {/* Config */}
         <TabsContent value='config' className='space-y-4'>
-          <div className='bg-card space-y-4 rounded-xl border p-4'>
-            <div className='flex items-start justify-between gap-3 rounded-lg border p-3'>
-              <div className='space-y-0.5'>
-                <div className='text-sm font-medium'>
-                  {t('Auto-disable on threshold')}
-                </div>
-                <div className='text-muted-foreground text-xs'>
-                  {t(
-                    'Disable channel/user when the rule hit count exceeds the threshold'
-                  )}
-                </div>
+          {config ? (
+            <fieldset
+              disabled={savingConfig}
+              className='bg-card space-y-4 rounded-xl border p-4'
+            >
+              <Field label={t('Enabled')}>
+                <Switch
+                  checked={config.enabled}
+                  disabled={savingConfig}
+                  onCheckedChange={(enabled) => updateConfig({ enabled })}
+                />
+              </Field>
+              <div className='grid gap-3 sm:grid-cols-2'>
+                <Field label={t('Auto-disable threshold')}>
+                  <Input
+                    type='number'
+                    min={0}
+                    value={config.ban_threshold}
+                    onChange={(e) =>
+                      updateConfig({ ban_threshold: Number(e.target.value) })
+                    }
+                  />
+                </Field>
+                <Field label={t('Count window (hours)')}>
+                  <Input
+                    type='number'
+                    min={0}
+                    value={config.count_window_hours}
+                    onChange={(e) =>
+                      updateConfig({
+                        count_window_hours: Number(e.target.value),
+                      })
+                    }
+                  />
+                </Field>
+                <Field label={t('Email on hit')}>
+                  <Switch
+                    checked={config.email_on_hit}
+                    disabled={savingConfig}
+                    onCheckedChange={(email_on_hit) =>
+                      updateConfig({ email_on_hit })
+                    }
+                  />
+                </Field>
+                <Field label={t('Email on auto-ban')}>
+                  <Switch
+                    checked={config.email_on_auto_ban}
+                    disabled={savingConfig}
+                    onCheckedChange={(email_on_auto_ban) =>
+                      updateConfig({ email_on_auto_ban })
+                    }
+                  />
+                </Field>
               </div>
-              <Switch
-                checked={Boolean(config.auto_disable_enabled)}
-                onCheckedChange={(v) =>
-                  setConfig((p) => ({ ...p, auto_disable_enabled: v }))
-                }
-              />
-            </div>
-            <div className='grid gap-3 sm:grid-cols-2'>
-              <Field label={t('Auto-disable threshold')}>
-                <Input
-                  type='number'
-                  value={String(config.auto_disable_threshold ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      auto_disable_threshold: Number(e.target.value) || 0,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Cooldown (seconds)')}>
-                <Input
-                  type='number'
-                  value={String(config.cooldown_seconds ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      cooldown_seconds: Number(e.target.value) || 0,
-                    }))
-                  }
-                />
-              </Field>
-            </div>
-
-            <div className='flex items-start justify-between gap-3 rounded-lg border p-3'>
-              <div className='space-y-0.5'>
-                <div className='text-sm font-medium'>
-                  {t('Email alerts')}
-                </div>
-                <div className='text-muted-foreground text-xs'>
-                  {t('Send email when enforcement is triggered')}
-                </div>
+              <div className='flex flex-wrap justify-end gap-2'>
+                <Button
+                  type='button'
+                  variant='outline'
+                  onClick={sendTest}
+                  disabled={sendingTest || savingConfig}
+                >
+                  <Mail className='mr-1.5 h-3.5 w-3.5' />
+                  {t('Send test email')}
+                </Button>
+                <Button onClick={saveConfig} disabled={savingConfig}>
+                  {t('Save configuration')}
+                </Button>
               </div>
-              <Switch
-                checked={Boolean(config.alert_email_enabled)}
-                onCheckedChange={(v) =>
-                  setConfig((p) => ({ ...p, alert_email_enabled: v }))
-                }
-              />
-            </div>
-            <div className='grid gap-3 sm:grid-cols-2'>
-              <Field label={t('Alert email recipient')}>
-                <Input
-                  type='email'
-                  value={String(config.alert_email_recipient ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      alert_email_recipient: e.target.value,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Webhook URL')}>
-                <Input
-                  value={String(config.alert_webhook_url ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      alert_webhook_url: e.target.value,
-                    }))
-                  }
-                  placeholder='https://example.com/webhook'
-                />
-              </Field>
-            </div>
-            <div className='flex flex-wrap justify-end gap-2'>
-              <Button
-                type='button'
-                variant='outline'
-                onClick={sendTest}
-                disabled={sendingTest}
-              >
-                <Mail className='mr-1.5 h-3.5 w-3.5' />
-                {t('Send test email')}
-              </Button>
-              <Button onClick={saveConfig} disabled={savingConfig}>
-                {t('Save configuration')}
-              </Button>
-            </div>
-          </div>
+            </fieldset>
+          ) : (
+            <Button variant='outline' onClick={reload}>
+              {t('Refresh')}
+            </Button>
+          )}
         </TabsContent>
 
         {/* Counters */}
         <TabsContent value='counters' className='space-y-3'>
           <div className='flex items-center justify-end'>
-            <Button
-              variant='outline'
-              size='sm'
-              onClick={() => reloadCounters(counters.page)}
-            >
+            <Button variant='outline' size='sm' onClick={reloadCounters}>
               <RefreshCw className='mr-1.5 h-3.5 w-3.5' />
               {t('Refresh')}
             </Button>
@@ -295,10 +314,10 @@ export function EnforcementTab() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className='w-20'>{t('Scope')}</TableHead>
                   <TableHead>{t('Identifier')}</TableHead>
                   <TableHead>{t('User')}</TableHead>
-                  <TableHead className='w-20'>{t('Count')}</TableHead>
+                  <TableHead>{t('Risk hits')}</TableHead>
+                  <TableHead>{t('Moderation hits')}</TableHead>
                   <TableHead className='w-40'>{t('Last action')}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -323,20 +342,16 @@ export function EnforcementTab() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  counters.items.map((c, i) => (
-                    <TableRow key={`${c.scope}-${c.identifier}-${i}`}>
-                      <TableCell className='font-mono text-xs uppercase'>
-                        {c.scope}
-                      </TableCell>
-                      <TableCell className='font-mono text-xs break-all'>
-                        {c.identifier}
-                      </TableCell>
+                  counters.items.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>{c.id}</TableCell>
                       <TableCell>{c.username || '—'}</TableCell>
-                      <TableCell className='font-mono text-xs'>
-                        {c.count}
+                      <TableCell>{c.enforcement_hit_count_risk}</TableCell>
+                      <TableCell>
+                        {c.enforcement_hit_count_moderation}
                       </TableCell>
                       <TableCell className='text-muted-foreground text-xs'>
-                        {formatRiskTime(c.last_action_time)}
+                        {formatRiskTime(c.enforcement_last_hit_at)}
                       </TableCell>
                     </TableRow>
                   ))
@@ -344,14 +359,10 @@ export function EnforcementTab() {
               </TableBody>
             </Table>
           </div>
-          <PaginationFooter
+          <ServerPagination
+            table={countersPagination.table}
             total={counters.total}
-            page={counters.page}
-            totalPages={countersTotalPages}
-            onPage={(p) => {
-              setCounters((prev) => ({ ...prev, page: p }))
-              reloadCounters(p)
-            }}
+            loading={countersLoading}
           />
         </TabsContent>
 
@@ -362,7 +373,7 @@ export function EnforcementTab() {
               <TableHeader>
                 <TableRow>
                   <TableHead className='w-40'>{t('Time')}</TableHead>
-                  <TableHead className='w-20'>{t('Scope')}</TableHead>
+                  <TableHead className='w-20'>{t('Source')}</TableHead>
                   <TableHead>{t('Identifier')}</TableHead>
                   <TableHead className='w-24'>{t('Action')}</TableHead>
                   <TableHead>{t('Trigger')}</TableHead>
@@ -393,19 +404,19 @@ export function EnforcementTab() {
                   incidents.items.map((it) => (
                     <TableRow key={it.id}>
                       <TableCell className='text-muted-foreground text-xs'>
-                        {formatRiskTime(it.created_time)}
+                        {formatRiskTime(it.created_at)}
                       </TableCell>
                       <TableCell className='font-mono text-xs uppercase'>
-                        {it.scope}
+                        {it.source}
                       </TableCell>
                       <TableCell className='font-mono text-xs break-all'>
-                        {it.identifier}
+                        {it.user_id}
                       </TableCell>
                       <TableCell>
                         <Badge
                           variant='outline'
                           className={
-                            it.action === 'disable'
+                            it.action === 'auto_ban'
                               ? 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400'
                               : 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
                           }
@@ -414,7 +425,7 @@ export function EnforcementTab() {
                         </Badge>
                       </TableCell>
                       <TableCell className='text-muted-foreground text-xs'>
-                        {it.triggered_by || '—'}
+                        {it.rule_hint || '—'}
                       </TableCell>
                       <TableCell className='text-muted-foreground text-xs'>
                         {it.reason || '—'}
@@ -425,14 +436,10 @@ export function EnforcementTab() {
               </TableBody>
             </Table>
           </div>
-          <PaginationFooter
+          <ServerPagination
+            table={incidentsPagination.table}
             total={incidents.total}
-            page={incidents.page}
-            totalPages={incidentsTotalPages}
-            onPage={(p) => {
-              setIncidents((prev) => ({ ...prev, page: p }))
-              reloadIncidents(p)
-            }}
+            loading={incidentsLoading}
           />
         </TabsContent>
       </Tabs>

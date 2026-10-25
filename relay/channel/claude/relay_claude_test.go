@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/service"
 	"github.com/stretchr/testify/require"
 )
 

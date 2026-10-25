@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy } from 'lucide-react'
+import { displayAmountToQuota, formatQuotaWithCurrency } from '@/lib/currency'
+import { cn } from '@/lib/utils'
+import { useIsAdmin } from '@/hooks/use-admin'
+import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,13 +20,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Textarea } from '@/components/ui/textarea'
-import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { useIsAdmin } from '@/hooks/use-admin'
-import {
-  displayAmountToQuota,
-  formatQuotaWithCurrency,
-} from '@/lib/currency'
-import { cn } from '@/lib/utils'
 import { fetchUserQuota, postTicketReply, updateRefundStatus } from '../api'
 import { formatTicketTimestamp } from '../lib/ticket-utils'
 import {
@@ -386,7 +383,7 @@ export function RefundDetailCard({ ticket, refund, admin, onChanged }: Props) {
         <div className='text-muted-foreground text-xs'>
           {t('Refund reason')}
         </div>
-        <div className='bg-muted/40 mt-1 whitespace-pre-wrap rounded-lg p-3 text-sm'>
+        <div className='bg-muted/40 mt-1 rounded-lg p-3 text-sm whitespace-pre-wrap'>
           {refund.reason || (
             <span className='text-muted-foreground'>
               {t('No reason provided')}
@@ -438,7 +435,9 @@ export function RefundDetailCard({ ticket, refund, admin, onChanged }: Props) {
                     {t('Write off (default)')}
                   </div>
                   <div className='text-muted-foreground text-xs'>
-                    {t('Treat the frozen amount as fully refunded; do not touch the user balance.')}
+                    {t(
+                      'Treat the frozen amount as fully refunded; do not touch the user balance.'
+                    )}
                   </div>
                 </div>
               </Label>
@@ -454,7 +453,9 @@ export function RefundDetailCard({ ticket, refund, admin, onChanged }: Props) {
                         {t('Subtract custom amount')}
                       </div>
                       <div className='text-muted-foreground text-xs'>
-                        {t('Unfreeze first, then subtract the entered amount from the user balance.')}
+                        {t(
+                          'Unfreeze first, then subtract the entered amount from the user balance.'
+                        )}
                       </div>
                     </div>
                   </Label>
@@ -468,7 +469,9 @@ export function RefundDetailCard({ ticket, refund, admin, onChanged }: Props) {
                         {t('Override final balance')}
                       </div>
                       <div className='text-muted-foreground text-xs'>
-                        {t('Unfreeze first, then set the final balance to the entered value (0 allowed).')}
+                        {t(
+                          'Unfreeze first, then set the final balance to the entered value (0 allowed).'
+                        )}
                       </div>
                     </div>
                   </Label>
@@ -476,28 +479,29 @@ export function RefundDetailCard({ ticket, refund, admin, onChanged }: Props) {
               )}
             </RadioGroup>
 
-            {isAdmin && (quotaMode === 'subtract' || quotaMode === 'override') && (
-              <div className='space-y-1.5'>
-                <Label>
-                  {quotaMode === 'subtract'
-                    ? t('Subtract amount')
-                    : t('Final balance')}
-                </Label>
-                <Input
-                  type='number'
-                  min={0}
-                  step='0.01'
-                  value={customAmountStr}
-                  onChange={(e) => setCustomAmountStr(e.target.value)}
-                  placeholder={t('Amount in displayed currency')}
-                />
-                <p className='text-muted-foreground text-xs'>
-                  {targetQuotaLoading
-                    ? t('Loading user balance…')
-                    : resolvePreview}
-                </p>
-              </div>
-            )}
+            {isAdmin &&
+              (quotaMode === 'subtract' || quotaMode === 'override') && (
+                <div className='space-y-1.5'>
+                  <Label>
+                    {quotaMode === 'subtract'
+                      ? t('Subtract amount')
+                      : t('Final balance')}
+                  </Label>
+                  <Input
+                    type='number'
+                    min={0}
+                    step='0.01'
+                    value={customAmountStr}
+                    onChange={(e) => setCustomAmountStr(e.target.value)}
+                    placeholder={t('Amount in displayed currency')}
+                  />
+                  <p className='text-muted-foreground text-xs'>
+                    {targetQuotaLoading
+                      ? t('Loading user balance…')
+                      : resolvePreview}
+                  </p>
+                </div>
+              )}
           </div>
           <DialogFooter>
             <Button
@@ -527,9 +531,7 @@ export function RefundDetailCard({ ticket, refund, admin, onChanged }: Props) {
             </DialogDescription>
           </DialogHeader>
           <div className='space-y-1.5'>
-            <Label>
-              {t('Optional rejection reason')}
-            </Label>
+            <Label>{t('Optional rejection reason')}</Label>
             <Textarea
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}

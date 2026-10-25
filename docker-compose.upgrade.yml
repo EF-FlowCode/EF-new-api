@@ -1,0 +1,5 @@
+# Apply a previously built release image to the existing local database/volumes.
+# docker compose -f docker-compose.dev.yml -f docker-compose.upgrade.yml up -d --no-build new-api
+services:
+  new-api:
+    image: ${NEW_API_CANDIDATE_IMAGE:?Set NEW_API_CANDIDATE_IMAGE to the candidate release tag}

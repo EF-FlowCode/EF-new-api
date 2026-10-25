@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/internal/testconfig"
+	"eflow.local/new-api/setting/operation_setting"
 )
 
 func TestEnforcementSettingNormalizeFiltersUnknownSources(t *testing.T) {
@@ -111,10 +112,7 @@ func TestRenderEnforcementEmailNeverIncludesRuleName(t *testing.T) {
 // zero database round-trips when the layer is off — the engines must be
 // safe to call EnforcementHit unconditionally.
 func TestEnforcementHitNoOpWhenDisabled(t *testing.T) {
-	cfg := operation_setting.GetEnforcementSetting()
-	prev := cfg.Enabled
-	cfg.Enabled = false
-	defer func() { cfg.Enabled = prev }()
+	testconfig.Set(t, "enforcement", map[string]string{"enabled": "false"})
 	// If the function attempted a DB write it would panic in this test
 	// process (no DB initialised). A successful no-op is the expected
 	// behaviour, so reaching the next line at all proves correctness.

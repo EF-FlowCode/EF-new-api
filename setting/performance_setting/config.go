@@ -1,8 +1,8 @@
 package performance_setting
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/config"
 )
 
 // PerformanceSetting 性能设置配置
@@ -48,24 +48,26 @@ func init() {
 
 // syncToCommon 将配置同步到 common 包
 func syncToCommon() {
+	setting := GetPerformanceSetting()
 	common.SetDiskCacheConfig(common.DiskCacheConfig{
-		Enabled:     performanceSetting.DiskCacheEnabled,
-		ThresholdMB: performanceSetting.DiskCacheThresholdMB,
-		MaxSizeMB:   performanceSetting.DiskCacheMaxSizeMB,
-		Path:        performanceSetting.DiskCachePath,
+		Enabled:     setting.DiskCacheEnabled,
+		ThresholdMB: setting.DiskCacheThresholdMB,
+		MaxSizeMB:   setting.DiskCacheMaxSizeMB,
+		Path:        setting.DiskCachePath,
 	})
 
 	common.SetPerformanceMonitorConfig(common.PerformanceMonitorConfig{
-		Enabled:         performanceSetting.MonitorEnabled,
-		CPUThreshold:    performanceSetting.MonitorCPUThreshold,
-		MemoryThreshold: performanceSetting.MonitorMemoryThreshold,
-		DiskThreshold:   performanceSetting.MonitorDiskThreshold,
+		Enabled:         setting.MonitorEnabled,
+		CPUThreshold:    setting.MonitorCPUThreshold,
+		MemoryThreshold: setting.MonitorMemoryThreshold,
+		DiskThreshold:   setting.MonitorDiskThreshold,
 	})
 }
 
 // GetPerformanceSetting 获取性能设置
 func GetPerformanceSetting() *PerformanceSetting {
-	return &performanceSetting
+	setting := config.MustSnapshot[PerformanceSetting]("performance_setting")
+	return &setting
 }
 
 // UpdateAndSync 更新配置并同步到 common 包

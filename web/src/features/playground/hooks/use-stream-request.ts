@@ -32,8 +32,10 @@ export function useStreamRequest() {
         sseSourceRef.current = null
       }
 
+      // 非 200 时 error 与 readystatechange 都会触发；只报第一次（通常带具体错误体）。
       const handleError = (errorMessage: string, errorCode?: string) => {
         if (!isStreamCompleteRef.current) {
+          isStreamCompleteRef.current = true
           onError(errorMessage, errorCode)
           closeSource()
         }

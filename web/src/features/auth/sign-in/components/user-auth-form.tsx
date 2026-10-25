@@ -38,6 +38,10 @@ import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
+import {
+  isLoginChallenge,
+  rememberLoginChallenge,
+} from '@/features/auth/lib/login-challenge'
 import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
 
@@ -122,7 +126,8 @@ export function UserAuthForm({
       })
 
       if (res.success) {
-        if (res.data?.require_2fa) {
+        if (isLoginChallenge(res.data)) {
+          rememberLoginChallenge(res.data)
           redirectTo2FA()
           return
         }
@@ -163,6 +168,12 @@ export function UserAuthForm({
     setIsWeChatSubmitting(true)
     try {
       const res = await wechatLoginByCode(wechatCode)
+      if (res?.success && isLoginChallenge(res.data)) {
+        rememberLoginChallenge(res.data)
+        handleWeChatDialogChange(false)
+        redirectTo2FA()
+        return
+      }
       if (res?.success) {
         await handleLoginSuccess(res.data as { id?: number } | null, redirectTo)
         toast.success(t('Signed in via WeChat'))
@@ -261,6 +272,7 @@ export function UserAuthForm({
               <FormLabel>{t('Username or Email')}</FormLabel>
               <FormControl>
                 <Input
+                  autoComplete='username'
                   placeholder={t('Enter your username or email')}
                   {...field}
                 />
@@ -278,7 +290,11 @@ export function UserAuthForm({
             <FormItem className='relative'>
               <FormLabel>{t('Password')}</FormLabel>
               <FormControl>
-                <PasswordInput placeholder={t('Enter password')} {...field} />
+                <PasswordInput
+                  autoComplete='current-password'
+                  placeholder={t('Enter password')}
+                  {...field}
+                />
               </FormControl>
               <FormMessage />
               <Link
@@ -294,7 +310,7 @@ export function UserAuthForm({
         {/* Submit Button */}
         <Button
           className='mt-2 w-full justify-center gap-2'
-          disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+          disabled={isLoading}
         >
           {isLoading ? <Loader2 className='animate-spin' /> : <LogIn />}
           {t('Sign in')}
@@ -334,7 +350,7 @@ export function UserAuthForm({
         {/* OAuth Providers */}
         <OAuthProviders
           status={status}
-          disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+          disabled={isLoading}
           onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
           isWeChatLoading={isWeChatSubmitting}
         />

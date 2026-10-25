@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -28,10 +28,7 @@ func secondsFromBytes(audioBytes int64, sampleRate int) int {
 	if per <= 0 {
 		per = int64(defaultSampleRate * bytesPerSamplePCM16)
 	}
-	secs := int((audioBytes + per - 1) / per)
-	if secs < 1 {
-		secs = 1
-	}
+	secs := max(int((audioBytes+per-1)/per), 1)
 	return secs
 }
 
@@ -46,7 +43,7 @@ type clientEvent struct {
 	Type    string `json:"type"`
 	Audio   string `json:"audio"`
 	Session struct {
-		SampleRate       int             `json:"sample_rate"`
+		SampleRate       int              `json:"sample_rate"`
 		InputAudioFormat json_RawAudioFmt `json:"input_audio_format"`
 	} `json:"session"`
 }
@@ -154,22 +151,22 @@ type dsHeader struct {
 }
 
 type dsRunTask struct {
-	Header  dsHeader        `json:"header"`
-	Payload dsRunPayload    `json:"payload"`
+	Header  dsHeader     `json:"header"`
+	Payload dsRunPayload `json:"payload"`
 }
 
 type dsRunPayload struct {
-	TaskGroup  string                 `json:"task_group"`
-	Task       string                 `json:"task"`
-	Function   string                 `json:"function"`
-	Model      string                 `json:"model"`
-	Parameters map[string]interface{} `json:"parameters"`
-	Input      map[string]interface{} `json:"input"`
+	TaskGroup  string         `json:"task_group"`
+	Task       string         `json:"task"`
+	Function   string         `json:"function"`
+	Model      string         `json:"model"`
+	Parameters map[string]any `json:"parameters"`
+	Input      map[string]any `json:"input"`
 }
 
 type dsFinishTask struct {
-	Header  dsHeader               `json:"header"`
-	Payload map[string]interface{} `json:"payload"`
+	Header  dsHeader       `json:"header"`
+	Payload map[string]any `json:"payload"`
 }
 
 type dsServerMsg struct {
@@ -194,8 +191,8 @@ func funAsrRealtimeBridge(c *gin.Context, info *relaycommon.RelayInfo) (any, *ty
 		Payload: dsRunPayload{
 			TaskGroup: "audio", Task: "asr", Function: "recognition",
 			Model:      info.UpstreamModelName,
-			Parameters: map[string]interface{}{"format": "pcm", "sample_rate": defaultSampleRate},
-			Input:      map[string]interface{}{},
+			Parameters: map[string]any{"format": "pcm", "sample_rate": defaultSampleRate},
+			Input:      map[string]any{},
 		},
 	}
 	rt, _ := common.Marshal(&runTask)
@@ -231,11 +228,11 @@ func funAsrRealtimeBridge(c *gin.Context, info *relaycommon.RelayInfo) (any, *ty
 	_ = targetConn.SetReadDeadline(time.Time{})
 
 	// 3) 给 OpenAI-realtime 客户端回最小 session.created / session.updated
-	_ = helper.WssObject(c, clientConn, map[string]interface{}{
-		"type": "session.created", "session": map[string]interface{}{"id": taskID},
+	_ = helper.WssObject(c, clientConn, map[string]any{
+		"type": "session.created", "session": map[string]any{"id": taskID},
 	})
-	_ = helper.WssObject(c, clientConn, map[string]interface{}{
-		"type": "session.updated", "session": map[string]interface{}{"id": taskID},
+	_ = helper.WssObject(c, clientConn, map[string]any{
+		"type": "session.updated", "session": map[string]any{"id": taskID},
 	})
 
 	var audioBytes int64
@@ -249,7 +246,7 @@ func funAsrRealtimeBridge(c *gin.Context, info *relaycommon.RelayInfo) (any, *ty
 		finishOnce = true
 		ft, _ := common.Marshal(&dsFinishTask{
 			Header:  dsHeader{Action: "finish-task", TaskID: taskID, Streaming: "duplex"},
-			Payload: map[string]interface{}{"input": map[string]interface{}{}},
+			Payload: map[string]any{"input": map[string]any{}},
 		})
 		_ = targetConn.WriteMessage(websocket.TextMessage, ft)
 	}
@@ -310,21 +307,21 @@ func funAsrRealtimeBridge(c *gin.Context, info *relaycommon.RelayInfo) (any, *ty
 				txt := sm.Payload.Output.Sentence.Text
 				if txt != "" {
 					lastText = txt
-					_ = helper.WssObject(c, clientConn, map[string]interface{}{
+					_ = helper.WssObject(c, clientConn, map[string]any{
 						"type":  "conversation.item.input_audio_transcription.delta",
 						"delta": txt,
 					})
 				}
 			case "task-finished":
-				_ = helper.WssObject(c, clientConn, map[string]interface{}{
+				_ = helper.WssObject(c, clientConn, map[string]any{
 					"type":       "conversation.item.input_audio_transcription.completed",
 					"transcript": lastText,
 				})
 				return
 			case "task-failed":
-				_ = helper.WssObject(c, clientConn, map[string]interface{}{
+				_ = helper.WssObject(c, clientConn, map[string]any{
 					"type":  "error",
-					"error": map[string]interface{}{"message": string(msg)},
+					"error": map[string]any{"message": string(msg)},
 				})
 				return
 			}

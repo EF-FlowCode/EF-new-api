@@ -6,14 +6,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/requestip"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/pkg/requestip"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/config"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/ratio_setting"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -65,11 +65,13 @@ func UpdateRiskCenterConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	values := make(map[string]string, len(configMap))
 	for key, value := range configMap {
-		if err = model.UpdateOption("risk_control."+key, value); err != nil {
-			common.ApiError(c, err)
-			return
-		}
+		values["risk_control."+key] = value
+	}
+	if err = model.UpdateOptionsBulk(values); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	common.ApiSuccess(c, service.GetRiskControlConfig())
 }

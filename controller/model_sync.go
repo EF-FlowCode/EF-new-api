@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -100,7 +100,7 @@ func newHTTPClient() *http.Client {
 		ResponseHeaderTimeout: time.Duration(timeoutSec) * time.Second,
 	}
 	if common.TLSInsecureSkipVerify {
-		transport.TLSClientConfig = common.InsecureTLSConfig
+		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
 	}
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
@@ -132,14 +132,11 @@ func getHTTPClient() *http.Client {
 
 func fetchJSON[T any](ctx context.Context, url string, out *upstreamEnvelope[T]) error {
 	var lastErr error
-	attempts := common.GetEnvOrDefault("SYNC_HTTP_RETRY", 3)
-	if attempts < 1 {
-		attempts = 1
-	}
+	attempts := max(common.GetEnvOrDefault("SYNC_HTTP_RETRY", 3), 1)
 	baseDelay := 200 * time.Millisecond
 	maxMB := common.GetEnvOrDefault("SYNC_HTTP_MAX_MB", 10)
 	maxBytes := int64(maxMB) << 20
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return err
@@ -578,9 +575,9 @@ func SyncUpstreamPreview(c *gin.Context) {
 
 	// 4) 计算冲突字段
 	type conflictField struct {
-		Field    string      `json:"field"`
-		Local    interface{} `json:"local"`
-		Upstream interface{} `json:"upstream"`
+		Field    string `json:"field"`
+		Local    any    `json:"local"`
+		Upstream any    `json:"upstream"`
 	}
 	type conflictItem struct {
 		ModelName string          `json:"model_name"`

@@ -10,13 +10,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay/channel/gemini"
-	"github.com/QuantumNous/new-api/relay/channel/ollama"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/relay/channel/gemini"
+	"eflow.local/new-api/relay/channel/ollama"
+	"eflow.local/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -260,7 +260,14 @@ func getUpstreamModelUpdateMinCheckIntervalSeconds() int64 {
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
-	baseURL := constant.ChannelBaseURLs[channel.Type]
+	if channel != nil && constant.SupportsAdvancedCustomRoutes(channel.Type) {
+		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+			if _, ok := config.ModelListRoute(); ok {
+				return fetchAdvancedCustomModelIDs(channel)
+			}
+		}
+	}
+	baseURL := constant.GetChannelBaseURL(channel.Type)
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
 	}
@@ -303,10 +310,13 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 			url = fmt.Sprintf("%s/api/paas/v4/models", baseURL)
 		}
 	case constant.ChannelTypeVolcEngine:
+		// 火山方舟 OpenAI 兼容 API 根路径是 /api/v3（chat/embeddings 均为
+		// {base}/api/v3/...，见 relay/channel/volcengine 的 GetRequestURL），
+		// 不存在 /v1/models 端点。原拼接会导致「获取模型列表」固定 404 失败。
 		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
 			url = fmt.Sprintf("%s/v1/models", plan.OpenAIBaseURL)
 		} else {
-			url = fmt.Sprintf("%s/v1/models", baseURL)
+			url = fmt.Sprintf("%s/api/v3/models", baseURL)
 		}
 	case constant.ChannelTypeMoonshot:
 		if plan, ok := constant.ChannelSpecialBases[baseURL]; ok && plan.OpenAIBaseURL != "" {
@@ -349,9 +359,40 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	return normalizeModelNames(ids), nil
 }
 
+func fetchAdvancedCustomModelIDs(channel *model.Channel) ([]string, error) {
+	body, err := fetchAdvancedCustomManagementBody(channel, dto.AdvancedCustomModelListPath)
+	if err != nil {
+		return nil, err
+	}
+	return parseAdvancedCustomModelIDs(body)
+}
+
+// parseAdvancedCustomModelIDs enforces the discovery response contract. An
+// empty or missing data array is treated as an error so a transient/broken
+// provider response cannot be interpreted as "remove every local model" by
+// the upstream model synchronizer.
+func parseAdvancedCustomModelIDs(body []byte) ([]string, error) {
+	var result struct {
+		Data *[]OpenAIModel `json:"data"`
+	}
+	if err := common.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("invalid OpenAI Models response: %w", err)
+	}
+	if result.Data == nil {
+		return nil, fmt.Errorf("invalid OpenAI Models response: data is required")
+	}
+	ids := normalizeModelNames(lo.Map(*result.Data, func(item OpenAIModel, _ int) string {
+		return item.ID
+	}))
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("OpenAI Models response contains no valid model IDs")
+	}
+	return ids, nil
+}
+
 func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.ChannelOtherSettings, updateModels bool) error {
 	channel.SetOtherSettings(settings)
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"settings": channel.OtherSettings,
 	}
 	if updateModels {

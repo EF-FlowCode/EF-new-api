@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>E-FlowCode · 维护中</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--text:#182231;--muted:#536174;--line:#e1e5eb;--accent:#296048}
+@media(prefers-color-scheme:dark){:root{--bg:#10151b;--card:#19212b;--text:#edf1f6;--muted:#a7b3c2;--line:#303d4c;--accent:#9dd8b9}}
+*{box-sizing:border-box}body{margin:0;min-height:100svh;display:grid;place-items:center;background:var(--bg);color:var(--text);font:16px/1.7 system-ui,sans-serif;padding:24px}
+main{width:min(100%,540px);background:var(--card);border:1px solid var(--line);border-radius:20px;padding:clamp(24px,6vw,48px)}
+.brand{font-weight:700;letter-spacing:.04em;color:var(--accent)}h1{font-size:clamp(24px,5vw,32px);line-height:1.4;margin:24px 0 12px}p{color:var(--muted)}
+button{font:inherit;cursor:pointer;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 18px}small{display:block;margin-top:24px;color:var(--muted)}
+</style>
+<main>
+<div class="brand">E-FlowCode</div>
+<h1 id="title">正在维护升级</h1>
+<p id="message">当前暂时无法处理新请求，请稍后再试。</p>
+<p id="status" role="status" aria-live="polite">本页面会自动检查恢复状态，无需反复刷新。</p>
+<button id="return" hidden>服务已恢复，返回页面</button>
+<noscript><p>请稍后手动刷新页面。</p></noscript>
+<small>感谢你的耐心等待。</small>
+</main>
+<script src="/__maintenance/page.js" defer></script>
+</html>

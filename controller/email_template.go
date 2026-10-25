@@ -1,10 +1,10 @@
 package controller
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -70,7 +70,7 @@ type previewEmailTemplateRequest struct {
 
 // PreviewEmailTemplate 使用示例变量渲染给定模板。Root only。
 //
-// 请求 {key, subject?, body?}：subject/body 为空时使用已保存（或默认）值，方便"未保存先预览"。
+// 请求 {key, subject?, body?}：新模板空字段回落默认；旧模板空字段使用已保存（或默认）值。
 func PreviewEmailTemplate(c *gin.Context) {
 	var req previewEmailTemplateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -108,11 +108,10 @@ func ResetEmailTemplate(c *gin.Context) {
 		common.ApiErrorMsg(c, "未知的模板")
 		return
 	}
-	if err := model.UpdateOption(constant.EmailTemplateSubjectKey(spec.Key), ""); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if err := model.UpdateOption(constant.EmailTemplateBodyKey(spec.Key), ""); err != nil {
+	if err := model.UpdateOptionsBulk(map[string]string{
+		constant.EmailTemplateSubjectKey(spec.Key): "",
+		constant.EmailTemplateBodyKey(spec.Key):    "",
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}

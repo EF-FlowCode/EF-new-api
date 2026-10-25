@@ -19,7 +19,7 @@ interface CompactDateTimeRangePickerProps {
 }
 
 function toInputValue(date?: Date): string {
-  return date ? dayjs(date).format('YYYY-MM-DDTHH:mm') : ''
+  return date ? dayjs(date).format('YYYY-MM-DDTHH:mm:ss') : ''
 }
 
 function fromInputValue(value: string): Date | undefined {
@@ -109,7 +109,10 @@ export function CompactDateTimeRangePicker({
           <span className='truncate'>{label}</span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align='start' className='w-[min(520px,calc(100vw-2rem))] p-3'>
+      <PopoverContent
+        align='start'
+        className='w-[min(520px,calc(100vw-2rem))] p-3'
+      >
         <div className='space-y-3'>
           <div className='grid gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-end'>
             <div className='space-y-1.5'>
@@ -118,6 +121,7 @@ export function CompactDateTimeRangePicker({
               </div>
               <Input
                 type='datetime-local'
+                step={1}
                 value={draftStart}
                 onChange={(e) => setDraftStart(e.target.value)}
                 className='h-8 font-mono text-xs'
@@ -132,6 +136,7 @@ export function CompactDateTimeRangePicker({
               </div>
               <Input
                 type='datetime-local'
+                step={1}
                 value={draftEnd}
                 onChange={(e) => setDraftEnd(e.target.value)}
                 className='h-8 font-mono text-xs'

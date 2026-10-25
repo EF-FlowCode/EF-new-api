@@ -1,22 +1,21 @@
 /* portal.css —— e-flowcode 营销门户首页样式
  * 所有规则都套 .portal-root 父选择器,不污染 sign-in / dashboard / 其它路由。 */
 
-@font-face {
-  font-family: 'LXGW WenKai';
-  font-display: swap;
-  src: url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-regular.woff2') format('woff2');
-}
+@import url('https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-regular.css');
+
 @font-face {
   font-family: 'JetBrains Mono Portal';
   font-display: swap;
   font-weight: 400;
-  src: url('https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@master/fonts/webfonts/JetBrainsMono-Regular.woff2') format('woff2');
+  src: url('https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@master/fonts/webfonts/JetBrainsMono-Regular.woff2')
+    format('woff2');
 }
 @font-face {
   font-family: 'JetBrains Mono Portal';
   font-display: swap;
   font-weight: 700;
-  src: url('https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@master/fonts/webfonts/JetBrainsMono-Bold.woff2') format('woff2');
+  src: url('https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@master/fonts/webfonts/JetBrainsMono-Bold.woff2')
+    format('woff2');
 }
 
 /* portal 直接消费 theme.css 里的 atelier token,跟着 :root[data-theme=...] 切。
@@ -25,21 +24,24 @@
  * 背景柔光 body 已经按 --primary 铺好了 fixed radial-gradient,portal-root 透出即可。 */
 .portal-root {
   --portal-serif: 'LXGW WenKai', 'Noto Serif SC', 'Songti SC', 'STSong', serif;
-  --portal-sans:  'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  --portal-mono:  'JetBrains Mono Portal', ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, monospace;
+  --portal-sans:
+    'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --portal-mono:
+    'JetBrains Mono Portal', ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo,
+    Consolas, monospace;
 
   /* 直接绑 shadcn 名:--primary / --background / --foreground 等在 6 套主题里
    * 都被各自的 :root[data-theme=...] 块明确定义,不会出现 vermilion 默认值
    * 串进 slate-dark 的情况(atelier 名 --paper / --brand 走 :root 默认块对所有
    * 主题都生效,fallback 拿不到,会染串色)。 */
-  --portal-brand:      var(--primary);
+  --portal-brand: var(--primary);
   --portal-brand-deep: var(--primary);
-  --portal-paper:      var(--background);
+  --portal-paper: var(--background);
   --portal-paper-deep: var(--secondary);
-  --portal-ink:        var(--foreground);
-  --portal-ink-soft:   var(--muted-foreground);
-  --portal-ink-mute:   var(--muted-foreground);
-  --portal-rule:       var(--border);
+  --portal-ink: var(--foreground);
+  --portal-ink-soft: var(--muted-foreground);
+  --portal-ink-mute: var(--muted-foreground);
+  --portal-rule: var(--border);
 
   font-family: var(--portal-sans);
   color: var(--portal-ink);
@@ -47,56 +49,114 @@
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* 透明,让 body 的主题径向柔光透上来。叠一层极淡噪点保留纸质感。 */
-  background:
-    radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--portal-ink) 4%, transparent) 1px, transparent 0)
+  background: radial-gradient(
+      circle at 1px 1px,
+      color-mix(in oklch, var(--portal-ink) 4%, transparent) 1px,
+      transparent 0
+    )
     0 0 / 4px 4px;
 }
 
 .portal-root *,
 .portal-root *::before,
-.portal-root *::after { box-sizing: border-box; }
-.portal-root ::selection { background: var(--portal-brand); color: var(--portal-paper); }
-.portal-root a { color: inherit; }
+.portal-root *::after {
+  box-sizing: border-box;
+}
+.portal-root ::selection {
+  background: var(--portal-brand);
+  color: var(--portal-paper);
+}
+.portal-root a {
+  color: inherit;
+}
 
 /* ───────── nav ───────── */
 .portal-root .top {
-  position: sticky; top: 0; z-index: 50;
+  position: sticky;
+  top: 0;
+  z-index: 50;
   background: color-mix(in oklch, var(--portal-paper) 82%, transparent);
   backdrop-filter: blur(10px) saturate(140%);
   border-bottom: 1px solid var(--portal-rule);
 }
 .portal-root .nav-inner {
-  max-width: 1240px; margin: 0 auto;
+  max-width: 1240px;
+  margin: 0 auto;
   padding: 16px 32px;
   display: grid;
   grid-template-columns: auto 1fr auto auto auto;
-  align-items: center; gap: 24px;
+  align-items: center;
+  gap: 24px;
 }
 @media (max-width: 820px) {
-  .portal-root .nav-inner { gap: 12px; padding: 14px 16px; }
+  .portal-root .nav-inner {
+    grid-template-columns: auto 1fr auto auto;
+    gap: 8px 12px;
+    padding: 14px 16px;
+  }
+
+  .portal-root .nav-links {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    justify-content: space-between;
+  }
+
+  .portal-root .nav-link {
+    padding: 6px 8px;
+  }
+
+  .portal-root .theme-picker-slot {
+    grid-row: 1;
+    grid-column: 3;
+  }
+
+  .portal-root .nav-cta {
+    grid-row: 1;
+    grid-column: 4;
+  }
 }
 .portal-root .brand {
-  display: flex; align-items: center; gap: 10px;
-  text-decoration: none; color: var(--portal-ink);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--portal-ink);
 }
 .portal-root .brand-mark {
-  width: 36px; height: 36px;
-  border-radius: 50%; object-fit: cover;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
   background: var(--portal-paper-deep);
   border: 1px solid var(--portal-rule);
   display: block;
 }
 .portal-root .brand-name {
-  font-family: var(--portal-mono); font-size: 13px; font-weight: 700;
+  font-family: var(--portal-mono);
+  font-size: 13px;
+  font-weight: 700;
   color: var(--portal-ink-soft);
 }
-.portal-root .brand-name::before { content: '/ '; color: var(--portal-ink-mute); }
-.portal-root .nav-links { display: flex; gap: 4px; justify-self: end; }
+.portal-root .brand-name::before {
+  content: '/ ';
+  color: var(--portal-ink-mute);
+}
+.portal-root .nav-links {
+  display: flex;
+  gap: 4px;
+  justify-self: end;
+}
 .portal-root .nav-link {
-  text-decoration: none; color: var(--portal-ink-soft);
-  padding: 8px 14px; border-radius: 6px;
-  font-size: 14px; font-weight: 500;
-  transition: color .15s, background .15s;
+  text-decoration: none;
+  color: var(--portal-ink-soft);
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  transition:
+    color 0.15s,
+    background 0.15s;
   font-family: var(--portal-sans);
   cursor: pointer;
 }
@@ -105,171 +165,265 @@
   background: color-mix(in oklch, var(--portal-ink) 8%, transparent);
 }
 .portal-root .nav-cta {
-  text-decoration: none; color: var(--portal-paper);
+  text-decoration: none;
+  color: var(--portal-paper);
   background: var(--portal-ink);
-  padding: 10px 18px; border-radius: 6px;
-  font-size: 14px; font-weight: 600;
-  display: inline-flex; align-items: center; gap: 6px;
-  transition: background .15s;
-  font-family: var(--portal-mono); letter-spacing: -.01em;
+  padding: 10px 18px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s;
+  font-family: var(--portal-mono);
+  letter-spacing: -0.01em;
 }
-.portal-root .nav-cta:hover { background: var(--portal-brand); }
+.portal-root .nav-cta:hover {
+  background: var(--portal-brand);
+}
 
-/* 主题选择器:6 色小圆点,未登录用户也能从这切 atelier 主题 */
-.portal-root .theme-picker {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 6px;
-  background: color-mix(in oklch, var(--portal-paper-deep) 50%, transparent);
-  border: 1px solid var(--portal-rule);
-  border-radius: 999px;
-}
-.portal-root .theme-dot {
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(0,0,0,.08);
-  padding: 0; cursor: pointer;
-  outline: none;
-  transition: transform .15s;
-}
-.portal-root .theme-dot:hover { transform: scale(1.15); }
-.portal-root .theme-dot.active {
-  outline: 2px solid var(--portal-ink);
-  outline-offset: 2px;
-}
-@media (max-width: 820px) {
-  /* 窄屏隐藏主题选择器,避免 nav 挤爆 */
-  .portal-root .theme-picker { display: none; }
+@media (max-width: 460px) {
+  .portal-root .brand-name {
+    display: none;
+  }
 }
 
 /* ───────── hero ───────── */
 .portal-root .hero {
-  max-width: 1240px; margin: 0 auto;
+  max-width: 1240px;
+  margin: 0 auto;
   padding: 80px 32px 64px;
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
-  gap: 56px; align-items: start;
+  gap: 56px;
+  align-items: start;
   position: relative;
 }
 @media (max-width: 900px) {
-  .portal-root .hero { grid-template-columns: 1fr; gap: 32px; padding-top: 48px; }
+  .portal-root .hero {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding-top: 48px;
+  }
 }
-.portal-root .hero-l { padding-top: 12px; }
+.portal-root .hero-l,
+.portal-root .hero-r {
+  min-width: 0;
+}
+.portal-root .hero-l {
+  padding-top: 12px;
+}
 .portal-root .hero-title {
   font-family: var(--portal-serif);
   font-size: clamp(48px, 7vw, 88px);
-  font-weight: 700; line-height: 1.02;
-  letter-spacing: -.02em; color: var(--portal-ink);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
+  color: var(--portal-ink);
   margin: 0 0 28px;
 }
 .portal-root .hero-title em {
-  font-style: normal; color: var(--portal-brand);
-  position: relative; white-space: nowrap;
+  font-style: normal;
+  color: var(--portal-brand);
+  position: relative;
+  white-space: nowrap;
 }
 .portal-root .hero-title em::after {
-  content: ''; position: absolute;
-  left: 0; right: 0; bottom: -6px; height: 8px;
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 8px;
   /* 用 mask 让手绘线跟着主题 brand 色走,SVG 里的描边颜色只是 mask 形状 */
   background-color: var(--portal-brand);
-  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 8' preserveAspectRatio='none'><path d='M0 5 Q 50 0, 100 4 T 200 3' stroke='black' stroke-width='2' fill='none' stroke-linecap='round'/></svg>") center / 100% 100% no-repeat;
-          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 8' preserveAspectRatio='none'><path d='M0 5 Q 50 0, 100 4 T 200 3' stroke='black' stroke-width='2' fill='none' stroke-linecap='round'/></svg>") center / 100% 100% no-repeat;
-  opacity: .7;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 8' preserveAspectRatio='none'><path d='M0 5 Q 50 0, 100 4 T 200 3' stroke='black' stroke-width='2' fill='none' stroke-linecap='round'/></svg>")
+    center / 100% 100% no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 8' preserveAspectRatio='none'><path d='M0 5 Q 50 0, 100 4 T 200 3' stroke='black' stroke-width='2' fill='none' stroke-linecap='round'/></svg>")
+    center / 100% 100% no-repeat;
+  opacity: 0.7;
 }
-.portal-root .hero-ctas { display: inline-flex; gap: 12px; margin-bottom: 36px; flex-wrap: wrap; }
+.portal-root .hero-ctas {
+  display: inline-flex;
+  gap: 12px;
+  margin-bottom: 36px;
+  flex-wrap: wrap;
+}
 .portal-root .btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 14px 22px; border-radius: 6px;
-  font-size: 14px; font-weight: 600;
-  text-decoration: none; cursor: pointer; border: none;
-  transition: transform .15s, background .15s;
-  font-family: var(--portal-mono); letter-spacing: -.01em;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 22px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  border: none;
+  transition:
+    transform 0.15s,
+    background 0.15s;
+  font-family: var(--portal-mono);
+  letter-spacing: -0.01em;
 }
 .portal-root .btn-primary {
-  background: var(--portal-ink); color: var(--portal-paper);
-  box-shadow: 0 4px 12px rgba(14, 26, 23, .18);
+  background: var(--portal-ink);
+  color: var(--portal-paper);
+  box-shadow: 0 4px 12px rgba(14, 26, 23, 0.18);
 }
-.portal-root .btn-primary:hover { background: var(--portal-brand-deep); transform: translateY(-1px); }
+.portal-root .btn-primary:hover {
+  background: var(--portal-brand-deep);
+  transform: translateY(-1px);
+}
 .portal-root .btn-ghost {
-  background: transparent; color: var(--portal-ink);
+  background: transparent;
+  color: var(--portal-ink);
   border: 1px solid var(--portal-ink);
 }
-.portal-root .btn-ghost:hover { background: var(--portal-ink); color: var(--portal-paper); }
+.portal-root .btn-ghost:hover {
+  background: var(--portal-ink);
+  color: var(--portal-paper);
+}
 
 /* ───────── 右侧代码窗 ───────── */
 .portal-root .codewin {
   /* 代码窗永远是深底浅字(窗内语法色都是给深底调的);不能用会随暗色主题翻成
    * 浅色的 --portal-ink/--portal-paper,否则暗色主题下窗体反相泛白、字看不清。 */
-  background: #0e1a17; color: #f5f1e8;
+  background: #0e1a17;
+  color: #f5f1e8;
   border-radius: 8px;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .08) inset,
-              0 24px 48px -16px rgba(14, 26, 23, .45);
-  overflow: hidden; position: relative;
-  transform: rotate(.4deg);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 24px 48px -16px rgba(14, 26, 23, 0.45);
+  overflow: hidden;
+  position: relative;
+  transform: rotate(0.4deg);
 }
 .portal-root .codewin-head {
   padding: 12px 18px;
-  background: rgba(255, 255, 255, .02);
-  border-bottom: 1px solid rgba(255, 255, 255, .08);
-  display: flex; align-items: center; gap: 8px;
-  font-family: var(--portal-mono); font-size: 12px;
-  color: rgba(245, 241, 232, .5);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--portal-mono);
+  font-size: 12px;
+  color: rgba(245, 241, 232, 0.5);
 }
-.portal-root .cw-bullets { display: flex; gap: 6px; margin-right: 8px; }
-.portal-root .cw-bullets span { width: 11px; height: 11px; border-radius: 50%; }
-.portal-root .cw-bullets span:nth-child(1) { background: #ff5f57; }
-.portal-root .cw-bullets span:nth-child(2) { background: #febc2e; }
-.portal-root .cw-bullets span:nth-child(3) { background: #28c840; }
+.portal-root .cw-bullets {
+  display: flex;
+  gap: 6px;
+  margin-right: 8px;
+}
+.portal-root .cw-bullets span {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+.portal-root .cw-bullets span:nth-child(1) {
+  background: #ff5f57;
+}
+.portal-root .cw-bullets span:nth-child(2) {
+  background: #febc2e;
+}
+.portal-root .cw-bullets span:nth-child(3) {
+  background: #28c840;
+}
 .portal-root .cw-tab {
-  margin-left: auto; background: rgba(255, 255, 255, .08);
-  padding: 3px 10px; border-radius: 4px; font-size: 11px;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
 }
 .portal-root .codewin-body {
   padding: 22px 24px 24px;
-  font-family: var(--portal-mono); font-size: 13px; line-height: 1.75;
+  font-family: var(--portal-mono);
+  font-size: 13px;
+  line-height: 1.75;
   overflow-x: auto;
 }
-.portal-root .cw-line { display: block; white-space: pre; }
-.portal-root .cw-comment { color: rgba(245, 241, 232, .4); }
-.portal-root .cw-key { color: #c084fc; }
-.portal-root .cw-str { color: #5dd6a9; }
-.portal-root .cw-fn  { color: #fbbf24; }
-.portal-root .cw-var { color: #93c5fd; }
-.portal-root .cw-punct { color: rgba(245, 241, 232, .5); }
-.portal-root .cw-plain { color: #f5f1e8; }
+.portal-root .cw-line {
+  display: block;
+  white-space: pre;
+}
+.portal-root .cw-comment {
+  color: rgba(245, 241, 232, 0.4);
+}
+.portal-root .cw-key {
+  color: #c084fc;
+}
+.portal-root .cw-str {
+  color: #5dd6a9;
+}
+.portal-root .cw-fn {
+  color: #fbbf24;
+}
+.portal-root .cw-var {
+  color: #93c5fd;
+}
+.portal-root .cw-punct {
+  color: rgba(245, 241, 232, 0.5);
+}
+.portal-root .cw-plain {
+  color: #f5f1e8;
+}
 .portal-root .codewin-foot {
-  border-top: 1px solid rgba(255, 255, 255, .08);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding: 12px 18px;
-  font-family: var(--portal-mono); font-size: 11px;
-  color: rgba(245, 241, 232, .45);
-  display: flex; justify-content: space-between;
+  font-family: var(--portal-mono);
+  font-size: 11px;
+  color: rgba(245, 241, 232, 0.45);
+  display: flex;
+  justify-content: space-between;
 }
 .portal-root .codewin-foot a {
   color: color-mix(in oklch, var(--portal-brand) 75%, white);
   text-decoration: none;
 }
 .portal-root .codewin-foot .blink {
-  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
   background: color-mix(in oklch, var(--portal-brand) 75%, white);
   box-shadow: 0 0 8px color-mix(in oklch, var(--portal-brand) 75%, white);
   animation: portal-pulse 1.6s ease-in-out infinite;
   margin-right: 6px;
 }
-@keyframes portal-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes portal-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 
 /* ───────── 通用 section head ───────── */
 .portal-root .section-head {
-  display: flex; align-items: end; justify-content: space-between;
-  margin-bottom: 32px; gap: 24px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 32px;
+  gap: 24px;
 }
 .portal-root .section-h {
   font-family: var(--portal-serif);
-  font-size: 42px; font-weight: 700;
-  letter-spacing: -.02em; line-height: 1.1;
-  color: var(--portal-ink); margin: 0;
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--portal-ink);
+  margin: 0;
 }
 
 /* ───────── 工坊墙 ───────── */
 .portal-root .wall-wrap {
-  max-width: 1240px; margin: 0 auto;
+  max-width: 1240px;
+  margin: 0 auto;
   padding: 64px 32px 96px;
   border-top: 1px solid var(--portal-rule);
 }
@@ -278,81 +432,189 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 32px 24px;
 }
-@media (max-width: 1000px) { .portal-root .wall { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 720px)  { .portal-root .wall { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 460px)  { .portal-root .wall { grid-template-columns: 1fr; } }
+@media (max-width: 1000px) {
+  .portal-root .wall {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .portal-root .wall {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 460px) {
+  .portal-root .wall {
+    grid-template-columns: 1fr;
+  }
+}
 
 .portal-root .note {
-  position: relative; aspect-ratio: 1 / 1.05;
+  position: relative;
+  aspect-ratio: 1 / 1.05;
   padding: 24px 22px 20px;
   border-radius: 2px;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, .06),
-              0 14px 28px -10px rgba(14, 26, 23, .22);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.06),
+    0 14px 28px -10px rgba(14, 26, 23, 0.22);
   /* 便签背景是写死的浅色纸(下面 .c-image 等),所以文字/箭头一律用固定深墨,
    * 不能用会随暗色主题翻浅的 --portal-ink,否则暗色下浅底浅字、标题消失。
    * .c-market 那张反相卡在下方单独覆盖,不受影响。 */
-  text-decoration: none; color: #0e1a17;
-  display: flex; flex-direction: column;
-  transition: transform .3s cubic-bezier(.4, 0, .2, 1),
-              box-shadow .3s cubic-bezier(.4, 0, .2, 1);
+  text-decoration: none;
+  color: #0e1a17;
+  display: flex;
+  flex-direction: column;
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   transform-origin: center top;
 }
-.portal-root .note:nth-child(odd)  { transform: rotate(-1.1deg); }
-.portal-root .note:nth-child(even) { transform: rotate(1.4deg); }
-.portal-root .note:nth-child(3n)   { transform: rotate(-1.8deg); }
-.portal-root .note:nth-child(4n)   { transform: rotate(2deg); }
+.portal-root .note:nth-child(odd) {
+  transform: rotate(-1.1deg);
+}
+.portal-root .note:nth-child(even) {
+  transform: rotate(1.4deg);
+}
+.portal-root .note:nth-child(3n) {
+  transform: rotate(-1.8deg);
+}
+.portal-root .note:nth-child(4n) {
+  transform: rotate(2deg);
+}
 .portal-root .note:hover {
   transform: rotate(0deg) translateY(-8px) scale(1.03);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, .08),
-              0 28px 44px -12px rgba(14, 26, 23, .36);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.08),
+    0 28px 44px -12px rgba(14, 26, 23, 0.36);
   z-index: 2;
 }
 .portal-root .note::before {
-  content: ""; position: absolute;
-  top: -8px; left: 50%; transform: translateX(-50%) rotate(-2deg);
-  width: 56px; height: 16px;
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-2deg);
+  width: 56px;
+  height: 16px;
   background: color-mix(in oklch, var(--portal-brand) 30%, transparent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
-.portal-root .note .idx { font-family: var(--portal-mono); font-size: 11px; color: rgba(14, 26, 23, .4); letter-spacing: .08em; margin-bottom: 10px; }
-.portal-root .note .name { font-family: var(--portal-serif); font-size: 22px; font-weight: 700; letter-spacing: -.01em; margin: 0 0 2px; color: #0e1a17; }
-.portal-root .note .en   { font-family: var(--portal-mono); font-size: 11px; color: rgba(14, 26, 23, .5); margin-bottom: 12px; }
-.portal-root .note .desc { font-size: 13px; line-height: 1.55; color: rgba(14, 26, 23, .72); flex: 1; }
+.portal-root .note .idx {
+  font-family: var(--portal-mono);
+  font-size: 11px;
+  color: rgba(14, 26, 23, 0.4);
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+.portal-root .note .name {
+  font-family: var(--portal-serif);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 2px;
+  color: #0e1a17;
+}
+.portal-root .note .en {
+  font-family: var(--portal-mono);
+  font-size: 11px;
+  color: rgba(14, 26, 23, 0.5);
+  margin-bottom: 12px;
+}
+.portal-root .note .desc {
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(14, 26, 23, 0.72);
+  flex: 1;
+}
 .portal-root .note .arrow {
-  margin-top: 12px; align-self: flex-end;
-  width: 26px; height: 26px; border-radius: 50%;
-  background: rgba(14, 26, 23, .1);
-  display: flex; align-items: center; justify-content: center;
-  transition: background .2s, transform .2s, color .2s;
+  margin-top: 12px;
+  align-self: flex-end;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(14, 26, 23, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.2s,
+    transform 0.2s,
+    color 0.2s;
 }
-.portal-root .note:hover .arrow { background: var(--portal-ink); color: var(--portal-paper); transform: translateX(2px); }
-.portal-root .note .arrow svg { width: 12px; height: 12px; }
+.portal-root .note:hover .arrow {
+  background: var(--portal-ink);
+  color: var(--portal-paper);
+  transform: translateX(2px);
+}
+.portal-root .note .arrow svg {
+  width: 12px;
+  height: 12px;
+}
 
-.portal-root .c-image   { background: #f4d8c4; }
-.portal-root .c-video   { background: #d4d2e8; }
-.portal-root .c-diagram { background: #cdddd9; }
-.portal-root .c-docx    { background: #d6e2c9; }
-.portal-root .c-canvas  { background: #f0e4b6; }
-.portal-root .c-voice   { background: #efcec9; }
-.portal-root .c-omni    { background: #c4dad3; }
-.portal-root .c-market  { background: var(--portal-ink); color: var(--portal-paper); }
-.portal-root .c-market::before { background: rgba(245, 241, 232, .25); }
-.portal-root .c-market .name { color: var(--portal-paper); }
-.portal-root .c-market .desc { color: rgba(245, 241, 232, .7); }
+.portal-root .c-image {
+  background: #f4d8c4;
+}
+.portal-root .c-video {
+  background: #d4d2e8;
+}
+.portal-root .c-diagram {
+  background: #cdddd9;
+}
+.portal-root .c-docx {
+  background: #d6e2c9;
+}
+.portal-root .c-canvas {
+  background: #f0e4b6;
+}
+.portal-root .c-voice {
+  background: #efcec9;
+}
+.portal-root .c-omni {
+  background: #c4dad3;
+}
+.portal-root .c-market {
+  background: var(--portal-ink);
+  color: var(--portal-paper);
+}
+.portal-root .c-market::before {
+  background: rgba(245, 241, 232, 0.25);
+}
+.portal-root .c-market .name {
+  color: var(--portal-paper);
+}
+.portal-root .c-market .desc {
+  color: rgba(245, 241, 232, 0.7);
+}
 .portal-root .c-market .idx,
-.portal-root .c-market .en   { color: rgba(245, 241, 232, .5); }
-.portal-root .c-market .arrow { background: rgba(245, 241, 232, .15); color: var(--portal-paper); }
+.portal-root .c-market .en {
+  color: rgba(245, 241, 232, 0.5);
+}
+.portal-root .c-market .arrow {
+  background: rgba(245, 241, 232, 0.15);
+  color: var(--portal-paper);
+}
 
 /* ───────── 入场动效 ───────── */
 @keyframes portal-fade-up {
-  from { opacity: 0; transform: translateY(16px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .portal-root .hero-title,
 .portal-root .hero-ctas,
 .portal-root .codewin {
-  animation: portal-fade-up .7s cubic-bezier(.4, 0, .2, 1) both;
+  animation: portal-fade-up 0.7s cubic-bezier(0.4, 0, 0.2, 1) both;
 }
-.portal-root .hero-title { animation-delay: .08s; }
-.portal-root .hero-ctas  { animation-delay: .16s; }
-.portal-root .codewin    { animation-delay: .24s; }
+.portal-root .hero-title {
+  animation-delay: 0.08s;
+}
+.portal-root .hero-ctas {
+  animation-delay: 0.16s;
+}
+.portal-root .codewin {
+  animation-delay: 0.24s;
+}

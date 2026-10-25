@@ -9,14 +9,14 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/pkg/requestip"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/pkg/requestip"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
 
@@ -34,28 +34,34 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 	return tx.Where(column+" = ?", value), nil
 }
 
+// Log stores request and billing records. Dedicated composite indexes cover
+// the user/time ordered view and the model/time filters used by admin logs.
 type Log struct {
-	Id               int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2"`
-	UserId           int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt        int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`
-	Type             int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content          string `json:"content"`
-	Username         string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
-	TokenName        string `json:"token_name" gorm:"index;default:''"`
-	ModelName        string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota            int    `json:"quota" gorm:"default:0"`
-	PromptTokens     int    `json:"prompt_tokens" gorm:"default:0"`
-	CompletionTokens int    `json:"completion_tokens" gorm:"default:0"`
-	UseTime          int    `json:"use_time" gorm:"default:0"`
-	IsStream         bool   `json:"is_stream"`
-	ChannelId        int    `json:"channel" gorm:"index"`
-	ChannelName      string `json:"channel_name" gorm:"->"`
-	TokenId          int    `json:"token_id" gorm:"default:0;index"`
-	Group            string `json:"group" gorm:"index"`
-	Ip               string `json:"ip" gorm:"index;default:''"`
+	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2;index:idx_logs_user_created_id,priority:3"`
+	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1;index:idx_logs_user_created_id,priority:1"`
+	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type;index:idx_logs_user_created_id,priority:2;index:idx_logs_model_created_at,priority:2;index:idx_logs_billing_anomaly_created,priority:2"`
+	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
+	Content           string `json:"content"`
+	Username          string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName         string `json:"token_name" gorm:"index;default:''"`
+	ModelName         string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;index:idx_logs_model_created_at,priority:1;default:''"`
+	Quota             int    `json:"quota" gorm:"default:0"`
+	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
+	UseTime           int    `json:"use_time" gorm:"default:0"`
+	IsStream          bool   `json:"is_stream"`
+	ChannelId         int    `json:"channel" gorm:"index"`
+	ChannelName       string `json:"channel_name" gorm:"->"`
+	TokenId           int    `json:"token_id" gorm:"default:0;index"`
+	Group             string `json:"group" gorm:"index"`
+	Ip                string `json:"ip" gorm:"index;default:''"`
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+	// eflow: BillingAnomaly 标记结算用量不可靠的消费日志（见 LogBillingAnomaly*），0 为正常。
+	// 仅管理员可见，供「异常计费」审核筛选；线上大表的索引需上线前手动在线创建。
+	BillingAnomaly int                 `json:"billing_anomaly,omitempty" gorm:"size:8;default:0;not null;index:idx_logs_billing_anomaly_created,priority:1"`
+	UsageRefund    *UsageRefundLogMark `json:"usage_refund,omitempty" gorm:"-"`
 }
 
 // don't use iota, avoid change log type value
@@ -67,6 +73,14 @@ const (
 	LogTypeSystem  = 4
 	LogTypeError   = 5
 	LogTypeRefund  = 6
+)
+
+// eflow: 消费日志的计费异常标记，定义见 constant.BillingAnomaly*。
+const (
+	LogBillingAnomalyNone            = constant.BillingAnomalyNone
+	LogBillingAnomalyInputEstimated  = constant.BillingAnomalyInputEstimated
+	LogBillingAnomalyOutputEstimated = constant.BillingAnomalyOutputEstimated
+	LogBillingAnomalyNoUpstreamUsage = constant.BillingAnomalyNoUpstreamUsage
 )
 
 // eflow: logQueryTimeout 限定单次 logs 表读查询的最长执行时间。
@@ -100,27 +114,31 @@ func estimatedLogTotal() int64 {
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelName = ""
-		var otherMap map[string]interface{}
-		otherMap, _ = common.StrToMap(logs[i].Other)
-		if otherMap != nil {
-			// Remove admin-only debug fields.
-			delete(otherMap, "admin_info")
-			// delete(otherMap, "reject_reason")
-			// stream_status 保留给日志所有者排查流式中断。
-		}
-		logs[i].Other = common.MapToJsonStr(otherMap)
+		logs[i].ChannelId = 0
+		// 异常计费标记是管理员审核信息，不下发给普通用户。
+		logs[i].BillingAnomaly = 0
+		logs[i].Other = projectLogOther(logs[i].Other, common.RoleCommonUser)
 		logs[i].Id = startIdx + i + 1
 	}
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := logQueryCtx()
+	defer cancel()
+	if err = enrichUsageRefundLogs(ctx, logs); err != nil {
+		return nil, err
+	}
 	formatUserLogs(logs, 0)
 	return logs, err
 }
 
 func RecordLog(userId int, logType int, content string) {
-	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+	featureSettings := common.GetFeatureSettings()
+	if logType == LogTypeConsume && !featureSettings.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
@@ -138,8 +156,9 @@ func RecordLog(userId int, logType int, content string) {
 }
 
 // RecordLogWithAdminInfo 记录操作日志，并将管理员相关信息存入 Other.admin_info，
-func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo map[string]interface{}) {
-	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo map[string]any) {
+	featureSettings := common.GetFeatureSettings()
+	if logType == LogTypeConsume && !featureSettings.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
@@ -151,10 +170,10 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 		Content:   content,
 	}
 	if len(adminInfo) > 0 {
-		other := map[string]interface{}{
+		other := map[string]any{
 			"admin_info": adminInfo,
 		}
-		log.Other = common.MapToJsonStr(other)
+		log.Other = marshalLogOther(other)
 	}
 	if err := LOG_DB.Create(log).Error; err != nil {
 		common.SysLog("failed to record log: " + err.Error())
@@ -163,7 +182,7 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 
 func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
 	username, _ := GetUsernameById(userId, false)
-	adminInfo := map[string]interface{}{
+	adminInfo := map[string]any{
 		"server_ip":               common.GetIp(),
 		"node_name":               common.NodeName,
 		"caller_ip":               callerIp,
@@ -171,7 +190,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		"callback_payment_method": callbackPaymentMethod,
 		"version":                 common.Version,
 	}
-	other := map[string]interface{}{
+	other := map[string]any{
 		"admin_info": adminInfo,
 	}
 	log := &Log{
@@ -181,7 +200,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		Type:      LogTypeTopup,
 		Content:   content,
 		Ip:        callerIp,
-		Other:     common.MapToJsonStr(other),
+		Other:     marshalLogOther(other),
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
@@ -190,12 +209,12 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 }
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
-	isStream bool, group string, other map[string]interface{}) {
+	isStream bool, group string, other map[string]any) {
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	otherStr := common.MapToJsonStr(other)
+	otherStr := marshalLogOther(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -248,29 +267,46 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 }
 
 type RecordConsumeLogParams struct {
-	ChannelId        int                    `json:"channel_id"`
-	PromptTokens     int                    `json:"prompt_tokens"`
-	CompletionTokens int                    `json:"completion_tokens"`
-	ModelName        string                 `json:"model_name"`
-	TokenName        string                 `json:"token_name"`
-	Quota            int                    `json:"quota"`
-	Content          string                 `json:"content"`
-	TokenId          int                    `json:"token_id"`
-	UseTimeSeconds   int                    `json:"use_time_seconds"`
-	IsStream         bool                   `json:"is_stream"`
-	Group            string                 `json:"group"`
-	Other            map[string]interface{} `json:"other"`
+	ChannelId        int            `json:"channel_id"`
+	PromptTokens     int            `json:"prompt_tokens"`
+	CompletionTokens int            `json:"completion_tokens"`
+	QuotaDataTokens  int            `json:"-"` // 归一化面板总量；零值兼容旧调用方。
+	ModelName        string         `json:"model_name"`
+	TokenName        string         `json:"token_name"`
+	Quota            int            `json:"quota"`
+	Content          string         `json:"content"`
+	TokenId          int            `json:"token_id"`
+	UseTimeSeconds   int            `json:"use_time_seconds"`
+	IsStream         bool           `json:"is_stream"`
+	Group            string         `json:"group"`
+	Other            map[string]any `json:"other"`
+	BillingAnomaly   int            `json:"billing_anomaly,omitempty"`
+}
+
+func quotaDataTokenUsed(params RecordConsumeLogParams) int {
+	if params.QuotaDataTokens != 0 {
+		return params.QuotaDataTokens
+	}
+	return params.PromptTokens + params.CompletionTokens
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
-	if !common.LogConsumeEnabled {
+	recordConsumeLogAt(c, userId, params, common.GetTimestamp())
+}
+
+func recordConsumeLogAt(c *gin.Context, userId int, params RecordConsumeLogParams, createdAt int64) {
+	// 分组监控的成功计数不依赖消费日志开关：关闭消费日志时错误仍从 logs 统计，
+	// 若成功不计，可用率会被算成 0%。
+	recordConsumeMonitoring(params)
+	featureSettings := common.GetFeatureSettings()
+	if !featureSettings.LogConsumeEnabled {
 		return
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
-	otherStr := common.MapToJsonStr(params.Other)
+	otherStr := marshalLogOther(params.Other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -281,7 +317,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	log := &Log{
 		UserId:           userId,
 		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
+		CreatedAt:        createdAt,
 		Type:             LogTypeConsume,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
@@ -303,38 +339,43 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		RequestId:         requestId,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
+		BillingAnomaly:    params.BillingAnomaly,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
-	}
-	if common.DataExportEnabled {
-		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
-		})
-	}
-	if common.GroupMonitoringHook != nil {
-		frtMs := 0
-		if frt, ok := params.Other["frt"]; ok {
-			if v, ok := frt.(float64); ok {
-				frtMs = int(v)
-			}
+	} else if featureSettings.DataExportEnabled {
+		tokenUsed := quotaDataTokenUsed(params)
+		if err := LogQuotaData(userId, username, params.ModelName, params.Quota, createdAt, tokenUsed); err != nil {
+			logger.LogError(c, "failed to record quota data: "+err.Error())
 		}
-		cacheTokens := 0
-		if ct, ok := params.Other["cache_tokens"]; ok {
-			switch v := ct.(type) {
-			case int:
-				cacheTokens = v
-			case float64:
-				cacheTokens = int(v)
-			}
-		}
-		monitorPromptTokens := params.PromptTokens
-		if sem, ok := params.Other["usage_semantic"]; ok && sem == "anthropic" && cacheTokens > 0 {
-			monitorPromptTokens += cacheTokens
-		}
-		common.GroupMonitoringHook(params.Group, params.ChannelId, true, monitorPromptTokens, cacheTokens, params.UseTimeSeconds*1000, frtMs, params.ModelName, 0, "")
 	}
+}
+
+func recordConsumeMonitoring(params RecordConsumeLogParams) {
+	if common.GroupMonitoringHook == nil {
+		return
+	}
+	frtMs := 0
+	if frt, ok := params.Other["frt"]; ok {
+		if v, ok := frt.(float64); ok {
+			frtMs = int(v)
+		}
+	}
+	cacheTokens := 0
+	if ct, ok := params.Other["cache_tokens"]; ok {
+		switch v := ct.(type) {
+		case int:
+			cacheTokens = v
+		case float64:
+			cacheTokens = int(v)
+		}
+	}
+	monitorPromptTokens := params.PromptTokens
+	if sem, ok := params.Other["usage_semantic"]; ok && sem == "anthropic" && cacheTokens > 0 {
+		monitorPromptTokens += cacheTokens
+	}
+	common.GroupMonitoringHook(params.Group, params.ChannelId, true, monitorPromptTokens, cacheTokens, params.UseTimeSeconds*1000, frtMs, params.ModelName, 0, "")
 }
 
 type RecordTaskBillingLogParams struct {
@@ -346,11 +387,12 @@ type RecordTaskBillingLogParams struct {
 	Quota     int
 	TokenId   int
 	Group     string
-	Other     map[string]interface{}
+	Other     map[string]any
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
-	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
+	featureSettings := common.GetFeatureSettings()
+	if params.LogType == LogTypeConsume && !featureSettings.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(params.UserId, false)
@@ -372,7 +414,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		ChannelId: params.ChannelId,
 		TokenId:   params.TokenId,
 		Group:     params.Group,
-		Other:     common.MapToJsonStr(params.Other),
+		Other:     marshalLogOther(params.Other),
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
@@ -415,6 +457,8 @@ func (o LogSortOptions) Apply(tx *gorm.DB) *gorm.DB {
 	}
 	return tx.Order("logs." + o.SortBy + " " + o.SortOrder + ", logs.id desc")
 }
+
+const modelFilteredLogsTable = "logs IGNORE INDEX FOR ORDER BY (`PRIMARY`, `idx_created_at_id`)"
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, userId int, sortOpts LogSortOptions) (logs []*Log, total int64, err error) {
 	// eflow: 8s 兜底，防止慢查询堆积。
@@ -479,18 +523,28 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		total = estimatedLogTotal()
 	} else if cached, ok := getCachedLogAgg(countKey); ok {
 		total = cached
-	} else if cErr := tx.Model(&Log{}).Count(&total).Error; cErr != nil {
+	} else if cErr := tx.Session(&gorm.Session{}).Model(&Log{}).Count(&total).Error; cErr != nil {
 		common.SysError("eflow: GetAllLogs count failed, fallback to estimate: " + cErr.Error())
 		total = estimatedLogTotal()
 	} else {
 		setCachedLogAgg(countKey, total)
 	}
-	err = sortOpts.Apply(tx).Limit(num).Offset(startIdx).Find(&logs).Error
+	listTx := tx.Session(&gorm.Session{})
+	if strings.TrimSpace(modelName) != "" {
+		// MySQL's prefer_ordering_index heuristic can scan the clustered primary
+		// key backwards to satisfy LIMIT. Sparse models with fewer than one page
+		// then scan almost the entire logs table before the query times out.
+		listTx = listTx.Table(modelFilteredLogsTable)
+	}
+	err = sortOpts.Apply(listTx).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
 	channelIds := types.NewSet[int]()
+	if err = enrichUsageRefundLogs(ctx, logs); err != nil {
+		return nil, 0, err
+	}
 	for _, log := range logs {
 		if log.ChannelId != 0 {
 			channelIds.Add(log.ChannelId)
@@ -569,12 +623,13 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 	// eflow: 去掉失效的 Limit(logSearchCountLimit)（GORM 的 Count 不理会 LIMIT，
 	// 那个封顶一直是空操作）。count 改为非致命：失败也不连累日志行返回，
-	// 总数降级为 0（极少触发，user_id 走索引很快）。
+	// 总数按已取到的行估算（极少触发，user_id 走索引很快）。
+	countFailed := false
 	if cached, ok := getCachedLogAgg(countKey); ok {
 		total = cached
 	} else if cErr := tx.Model(&Log{}).Count(&total).Error; cErr != nil {
 		common.SysError("eflow: GetUserLogs count failed: " + cErr.Error())
-		total = 0
+		countFailed = true
 	} else {
 		setCachedLogAgg(countKey, total)
 	}
@@ -583,9 +638,25 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		common.SysError("failed to search user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
 	}
+	if countFailed {
+		total = estimatedUserLogTotal(startIdx, num, len(logs))
+	}
 
+	if err = enrichUsageRefundLogs(ctx, logs); err != nil {
+		return nil, 0, err
+	}
 	formatUserLogs(logs, startIdx)
 	return logs, total, err
+}
+
+// estimatedUserLogTotal 在 COUNT 失败时估算总数：至少覆盖已取到的行，
+// 满页时 +1 让前端仍能翻到下一页。
+func estimatedUserLogTotal(startIdx int, num int, fetched int) int64 {
+	total := int64(startIdx + fetched)
+	if num > 0 && fetched >= num {
+		total++
+	}
+	return total
 }
 
 type Stat struct {
@@ -812,54 +883,12 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	} else {
 		setCachedLogAgg(sumKey, int64(stat.Quota))
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	var rateStat Stat
+	if err := rpmTpmQuery.Scan(&rateStat).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm, stat.Tpm = rateStat.Rpm, rateStat.Tpm
 
 	return stat, nil
-}
-
-func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
-	if username != "" {
-		tx = tx.Where("username = ?", username)
-	}
-	if tokenName != "" {
-		tx = tx.Where("token_name = ?", tokenName)
-	}
-	if startTimestamp != 0 {
-		tx = tx.Where("created_at >= ?", startTimestamp)
-	}
-	if endTimestamp != 0 {
-		tx = tx.Where("created_at <= ?", endTimestamp)
-	}
-	if modelName != "" {
-		tx = tx.Where("model_name = ?", modelName)
-	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
-	return token
-}
-
-func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
-	var total int64 = 0
-
-	for {
-		if nil != ctx.Err() {
-			return total, ctx.Err()
-		}
-
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
-		if nil != result.Error {
-			return total, result.Error
-		}
-
-		total += result.RowsAffected
-
-		if result.RowsAffected < int64(limit) {
-			break
-		}
-	}
-
-	return total, nil
 }

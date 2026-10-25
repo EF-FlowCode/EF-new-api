@@ -1,6 +1,6 @@
 package console_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import "eflow.local/new-api/setting/config"
 
 type ConsoleSetting struct {
 	ApiInfo              string `json:"api_info"`              // 控制台 API 信息 (JSON 数组字符串)
@@ -35,5 +35,6 @@ func init() {
 
 // GetConsoleSetting 获取 ConsoleSetting 配置实例
 func GetConsoleSetting() *ConsoleSetting {
-	return &consoleSetting
+	setting := config.MustSnapshot[ConsoleSetting]("console_setting")
+	return &setting
 }

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/system_setting"
 )
 
 type ssrfResolver interface {
@@ -109,6 +109,15 @@ func (t *ssrfProtectedRoundTripper) RoundTrip(req *http.Request) (*http.Response
 	if err != nil {
 		return nil, err
 	}
+	if proxyURL != nil && net.ParseIP(req.URL.Hostname()) == nil {
+		protection, enabled, protectionErr := t.getProtection()
+		if protectionErr != nil {
+			return nil, protectionErr
+		}
+		if enabled && protection != nil && protection.ApplyIPFilterForDomain {
+			return nil, fmt.Errorf("SSRF domain IP filtering cannot be enforced through an HTTP proxy")
+		}
+	}
 	return t.transportFor(proxyURL).RoundTrip(req)
 }
 
@@ -162,7 +171,7 @@ func (t *ssrfProtectedRoundTripper) newTransport(proxyURL *url.URL) *http.Transp
 		DialContext:         dialContext,
 	}
 	if common.TLSInsecureSkipVerify {
-		transport.TLSClientConfig = common.InsecureTLSConfig
+		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
 	}
 	return transport
 }

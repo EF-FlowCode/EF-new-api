@@ -1,0 +1,50 @@
+name: Backend Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: '123456'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p123456 --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    env:
+      TEST_MYSQL_DSN: root:123456@tcp(127.0.0.1:3306)/?charset=utf8mb4&parseTime=true&loc=Local
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '>=1.25.1'
+          cache: true
+
+      - name: Test root module
+        run: go test ./... -count=1
+
+      - name: Test RelayKit module
+        working-directory: relaykit
+        run: go test ./... -count=1

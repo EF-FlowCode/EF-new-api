@@ -3,7 +3,7 @@ package relayconvert
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,18 +3,18 @@ package model
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"gorm.io/gorm/clause"
 )
 
 type RiskSubjectSnapshot struct {
-	Id          int    `json:"id"`
-	SubjectType string `json:"subject_type" gorm:"type:varchar(16);uniqueIndex:idx_risk_subject_unique_v2;index"`
-	SubjectID   int    `json:"subject_id" gorm:"uniqueIndex:idx_risk_subject_unique_v2;index"`
-	UserID      int    `json:"user_id" gorm:"index"`
-	TokenID     int    `json:"token_id" gorm:"index"`
-	Username    string `json:"username" gorm:"type:varchar(64);index;default:''"`
-	TokenName   string `json:"token_name" gorm:"type:varchar(128);index;default:''"`
+	Id             int    `json:"id"`
+	SubjectType    string `json:"subject_type" gorm:"type:varchar(16);uniqueIndex:idx_risk_subject_unique_v2;index"`
+	SubjectID      int    `json:"subject_id" gorm:"uniqueIndex:idx_risk_subject_unique_v2;index"`
+	UserID         int    `json:"user_id" gorm:"index"`
+	TokenID        int    `json:"token_id" gorm:"index"`
+	Username       string `json:"username" gorm:"type:varchar(64);index;default:''"`
+	TokenName      string `json:"token_name" gorm:"type:varchar(128);index;default:''"`
 	TokenMaskedKey string `json:"token_masked_key" gorm:"type:varchar(64);default:''"`
 	// Group is part of the unique key so that the same (scope, subjectID) can
 	// have separate risk states across groups (vip vs free). Empty group rows
@@ -182,7 +182,7 @@ func MarkExpiredRiskSubjectSnapshotsAsRecovered(now int64) ([]*RiskSubjectSnapsh
 	}
 	if err := DB.Model(&RiskSubjectSnapshot{}).
 		Where("status = ? AND block_until > 0 AND block_until <= ?", "blocked", now).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"status":            "observe",
 			"block_until":       int64(0),
 			"recover_at":        now,

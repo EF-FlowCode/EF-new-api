@@ -4,17 +4,21 @@ import "testing"
 
 func withExts(t *testing.T, value string, fn func()) {
 	t.Helper()
-	prev := TicketAttachmentAllowedExts
-	TicketAttachmentAllowedExts = value
-	t.Cleanup(func() { TicketAttachmentAllowedExts = prev })
+	prev := GetTicketAttachmentSettings().AllowedExts
+	if err := UpdateTicketAttachmentSettings(map[string]string{"TicketAttachmentAllowedExts": value}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = UpdateTicketAttachmentSettings(map[string]string{"TicketAttachmentAllowedExts": prev}) })
 	fn()
 }
 
 func withMimes(t *testing.T, value string, fn func()) {
 	t.Helper()
-	prev := TicketAttachmentAllowedMimes
-	TicketAttachmentAllowedMimes = value
-	t.Cleanup(func() { TicketAttachmentAllowedMimes = prev })
+	prev := GetTicketAttachmentSettings().AllowedMimes
+	if err := UpdateTicketAttachmentSettings(map[string]string{"TicketAttachmentAllowedMimes": value}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = UpdateTicketAttachmentSettings(map[string]string{"TicketAttachmentAllowedMimes": prev}) })
 	fn()
 }
 

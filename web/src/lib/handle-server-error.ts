@@ -1,12 +1,20 @@
 import { AxiosError } from 'axios'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+import { getRequestErrorMessage } from '@/lib/api'
+import { isMaintenanceError } from '@/lib/maintenance'
 
-export function handleServerError(error: unknown) {
-  // eslint-disable-next-line no-console
-  console.log(error)
+// serverErrorMessage returns the toast for a failed mutation, or null when the
+// API interceptor has already shown this HTTP error.
+export function serverErrorMessage(error: unknown): string | null {
+  if (isMaintenanceError(error)) return null
 
-  let errMsg = i18next.t('Something went wrong!')
+  if (error instanceof AxiosError && error.response) {
+    const config = error.config
+    if (!config?.skipErrorHandler && !config?.skipErrorNotification) {
+      return null
+    }
+  }
 
   if (
     error &&
@@ -14,12 +22,14 @@ export function handleServerError(error: unknown) {
     'status' in error &&
     Number(error.status) === 204
   ) {
-    errMsg = i18next.t('Content not found.')
+    return i18next.t('Content not found.')
   }
 
-  if (error instanceof AxiosError) {
-    errMsg = error.response?.data.title
-  }
+  const message = getRequestErrorMessage(error, 'Something went wrong!')
+  return i18next.exists(message) ? i18next.t(message) : message
+}
 
-  toast.error(errMsg)
+export function handleServerError(error: unknown) {
+  const message = serverErrorMessage(error)
+  if (message) toast.error(message)
 }

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 type ChatCompletionsToResponsesPolicy struct {
@@ -60,7 +60,8 @@ func init() {
 }
 
 func GetGlobalSettings() *GlobalSettings {
-	return &globalSettings
+	setting := config.MustSnapshot[GlobalSettings]("global")
+	return &setting
 }
 
 // ShouldPreserveThinkingSuffix 判断模型是否配置为保留 thinking/-nothinking/-low/-high/-medium 后缀
@@ -70,7 +71,7 @@ func ShouldPreserveThinkingSuffix(modelName string) bool {
 		return false
 	}
 
-	for _, entry := range globalSettings.ThinkingModelBlacklist {
+	for _, entry := range GetGlobalSettings().ThinkingModelBlacklist {
 		if strings.TrimSpace(entry) == target {
 			return true
 		}

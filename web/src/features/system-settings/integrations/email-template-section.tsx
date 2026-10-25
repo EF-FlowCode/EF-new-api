@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Eye, RotateCcw, Save } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Eye, RotateCcw, Save } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,6 +31,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { SettingsSection } from '../components/settings-section'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 // ----------------------------------------------------------------------------
 // Types
@@ -59,6 +60,7 @@ type EmailTemplate = {
 
 export function EmailTemplateSettingsSection() {
   const { t } = useTranslation()
+  const updateOptions = useUpdateOptions()
 
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -86,7 +88,10 @@ export function EmailTemplateSettingsSection() {
   const fetchTemplates = async () => {
     setLoading(true)
     try {
-      const res = await api.get('/api/option/email_templates')
+      const res = await api.get(
+        '/api/option/email_templates',
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       const { success, message, data } = res.data
       if (!success) {
         toast.error(message || t('Failed to load email templates'))
@@ -138,7 +143,8 @@ export function EmailTemplateSettingsSection() {
         lastFocusedRef.current === 'subject'
           ? currentDraft.subject
           : currentDraft.body
-      const next = (current || '').slice(0, start) + token + (current || '').slice(end)
+      const next =
+        (current || '').slice(0, start) + token + (current || '').slice(end)
       updateDraft(
         lastFocusedRef.current === 'subject'
           ? { subject: next }
@@ -166,11 +172,15 @@ export function EmailTemplateSettingsSection() {
     if (!activeKey) return
     setPreviewing(true)
     try {
-      const res = await api.post('/api/option/email_templates/preview', {
-        key: activeKey,
-        subject: currentDraft.subject,
-        body: currentDraft.body,
-      })
+      const res = await api.post(
+        '/api/option/email_templates/preview',
+        {
+          key: activeKey,
+          subject: currentDraft.subject,
+          body: currentDraft.body,
+        },
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       const { success, message, data } = res.data
       if (!success) {
         toast.error(message || t('Preview failed'))
@@ -203,22 +213,13 @@ export function EmailTemplateSettingsSection() {
           ? ''
           : currentDraft.body || ''
 
-      const [r1, r2] = await Promise.all([
-        api.put('/api/option/', { key: subjectKey, value: subjectValue }),
-        api.put('/api/option/', { key: bodyKey, value: bodyValue }),
+      await updateOptions.mutateAsync([
+        { key: subjectKey, value: subjectValue },
+        { key: bodyKey, value: bodyValue },
       ])
-      if (!r1.data.success) {
-        toast.error(r1.data.message)
-        return
-      }
-      if (!r2.data.success) {
-        toast.error(r2.data.message)
-        return
-      }
-      toast.success(t('Saved'))
       await fetchTemplates()
     } catch {
-      toast.error(t('Save failed'))
+      // The mutation owns request error feedback.
     } finally {
       setSaving(false)
     }
@@ -227,9 +228,11 @@ export function EmailTemplateSettingsSection() {
   const handleReset = async () => {
     if (!activeTemplate) return
     try {
-      const res = await api.post('/api/option/email_templates/reset', {
-        key: activeKey,
-      })
+      const res = await api.post(
+        '/api/option/email_templates/reset',
+        { key: activeKey },
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (!res.data.success) {
         toast.error(res.data.message)
         return

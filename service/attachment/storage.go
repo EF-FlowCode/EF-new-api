@@ -13,7 +13,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/setting"
 )
 
 // Storage 抽象附件读写操作。所有方法必须是并发安全的。
@@ -43,19 +43,32 @@ var ErrStorageNotConfigured = errors.New("storage backend is not fully configure
 // ErrNotFound 对象不存在时的通用错误。
 var ErrNotFound = errors.New("object not found")
 
-// Current 根据 setting.TicketAttachmentStorage 返回当前启用的存储实现。
+// Current 根据当前附件快照返回启用的存储实现。
 // 每次调用都构造新的实例：实现都是廉价的结构体包装，且设置可能在运行时被热更新。
 func Current() (Storage, error) {
-	switch setting.TicketAttachmentStorage {
+	return CurrentWithSettings(setting.GetTicketAttachmentSettings())
+}
+
+// CurrentWithSettings constructs a storage client from one complete snapshot,
+// keeping backend credentials and related fields from the same version.
+func CurrentWithSettings(settings setting.TicketAttachmentSettings) (Storage, error) {
+	switch settings.Storage {
 	case "", "local":
-		return NewLocalStorage(setting.TicketAttachmentLocalPath)
+		return NewLocalStorage(settings.LocalPath)
 	case "oss":
-		return NewOSSStorage()
+		return newOSSStorage(settings)
 	case "s3":
-		return NewS3Storage()
+		return newS3Storage(settings)
 	case "cos":
-		return NewCOSStorage()
+		return newCOSStorage(settings)
 	default:
-		return nil, fmt.Errorf("unknown ticket attachment storage: %s", setting.TicketAttachmentStorage)
+		return nil, fmt.Errorf("unknown ticket attachment storage: %s", settings.Storage)
 	}
+}
+
+// ForStorageType 按附件记录保存时的后端构造存储客户端，切换后端后旧附件仍能读取和删除。
+// 其余凭证/桶等字段取同一设置快照；目标后端未配置时返回错误。
+func ForStorageType(settings setting.TicketAttachmentSettings, storageType string) (Storage, error) {
+	settings.Storage = storageType
+	return CurrentWithSettings(settings)
 }

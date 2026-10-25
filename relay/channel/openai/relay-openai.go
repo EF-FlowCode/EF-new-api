@@ -6,18 +6,19 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relay/channel/openrouter"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/relay/channel/openrouter"
+	relaycommon "eflow.local/new-api/relay/common"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
 
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
+	gopool "eflow.local/new-api/internal/drainpool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -150,7 +151,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 
 			lastStreamData = data
-			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
+			if err := processTokenData(info, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
 			}
@@ -234,6 +235,8 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
+	info.ObserveResponseModel(simpleResponse.Model)
+
 	for _, choice := range simpleResponse.Choices {
 		if choice.FinishReason == constant.FinishReasonContentFilter {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "openai_finish_reason=content_filter")
@@ -247,7 +250,14 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	usageModified := false
-	if simpleResponse.Usage.PromptTokens == 0 {
+	if info.RelayMode == relayconstant.RelayModeEmbeddings {
+		usage, usageErr := service.KnowledgeUsage(c, info, responseBody, false)
+		if usageErr != nil {
+			return nil, types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		}
+		simpleResponse.Usage = *usage
+		usageModified = true
+	} else if simpleResponse.Usage.PromptTokens == 0 {
 		completionTokens := simpleResponse.Usage.CompletionTokens
 		if completionTokens == 0 {
 			for _, choice := range simpleResponse.Choices {
@@ -266,9 +276,9 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
 
 	switch info.RelayFormat {
-	case types.RelayFormatOpenAI:
+	case types.RelayFormatOpenAI, types.RelayFormatEmbedding:
 		if usageModified {
-			var bodyMap map[string]interface{}
+			var bodyMap map[string]any
 			err = common.Unmarshal(responseBody, &bodyMap)
 			if err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
@@ -276,7 +286,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			bodyMap["usage"] = simpleResponse.Usage
 			responseBody, _ = common.Marshal(bodyMap)
 		}
-		if forceFormat {
+		if forceFormat && info.RelayMode != relayconstant.RelayModeEmbeddings {
 			responseBody, err = common.Marshal(simpleResponse)
 			if err != nil {
 				return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
@@ -562,11 +572,10 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 	totalUsage.InputTokenDetails.CachedTokens += usage.InputTokenDetails.CachedTokens
 	totalUsage.InputTokenDetails.TextTokens += usage.InputTokenDetails.TextTokens
 	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
+	totalUsage.InputTokenDetails.VideoTokens += usage.InputTokenDetails.VideoTokens
 	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
 	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
-	// clear usage
-	err := service.PreWssConsumeQuota(ctx, info, usage)
-	return err
+	return service.PreWssConsumeQuota(ctx, info, totalUsage)
 }
 
 func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -589,22 +598,53 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	// Once we've written to the client, we should not return errors anymore
 	// because the upstream has already consumed resources and returned content
 	// We should still perform billing even if parsing fails
-	// format
-	if usageResp.InputTokens > 0 {
-		usageResp.PromptTokens += usageResp.InputTokens
+	// format: image APIs report input_tokens/output_tokens; compatible upstreams
+	// may also echo prompt_tokens/completion_tokens for the same usage. Fill the
+	// chat-style fields only when they are absent so the two are never summed.
+	if usageResp.PromptTokens == 0 {
+		usageResp.PromptTokens = usageResp.InputTokens
 	}
-	if usageResp.OutputTokens > 0 {
-		usageResp.CompletionTokens += usageResp.OutputTokens
+	if usageResp.CompletionTokens == 0 {
+		usageResp.CompletionTokens = usageResp.OutputTokens
 	}
-	if usageResp.InputTokensDetails != nil {
-		usageResp.PromptTokensDetails.CachedTokens += usageResp.InputTokensDetails.CachedTokens
-		usageResp.PromptTokensDetails.CachedCreationTokens += usageResp.InputTokensDetails.CachedCreationTokens
-		usageResp.PromptTokensDetails.CacheWriteTokens += usageResp.InputTokensDetails.CacheWriteTokens
-		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
-		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
+	if details := usageResp.InputTokensDetails; details != nil {
+		fillZero := func(target *int, value int) {
+			if *target == 0 {
+				*target = value
+			}
+		}
+		fillZero(&usageResp.PromptTokensDetails.CachedTokens, details.CachedTokens)
+		fillZero(&usageResp.PromptTokensDetails.CachedCreationTokens, details.CachedCreationTokens)
+		fillZero(&usageResp.PromptTokensDetails.CacheWriteTokens, details.CacheWriteTokens)
+		fillZero(&usageResp.PromptTokensDetails.ImageTokens, details.ImageTokens)
+		fillZero(&usageResp.PromptTokensDetails.TextTokens, details.TextTokens)
 	}
+	fillOutputTokenDetailsFromImageUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
+}
+
+// fillOutputTokenDetailsFromImageUsage 把 Images API 的 output_tokens_details 并入
+// completion_tokens_details，只补未给出的字段，避免兼容上游同时回显两套字段时被覆盖。
+// 图片输出 token 由此进入 img_o，分层表达式才能按图片输出价计费。
+func fillOutputTokenDetailsFromImageUsage(usage *dto.Usage) {
+	if usage == nil || usage.OutputTokensDetails == nil {
+		return
+	}
+	details := usage.OutputTokensDetails
+	target := &usage.CompletionTokenDetails
+	if target.TextTokens == 0 {
+		target.TextTokens = details.TextTokens
+	}
+	if target.AudioTokens == 0 {
+		target.AudioTokens = details.AudioTokens
+	}
+	if target.ImageTokens == 0 {
+		target.ImageTokens = details.ImageTokens
+	}
+	if target.ReasoningTokens == 0 {
+		target.ReasoningTokens = details.ReasoningTokens
+	}
 }
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
@@ -810,6 +850,7 @@ func OaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	if usage.OutputTokens > 0 {
 		usage.CompletionTokens += usage.OutputTokens
 	}
+	fillOutputTokenDetailsFromImageUsage(usage)
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}

@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -53,6 +54,47 @@ func TestOpenAIRequestConversionsPreserveZeroAndAliFiltering(t *testing.T) {
 	require.JSONEq(t, `0`, string(chatReq.ThinkingBudget))
 }
 
+func TestOpenAIRequestConversionsPreservePromptCacheKeyAndPenalties(t *testing.T) {
+	frequency := 0.0
+	presence := 1.25
+	key := "compat-session"
+
+	responsesReq, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:            "gpt-test",
+		Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+		PromptCacheKey:   key,
+		FrequencyPenalty: &frequency,
+		PresencePenalty:  &presence,
+	})
+	require.NoError(t, err)
+	require.Equal(t, key, gjson.GetBytes(mustMarshal(t, responsesReq), "prompt_cache_key").String())
+	require.Equal(t, float64(0), gjson.GetBytes(mustMarshal(t, responsesReq), "frequency_penalty").Float())
+	require.Equal(t, float64(1.25), gjson.GetBytes(mustMarshal(t, responsesReq), "presence_penalty").Float())
+
+	chatReq, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model:            "gpt-test",
+		Input:            json.RawMessage(`"hello"`),
+		PromptCacheKey:   json.RawMessage(`"compat-session"`),
+		FrequencyPenalty: json.RawMessage(`0`),
+		PresencePenalty:  json.RawMessage(`1.25`),
+	})
+	require.NoError(t, err)
+	// The host compatibility bridge intentionally filters Responses-only cache
+	// fields when targeting Chat Completions (for example, DashScope).
+	require.Empty(t, chatReq.PromptCacheKey)
+	require.NotNil(t, chatReq.FrequencyPenalty)
+	require.NotNil(t, chatReq.PresencePenalty)
+	require.Zero(t, *chatReq.FrequencyPenalty)
+	require.Equal(t, 1.25, *chatReq.PresencePenalty)
+}
+
+func mustMarshal(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := common.Marshal(value)
+	require.NoError(t, err)
+	return data
+}
+
 func TestChatResponseConversionUsesRelayKitAndKeepsWireShape(t *testing.T) {
 	reasoning := "thought"
 	resp := &dto.OpenAITextResponse{
@@ -83,4 +125,6 @@ func TestChatResponseConversionUsesRelayKitAndKeepsWireShape(t *testing.T) {
 	require.Equal(t, "reasoning", gjson.GetBytes(body, "output.0.type").String())
 	require.Equal(t, "message", gjson.GetBytes(body, "output.1.type").String())
 	require.False(t, gjson.GetBytes(body, "output.1.quality").Exists())
+	require.Equal(t, "chatcmpl-upstream", resp.Id)
+	require.Equal(t, "mapped-model", resp.Model)
 }

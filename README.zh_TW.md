@@ -128,16 +128,18 @@ docker-compose up -d
 # 拉取最新鏡像
 docker pull calciumion/new-api:latest
 
-# 使用 MySQL 8.0+（必需）
+# 僅支援 MySQL 8
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
-> **💡 提示：** `-v ./data:/data` 會將數據保存在當前目錄的 `data` 資料夾中，你也可以改為絕對路徑如 `-v /your/custom/path:/data`
+> **MySQL：** 請將 `mysql-host` 替換為容器可存取的 MySQL 8.x 主機名或 IP；不要使用 `localhost`，它指向 New API 容器自身。
+>
+> **本地檔案：** `-v ./data:/data` 只會持久化上傳檔案和其他本地執行檔案；帳號、設定和計費資料保存在 MySQL 中。
 
 </details>
 
@@ -182,7 +184,7 @@ docker run --name new-api -d --restart always \
 |------|------|
 | 🎨 全新 UI | 現代化的用戶界面設計 |
 | 🌍 多語言 | 支援簡體中文、繁體中文、英文、法語、日語 |
-| 🔄 數據兼容 | 完全兼容原版 One API 資料庫 |
+| 🔄 數據相容 | 支援 MySQL 8.x 上的原版 One API 資料表結構；其他資料庫需要外部遷移 |
 | 📈 數據看板 | 視覺化控制檯與統計分析 |
 | 🔒 權限管理 | 令牌分組、模型限制、用戶管理 |
 
@@ -294,7 +296,7 @@ docker run --name new-api -d --restart always \
 
 | 組件 | 要求 |
 |------|------|
-| **資料庫** | MySQL 8.0+（必須設定 `SQL_DSN`） |
+| **資料庫** | MySQL 8.x |
 | **容器引擎** | Docker / Docker Compose |
 
 ### ⚙️ 環境變數配置
@@ -306,7 +308,7 @@ docker run --name new-api -d --restart always \
 |--------|--------------------------------------------------------------|--------|
 | `SESSION_SECRET` | 會話密鑰（多機部署必須）                                                 | - |
 | `CRYPTO_SECRET` | 加密密鑰（Redis 必須）                                               | - |
-| `SQL_DSN` | MySQL 8.0+ 連接字符串（必填）                                        | - |
+| `SQL_DSN` | MySQL 8 資料庫連接字符串                                               | 必填 |
 | `REDIS_CONN_STRING` | Redis 連接字符串                                                  | - |
 | `STREAMING_TIMEOUT` | 流式超時時間（秒）                                                    | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | 流式掃描器單行最大緩衝（MB），圖像生成等超大 `data:` 片段（如 4K 圖片 base64）需適當調大 | `64` |
@@ -347,18 +349,19 @@ docker-compose up -d
 <details>
 <summary><strong>方式 2：Docker 命令</strong></summary>
 
-**使用 MySQL 8.0+：**
+**使用 MySQL 8：**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
 > **💡 路徑說明：**
-> - `./data:/data` - 相對路徑，數據保存在當前目錄的 data 資料夾
+> - 將 `mysql-host` 替換為容器可存取的 MySQL 8.x 位址；容器內的 `localhost` 不是資料庫主機
+> - `./data:/data` - 持久化本地上傳與執行檔案；資料庫資料仍保存在 MySQL 中
 > - 也可使用絕對路徑，如：`/your/custom/path:/data`
 
 </details>
@@ -370,7 +373,7 @@ docker run --name new-api -d --restart always \
 2. 在應用商店搜尋 **New-API**
 3. 一鍵安裝
 
-📖 [圖文教學](./docs/BT.md)
+📖 [圖文教學](docs/operations/bt-installation.md)
 
 </details>
 
@@ -461,3 +464,5 @@ docker run --name new-api -d --restart always \
 <sub>Built with ❤️ by QuantumNous</sub>
 
 </div>
+
+[eflow 分支文件導覽](docs/README.md)

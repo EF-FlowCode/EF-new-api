@@ -5,11 +5,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/config"
+	"eflow.local/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,11 +32,13 @@ func UpdateEnforcementConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	values := make(map[string]string, len(configMap))
 	for key, value := range configMap {
-		if err = model.UpdateOption("enforcement."+key, value); err != nil {
-			common.ApiError(c, err)
-			return
-		}
+		values["enforcement."+key] = value
+	}
+	if err = model.UpdateOptionsBulk(values); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	common.ApiSuccess(c, operation_setting.GetEnforcementSetting())
 }

@@ -3,7 +3,7 @@ package dto
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

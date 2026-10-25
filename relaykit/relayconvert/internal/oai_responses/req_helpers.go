@@ -4,10 +4,28 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
+
+// omitTrailingAssistantText drops the assistant turns without tool calls that
+// end the converted conversation after a user turn or tool result. In
+// Responses they are history and the model answers with a new item; Claude and
+// Gemini would continue them as a prefill, which newer models reject with a
+// 400. Codex leaves them at the end of input when it retries a stream that
+// failed after an assistant message completed.
+// eflow: 移植上游 e0483122c；本地没有 convdiag，不记录诊断。
+func omitTrailingAssistantText[T any](turns []T, isUser, isAssistantText func(T) bool) []T {
+	end := len(turns)
+	for end > 0 && isAssistantText(turns[end-1]) {
+		end--
+	}
+	if end == len(turns) || end == 0 || !isUser(turns[end-1]) {
+		return turns
+	}
+	return turns[:end]
+}
 
 func openAIResponsesRequestFromAny(request any) (*dto.OpenAIResponsesRequest, error) {
 	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
@@ -166,30 +184,30 @@ func ObjectValue(value any, fallbackKey string) map[string]any {
 	return responsesObjectValue(value, fallbackKey)
 }
 
-func responsesGeminiResponseMap(value any) map[string]interface{} {
+func responsesGeminiResponseMap(value any) map[string]any {
 	switch typed := value.(type) {
 	case nil:
-		return map[string]interface{}{}
+		return map[string]any{}
 	case map[string]any:
 		return typed
 	case string:
-		var object map[string]interface{}
+		var object map[string]any
 		if err := kitutil.Unmarshal([]byte(typed), &object); err == nil {
 			return object
 		}
-		var array []interface{}
+		var array []any
 		if err := kitutil.Unmarshal([]byte(typed), &array); err == nil {
-			return map[string]interface{}{"result": array}
+			return map[string]any{"result": array}
 		}
-		return map[string]interface{}{"content": typed}
+		return map[string]any{"content": typed}
 	case []any:
-		return map[string]interface{}{"result": typed}
+		return map[string]any{"result": typed}
 	default:
-		return map[string]interface{}{"content": typed}
+		return map[string]any{"content": typed}
 	}
 }
 
-func GeminiResponseMap(value any) map[string]interface{} {
+func GeminiResponseMap(value any) map[string]any {
 	return responsesGeminiResponseMap(value)
 }
 

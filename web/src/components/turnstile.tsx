@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { cn } from '@/lib/utils'
 
 declare global {
   interface Window {
@@ -29,6 +30,7 @@ export function Turnstile({
       try {
         window.turnstile.render(ref.current, {
           sitekey: siteKey,
+          size: 'flexible',
           callback: (token: string) => onVerify(token),
           'error-callback': () => onExpire?.(),
           'expired-callback': () => onExpire?.(),
@@ -54,5 +56,5 @@ export function Turnstile({
     document.head.appendChild(s)
   }, [siteKey, onVerify, onExpire])
 
-  return <div ref={ref} className={className} />
+  return <div ref={ref} className={cn('w-full min-w-0', className)} />
 }

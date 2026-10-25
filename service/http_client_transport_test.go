@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

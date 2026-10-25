@@ -1,11 +1,12 @@
 package model
 
 import (
+	gopool "eflow.local/new-api/internal/drainpool"
 	"errors"
 	"math/rand"
 	"time"
 
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/operation_setting"
 	"gorm.io/gorm"
 )
 
@@ -104,15 +105,15 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 	}
 
 	// 事务成功后，异步更新缓存
-	go func() {
+	gopool.Go(func() {
 		_ = cacheIncrUserQuota(userId, int64(quotaAwarded))
-	}()
+	})
 
 	return checkin, nil
 }
 
 // GetUserCheckinStats 获取用户签到统计信息
-func GetUserCheckinStats(userId int, month string) (map[string]interface{}, error) {
+func GetUserCheckinStats(userId int, month string) (map[string]any, error) {
 	// 获取指定月份的所有签到记录
 	startDate := month + "-01"
 	endDate := month + "-31"
@@ -140,7 +141,7 @@ func GetUserCheckinStats(userId int, month string) (map[string]interface{}, erro
 	DB.Model(&Checkin{}).Where("user_id = ?", userId).Count(&totalCheckins)
 	DB.Model(&Checkin{}).Where("user_id = ?", userId).Select("COALESCE(SUM(quota_awarded), 0)").Scan(&totalQuota)
 
-	return map[string]interface{}{
+	return map[string]any{
 		"total_quota":      totalQuota,      // 所有时间累计获得的额度
 		"total_checkins":   totalCheckins,   // 所有时间累计签到次数
 		"checkin_count":    len(records),    // 本月签到次数

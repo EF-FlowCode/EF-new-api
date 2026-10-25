@@ -4,7 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 
 	"gorm.io/gorm"
 )
@@ -28,7 +28,7 @@ func (j JSONValue) Value() (driver.Value, error) {
 }
 
 // Scan 实现 sql.Scanner 接口，兼容不同驱动返回的类型
-func (j *JSONValue) Scan(value interface{}) error {
+func (j *JSONValue) Scan(value any) error {
 	switch v := value.(type) {
 	case nil:
 		*j = nil

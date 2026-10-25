@@ -5,22 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+	"unicode"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/operation_setting"
 
-	"github.com/QuantumNous/new-api/constant"
+	"eflow.local/new-api/constant"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -34,11 +39,12 @@ type LoginRequest struct {
 
 var (
 	errUserPasswordUnset    = errors.New("user password is not set")
+	errPasswordUnchanged    = errors.New("New password must be different from current password")
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
 
 func Login(c *gin.Context) {
-	if !common.PasswordLoginEnabled {
+	if !common.GetAuthSettings().PasswordLoginEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordLoginDisabled)
 		return
 	}
@@ -72,46 +78,55 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// 检查是否启用2FA
-	twoFAEnabled, err := model.IsTwoFAEnabled(user.Id)
+	completeLogin(&user, c, loginMethodPassword)
+}
+
+// completeLogin 是密码、OAuth、微信、Telegram 登录的共同出口。
+// eflow: 绑定了两步验证或 Passkey 的账号一律先进入待验证状态，任何主登录方式都不能绕过
+// 第二因子（上游 6f2333990 的意图）。无密码 Passkey 登录本身即强认证，直接调用 setupLogin。
+func completeLogin(user *model.User, c *gin.Context, loginMethod string) {
+	methods, err := loginVerificationMethods(user.Id)
 	if err != nil {
-		common.SysLog(fmt.Sprintf("Login failed to load 2FA status for user %d: %v", user.Id, err))
+		common.SysLog(fmt.Sprintf("Login failed to load verification factors for user %d: %v", user.Id, err))
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
 	}
-	if twoFAEnabled {
-		// 设置pending session，等待2FA验证
-		session := sessions.Default(c)
-		session.Set("pending_username", user.Username)
-		session.Set("pending_user_id", user.Id)
-		err := session.Save()
-		if err != nil {
-			common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"message": i18n.T(c, i18n.MsgUserRequire2FA),
-			"success": true,
-			"data": map[string]interface{}{
-				"require_2fa": true,
-			},
-		})
+	if len(methods) == 0 {
+		setupLogin(user, c, loginMethod)
 		return
 	}
-
-	setupLogin(&user, c)
+	startPendingLogin(c, user, loginMethod, methods)
 }
 
+// Login methods recorded in the login audit (AuditOther.login_method).
+const (
+	loginMethodPassword    = "password"
+	loginMethodPasskey     = "passkey"
+	loginMethodWeChat      = "wechat"
+	loginMethodTelegram    = "telegram"
+	loginMethodOAuthPrefix = "oauth:"
+)
+
 // setup session & cookies and then return user info
-func setupLogin(user *model.User, c *gin.Context) {
+func setupLogin(user *model.User, c *gin.Context, loginMethod string) {
 	model.UpdateUserLastLoginAt(user.Id)
 	session := sessions.Default(c)
+	// eflow: 登录时换发会话 ID，登录前被人塞进浏览器的会话 ID 不能沿用为登录态。
+	if err := common.RegenerateSession(session); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
+		return
+	}
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)
 	session.Set("status", user.Status)
 	session.Set("group", user.Group)
+	// eflow: 记录本次登录时间，没有任何二次验证手段的账号用它判断"刚登录过"。
+	session.Set(LoginAtSessionKey, time.Now().Unix())
+	recordLoginMetadata(session, c, loginMethod)
+	// Step-up state of a previous account in this browser must not carry over
+	// to the account signing in now.
+	middleware.ResetStepUpSession(session)
 	err := session.Save()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
@@ -119,10 +134,8 @@ func setupLogin(user *model.User, c *gin.Context) {
 	}
 	// eflow: 同时签发 e-flowcode-auth JWT cookie，给同域子站做"我是谁"凭证；
 	// 未配置 EFLOW_AUTH_SECRET 时该函数返回空串，跳过 SetCookie，无副作用。
-	if token, tokenErr := common.IssueEflowAuth(user.Id); tokenErr == nil && token != "" {
-		c.SetSameSite(http.SameSiteStrictMode)
-		c.SetCookie(common.EflowAuthCookieName, token, int(common.EflowAuthTTLSeconds), "/", "", false, true)
-	}
+	issueEflowAuthCookie(c, user.Id, common.CurrentSessionID(session))
+	recordLoginAudit(c, user, loginMethod)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
@@ -150,19 +163,36 @@ func Logout(c *gin.Context) {
 	}
 	// eflow: 同步清掉 e-flowcode-auth cookie，避免子站继续认旧身份。
 	c.SetSameSite(http.SameSiteStrictMode)
-	c.SetCookie(common.EflowAuthCookieName, "", -1, "/", "", false, true)
+	c.SetCookie(common.EflowAuthCookieName, "", -1, "/", "", isHTTPSRequest(c), true)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
 	})
 }
 
+// revokeUserSessions eflow: 作废该用户的服务端登录会话，用于改密、重置密码、封禁、注销等场景。
+// keepCurrent 时保留发起本次请求的会话。失败只记日志，不影响主操作结果。
+func revokeUserSessions(c *gin.Context, userID int, keepCurrent bool) {
+	keep := ""
+	if keepCurrent {
+		if _, ok := c.Get(sessions.DefaultKey); ok {
+			keep = common.CurrentSessionID(sessions.Default(c))
+		}
+	}
+	if err := common.RevokeUserSessions(userID, keep); err != nil {
+		common.SysLog(fmt.Sprintf("failed to revoke sessions for user %d: %s", userID, err.Error()))
+	}
+}
+
 func Register(c *gin.Context) {
-	if !common.RegisterEnabled {
+	authSettings := common.GetRequestAuthSettings(c)
+	userQuotaSettings := common.GetUserQuotaSettings()
+	autoGroupPolicy := setting.GetAutoGroupPolicy()
+	if !authSettings.RegistrationEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
 		return
 	}
-	if !common.PasswordRegisterEnabled {
+	if !authSettings.PasswordRegisterEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
 	}
@@ -182,12 +212,17 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
-	if common.EmailVerificationEnabled {
+	if authSettings.EmailVerificationEnabled {
 		if user.Email == "" || user.VerificationCode == "" {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailVerificationRequired)
 			return
 		}
-		if !common.VerifyCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose) {
+		valid, err := common.VerifyCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose)
+		if err != nil {
+			verificationStoreError(c)
+			return
+		}
+		if !valid {
 			common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 			return
 		}
@@ -201,7 +236,7 @@ func Register(c *gin.Context) {
 		}
 	}
 	emailForExistCheck := ""
-	if common.EmailVerificationEnabled {
+	if authSettings.EmailVerificationEnabled {
 		emailForExistCheck = user.Email
 	}
 	exist, err := model.CheckUserExistOrDeleted(user.Username, emailForExistCheck)
@@ -224,12 +259,12 @@ func Register(c *gin.Context) {
 		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
 	}
-	if common.EmailVerificationEnabled {
+	if authSettings.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
 	}
 	var invitationCode *model.InvitationCode
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		if common.InvitationCodeEnabled || invitationCodeValue != "" {
+		if authSettings.InvitationCodeEnabled || invitationCodeValue != "" {
 			invitationCode, err = model.GetUsableInvitationCodeWithTx(tx, invitationCodeValue)
 			if err != nil {
 				return err
@@ -239,7 +274,7 @@ func Register(c *gin.Context) {
 			}
 		}
 		cleanUser.InviterId = inviterId
-		if err := cleanUser.InsertWithTx(tx, inviterId); err != nil {
+		if err := cleanUser.InsertWithTx(tx, inviterId, userQuotaSettings); err != nil {
 			return err
 		}
 		if invitationCode != nil {
@@ -260,7 +295,11 @@ func Register(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	cleanUser.FinalizeOAuthUserCreation(inviterId)
+	if authSettings.EmailVerificationEnabled {
+		// 注册成功后作废验证码，避免同一验证码被再次用于注册。
+		_, _ = common.ConsumeVerificationCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose)
+	}
+	cleanUser.FinalizeOAuthUserCreation(inviterId, userQuotaSettings)
 	// 生成默认令牌
 	if constant.GenerateDefaultToken {
 		key, err := common.GenerateKey()
@@ -281,7 +320,7 @@ func Register(c *gin.Context) {
 			UnlimitedQuota:     true,
 			ModelLimitsEnabled: false,
 		}
-		if setting.DefaultUseAutoGroup {
+		if autoGroupPolicy.DefaultUseAutoGroup {
 			token.Group = "auto"
 		}
 		if err := token.Insert(); err != nil {
@@ -501,41 +540,6 @@ func GetUserProfileSummary(c *gin.Context) {
 	common.ApiSuccess(c, resp)
 }
 
-func GenerateAccessToken(c *gin.Context) {
-	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	// get rand int 28-32
-	randI := common.GetRandomInt(4)
-	key, err := common.GenerateRandomKey(29 + randI)
-	if err != nil {
-		common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
-		common.SysLog("failed to generate key: " + err.Error())
-		return
-	}
-	user.SetAccessToken(key)
-
-	if model.DB.Where("access_token = ?", user.AccessToken).First(user).RowsAffected != 0 {
-		common.ApiErrorI18n(c, i18n.MsgUuidDuplicate)
-		return
-	}
-
-	if err := user.Update(false); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    user.AccessToken,
-	})
-	return
-}
-
 type TransferAffQuotaRequest struct {
 	Quota int `json:"quota" binding:"required"`
 }
@@ -601,12 +605,11 @@ func GetSelf(c *gin.Context) {
 	// 顺便补签 e-flowcode-auth cookie，避免要求所有人重新登录。
 	// cookie 缺失 / 过期 / 签名异常都会重新签发。
 	if common.EflowAuthEnabled() {
+		// eflow: 缺失、过期或属于其他会话（换号登录、旧会话签发）的子站 cookie 一律按当前会话重签。
+		sid := currentSessionID(c)
 		existing, _ := c.Cookie(common.EflowAuthCookieName)
-		if _, ok := common.VerifyEflowAuth(existing); !ok {
-			if token, tokenErr := common.IssueEflowAuth(id); tokenErr == nil && token != "" {
-				c.SetSameSite(http.SameSiteStrictMode)
-				c.SetCookie(common.EflowAuthCookieName, token, int(common.EflowAuthTTLSeconds), "/", "", false, true)
-			}
+		if !common.EflowAuthMatchesSession(existing, id, eflowSessionPublicID(sid)) {
+			issueEflowAuthCookie(c, id, sid)
 		}
 	}
 	// Hide admin remarks: set to empty to trigger omitempty tag, ensuring the remark field is not included in JSON returned to regular users
@@ -619,7 +622,7 @@ func GetSelf(c *gin.Context) {
 	userSetting := user.GetSetting()
 
 	// 构建响应数据，包含用户信息和权限
-	responseData := map[string]interface{}{
+	responseData := map[string]any{
 		"id":                user.Id,
 		"username":          user.Username,
 		"display_name":      user.DisplayName,
@@ -675,27 +678,27 @@ func AcknowledgeRiskWarning(c *gin.Context) {
 }
 
 // 计算用户权限的辅助函数
-func calculateUserPermissions(userRole int) map[string]interface{} {
-	permissions := map[string]interface{}{}
+func calculateUserPermissions(userRole int) map[string]any {
+	permissions := map[string]any{}
 
 	// 根据用户角色计算权限
 	if userRole == common.RoleRootUser {
 		// 超级管理员不需要边栏设置功能
 		permissions["sidebar_settings"] = false
-		permissions["sidebar_modules"] = map[string]interface{}{}
+		permissions["sidebar_modules"] = map[string]any{}
 	} else if userRole == common.RoleAdminUser {
 		// 管理员可以设置边栏，但不包含系统设置功能
 		permissions["sidebar_settings"] = true
-		permissions["sidebar_modules"] = map[string]interface{}{
-			"admin": map[string]interface{}{
+		permissions["sidebar_modules"] = map[string]any{
+			"admin": map[string]any{
 				"setting": false, // 管理员不能访问系统设置
 			},
 		}
 	} else if userRole == common.RoleCustomerServiceUser || userRole == common.RoleFinanceUser {
 		// 客服 / 财务：仅工单管理与用户管理只读视图。其它管理员功能一律锁闭。
 		permissions["sidebar_settings"] = true
-		permissions["sidebar_modules"] = map[string]interface{}{
-			"admin": map[string]interface{}{
+		permissions["sidebar_modules"] = map[string]any{
+			"admin": map[string]any{
 				"channel":         false,
 				"models":          false,
 				"redemption":      false,
@@ -708,7 +711,7 @@ func calculateUserPermissions(userRole int) map[string]interface{} {
 	} else {
 		// 普通用户只能设置个人功能，不包含管理员区域
 		permissions["sidebar_settings"] = true
-		permissions["sidebar_modules"] = map[string]interface{}{
+		permissions["sidebar_modules"] = map[string]any{
 			"admin": false, // 普通用户不能访问管理员区域
 		}
 	}
@@ -718,17 +721,17 @@ func calculateUserPermissions(userRole int) map[string]interface{} {
 
 // 根据用户角色生成默认的边栏配置
 func generateDefaultSidebarConfig(userRole int) string {
-	defaultConfig := map[string]interface{}{}
+	defaultConfig := map[string]any{}
 
 	// 聊天区域 - 所有用户都可以访问
-	defaultConfig["chat"] = map[string]interface{}{
+	defaultConfig["chat"] = map[string]any{
 		"enabled":    true,
 		"playground": true,
 		"chat":       true,
 	}
 
 	// 控制台区域 - 所有用户都可以访问
-	defaultConfig["console"] = map[string]interface{}{
+	defaultConfig["console"] = map[string]any{
 		"enabled":    true,
 		"detail":     true,
 		"token":      true,
@@ -739,7 +742,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 	}
 
 	// 个人中心区域 - 所有用户都可以访问
-	defaultConfig["personal"] = map[string]interface{}{
+	defaultConfig["personal"] = map[string]any{
 		"enabled":  true,
 		"topup":    true,
 		"personal": true,
@@ -748,7 +751,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 	// 管理员区域 - 根据角色决定
 	if userRole == common.RoleAdminUser {
 		// 管理员可以访问管理员区域，但不能访问系统设置
-		defaultConfig["admin"] = map[string]interface{}{
+		defaultConfig["admin"] = map[string]any{
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
@@ -760,7 +763,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 		}
 	} else if userRole == common.RoleRootUser {
 		// 超级管理员可以访问所有功能
-		defaultConfig["admin"] = map[string]interface{}{
+		defaultConfig["admin"] = map[string]any{
 			"enabled":         true,
 			"channel":         true,
 			"models":          true,
@@ -772,7 +775,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 		}
 	} else if userRole == common.RoleCustomerServiceUser {
 		// 客服：仅开放工单后台入口；其它管理员功能一律关闭。
-		defaultConfig["admin"] = map[string]interface{}{
+		defaultConfig["admin"] = map[string]any{
 			"enabled":         true,
 			"channel":         false,
 			"models":          false,
@@ -823,8 +826,19 @@ func GetUserModels(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
-	var updatedUser model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&updatedUser)
+	// 指针字段区分“未提交”与“显式清空”：未提交的邮箱、客户等级保留原值，
+	// 避免脚本局部更新时静默重置主客户等级或清空附加客户等级。
+	var request struct {
+		model.User
+		Email                   *string          `json:"email"`
+		Group                   *string          `json:"group"`
+		AdditionalCustomerTiers *model.GroupList `json:"additional_customer_tiers"`
+	}
+	err := common.DecodeJson(c.Request.Body, &request)
+	updatedUser := request.User
+	if request.Email != nil {
+		updatedUser.Email = model.NormalizeEmail(*request.Email)
+	}
 	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -841,6 +855,11 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if request.Email == nil {
+		updatedUser.Email = originUser.Email
+	}
+	updatedUser.Group = originUser.Group
+	updatedUser.AdditionalCustomerTiers = originUser.AdditionalCustomerTiers
 	myRole := c.GetInt("role")
 	if !canManageTargetRole(myRole, originUser.Role) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
@@ -850,35 +869,52 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
-	if updatedUser.Group == "" {
-		updatedUser.Group = "default"
+	// 只校验本次提交的等级；保留的原值即使对应等级已被删除，也不阻断其他字段的修改。
+	if request.Group != nil {
+		updatedUser.Group = *request.Group
+		if updatedUser.Group == "" {
+			updatedUser.Group = "default"
+		}
+		if err := validateCustomerTier(updatedUser.Group); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	}
-	if err := validateCustomerTier(updatedUser.Group); err != nil {
-		common.ApiErrorMsg(c, err.Error())
-		return
+	if request.AdditionalCustomerTiers != nil {
+		updatedUser.AdditionalCustomerTiers = *request.AdditionalCustomerTiers
+		if err := validateAdditionalCustomerTiers(updatedUser.AdditionalCustomerTiers); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	}
-	if err := validateAdditionalCustomerTiers(updatedUser.AdditionalCustomerTiers); err != nil {
-		common.ApiErrorMsg(c, err.Error())
-		return
-	}
+	updatedUser.AdditionalCustomerTiers = withoutPrimaryTier(updatedUser.AdditionalCustomerTiers, updatedUser.Group)
 	if updatedUser.Password == "$I_LOVE_U" {
 		updatedUser.Password = "" // rollback to what it should be
 	}
-	// Check email uniqueness (excluding the user being updated)
 	if updatedUser.Email != "" {
-		var emailCount int64
-		model.DB.Model(&model.User{}).Unscoped().
-			Where("email = ? AND id != ?", updatedUser.Email, updatedUser.Id).
-			Count(&emailCount)
-		if emailCount > 0 {
+		if err := model.EnsureEmailAvailable(updatedUser.Email, updatedUser.Id); err != nil {
+			if !errors.Is(err, model.ErrEmailAlreadyTaken) {
+				common.ApiError(c, err)
+				return
+			}
 			common.ApiErrorMsg(c, "邮箱已被其他用户使用")
 			return
 		}
 	}
 	updatePassword := updatedUser.Password != ""
+	// eflow: 重置密码、改邮箱（找回密码通道）需要绑定被管理用户的一次性验证凭证；
+	// 只改分组、备注、显示名等不需要（admin-api 整对象回写只改分组时不会触发）。
+	if updatePassword || updatedUser.Email != originUser.Email {
+		if requireAdminUserProof(c, service.VerificationScopeAdminUserUpdate, service.AdminUserContext{UserID: updatedUser.Id}) == nil {
+			return
+		}
+	}
 	if err := updatedUser.Edit(updatePassword); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if updatePassword {
+		revokeUserSessions(c, updatedUser.Id, false)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -911,6 +947,9 @@ func AdminClearUserBinding(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
+	if requireAdminUserProof(c, service.VerificationScopeAdminUserBindingClear, service.AdminUserBindingContext{UserID: user.Id, BindingType: bindingType}) == nil {
+		return
+	}
 
 	if err := user.ClearBinding(bindingType); err != nil {
 		common.ApiError(c, err)
@@ -926,7 +965,7 @@ func AdminClearUserBinding(c *gin.Context) {
 }
 
 func UpdateSelf(c *gin.Context) {
-	var requestData map[string]interface{}
+	var requestData map[string]any
 	if err := common.DecodeJson(c.Request.Body, &requestData); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -1015,9 +1054,19 @@ func UpdateSelf(c *gin.Context) {
 		cleanUser.Password = ""
 	}
 	updatePassword, err := checkUpdatePassword(user.OriginalPassword, user.Password, cleanUser.Id)
+	if err == nil && updatePassword {
+		// eflow: 改密在核对原密码之外还需要 account.password.change 一次性验证凭证。
+		if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopePasswordChange}) == nil {
+			return
+		}
+	}
 	if err != nil {
 		if errors.Is(err, errUserPasswordUnset) {
 			common.ApiErrorI18n(c, i18n.MsgUserPasswordUnset)
+			return
+		}
+		if errors.Is(err, errPasswordUnchanged) {
+			common.ApiErrorMsg(c, errPasswordUnchanged.Error())
 			return
 		}
 		if errors.Is(err, errOriginalPasswordFail) {
@@ -1030,6 +1079,11 @@ func UpdateSelf(c *gin.Context) {
 	if err := cleanUser.Update(updatePassword); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if updatePassword {
+		// eflow: 改密后踢掉其他设备，只保留当前会话。
+		revokeUserSessions(c, cleanUser.Id, true)
+		recordUserSecurityAudit(c, cleanUser.Id, "user.password_change", nil)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1058,6 +1112,10 @@ func checkUpdatePassword(originalPassword string, newPassword string, userId int
 		err = errOriginalPasswordFail
 		return
 	}
+	if newPassword == originalPassword {
+		err = errPasswordUnchanged
+		return
+	}
 	updatePassword = true
 	return
 }
@@ -1078,11 +1136,15 @@ func DeleteUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
+	if requireAdminUserProof(c, service.VerificationScopeAdminUserDelete, service.AdminUserContext{UserID: id}) == nil {
+		return
+	}
 	err = model.HardDeleteUserById(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	revokeUserSessions(c, id, false)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1090,20 +1152,33 @@ func DeleteUser(c *gin.Context) {
 	return
 }
 
+// DeleteSelf 注销当前账号。设置了密码的账号必须提交正确的当前密码；
+// 仅通过第三方登录、从未设置密码的账号需要近期身份验证。
+// DeleteSelf deletes the caller's account after a single-use account.delete
+// proof, then signs out every session and clears the sub-site credential.
 func DeleteSelf(c *gin.Context) {
 	id := c.GetInt("id")
-	user, _ := model.GetUserById(id, false)
-
-	if user.Role == common.RoleRootUser {
-		common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
-		return
-	}
-
-	err := model.DeleteUserById(id)
+	user, err := model.GetUserById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	if user.Role == common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
+		return
+	}
+	authorization := middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccountDelete})
+	if authorization == nil {
+		return
+	}
+
+	if err := model.DeleteUserById(id); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	revokeUserSessions(c, id, false)
+	c.SetCookie(common.EflowAuthCookieName, "", -1, "/", "", isHTTPSRequest(c), true)
+	recordUserSecurityAudit(c, id, "user.account_delete", map[string]any{"verification_method": authorization.Method})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -1127,6 +1202,10 @@ func CreateUser(c *gin.Context) {
 		user.DisplayName = user.Username
 	}
 	myRole := c.GetInt("role")
+	if !common.IsValidateRole(user.Role) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
 	if user.Role >= myRole {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
@@ -1134,6 +1213,7 @@ func CreateUser(c *gin.Context) {
 	if user.Group == "" {
 		user.Group = "default"
 	}
+
 	if err := validateCustomerTier(user.Group); err != nil {
 		common.ApiErrorMsg(c, err.Error())
 		return
@@ -1142,6 +1222,12 @@ func CreateUser(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
+	// eflow: 创建管理员需要绑定目标角色的一次性验证凭证；客服、财务、普通用户不需要。
+	if user.Role >= common.RoleAdminUser {
+		if requireAdminUserProof(c, service.VerificationScopeAdminUserCreate, service.AdminUserCreateContext{Role: user.Role}) == nil {
+			return
+		}
+	}
 	// Even for admin users, we cannot fully trust them!
 	cleanUser := model.User{
 		Username:                user.Username,
@@ -1149,7 +1235,7 @@ func CreateUser(c *gin.Context) {
 		DisplayName:             user.DisplayName,
 		Role:                    user.Role, // 保持管理员设置的角色
 		Group:                   user.Group,
-		AdditionalCustomerTiers: user.AdditionalCustomerTiers,
+		AdditionalCustomerTiers: withoutPrimaryTier(user.AdditionalCustomerTiers, user.Group),
 	}
 	if err := cleanUser.Insert(0); err != nil {
 		common.ApiError(c, err)
@@ -1167,12 +1253,21 @@ func validateCustomerTier(group string) error {
 	if group == "default" {
 		return nil
 	}
-	for _, tier := range common.GetTopupGroupNames() {
-		if tier == group {
-			return nil
-		}
+	if slices.Contains(common.GetTopupGroupNames(), group) {
+		return nil
 	}
 	return fmt.Errorf("客户等级 %q 未配置", group)
+}
+
+// withoutPrimaryTier 去掉与主客户等级重复的附加等级；有效等级集合始终包含主等级，重复项只会造成展示冗余。
+func withoutPrimaryTier(tiers model.GroupList, primary string) model.GroupList {
+	kept := make([]string, 0)
+	for _, tier := range tiers.Values() {
+		if tier != primary {
+			kept = append(kept, tier)
+		}
+	}
+	return model.NewGroupList(kept)
 }
 
 func validateAdditionalCustomerTiers(tiers model.GroupList) error {
@@ -1214,6 +1309,14 @@ func ManageUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
+	// requireManageProof consumes the proof bound to this user and action once
+	// the action's own checks have passed. Quota adjustments are not gated.
+	requireManageProof := func(role *int) bool {
+		if adminUserStatusExempt(c, req.Action) {
+			return true
+		}
+		return requireAdminUserProof(c, service.VerificationScopeAdminUserManage, service.AdminUserManageContext{UserID: user.Id, Action: req.Action, Role: role}) != nil
+	}
 	switch req.Action {
 	case "disable":
 		user.Status = common.UserStatusDisabled
@@ -1221,11 +1324,20 @@ func ManageUser(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDisableRootUser)
 			return
 		}
+		if !requireManageProof(nil) {
+			return
+		}
 	case "enable":
 		user.Status = common.UserStatusEnabled
+		if !requireManageProof(nil) {
+			return
+		}
 	case "delete":
 		if user.Role == common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
+			return
+		}
+		if requireAdminUserProof(c, service.VerificationScopeAdminUserDelete, service.AdminUserContext{UserID: user.Id}) == nil {
 			return
 		}
 		if err := user.Delete(); err != nil {
@@ -1240,6 +1352,10 @@ func ManageUser(c *gin.Context) {
 		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 		}
+		// eflow: 软删除后不能再走下面的 user.Update（记录已不可见，会误报 record not found）。
+		revokeUserSessions(c, user.Id, false)
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+		return
 	case "promote":
 		if myRole != common.RoleRootUser {
 			common.ApiErrorI18n(c, i18n.MsgUserAdminCannotPromote)
@@ -1247,6 +1363,9 @@ func ManageUser(c *gin.Context) {
 		}
 		if user.Role >= common.RoleAdminUser {
 			common.ApiErrorI18n(c, i18n.MsgUserAlreadyAdmin)
+			return
+		}
+		if !requireManageProof(nil) {
 			return
 		}
 		user.Role = common.RoleAdminUser
@@ -1257,6 +1376,9 @@ func ManageUser(c *gin.Context) {
 		}
 		if user.Role == common.RoleCommonUser {
 			common.ApiErrorI18n(c, i18n.MsgUserAlreadyCommon)
+			return
+		}
+		if !requireManageProof(nil) {
 			return
 		}
 		user.Role = common.RoleCommonUser
@@ -1289,11 +1411,14 @@ func ManageUser(c *gin.Context) {
 			})
 			return
 		}
+		if !requireManageProof(&target) {
+			return
+		}
 		user.Role = target
 	case "add_quota":
 		adminName := c.GetString("username")
 		adminId := c.GetInt("id")
-		adminInfo := map[string]interface{}{
+		adminInfo := map[string]any{
 			"admin_id":       adminId,
 			"admin_username": adminName,
 		}
@@ -1347,6 +1472,9 @@ func ManageUser(c *gin.Context) {
 	// 避免在 Redis TTL 过期前仍使用旧状态（尤其是禁用后仍可发起请求的问题）。
 	// InvalidateUserCache 会让下一次 GetUserCache 从数据库重新加载，
 	// InvalidateUserTokensCache 则确保令牌侧的缓存也同步刷新。
+	if req.Action == "disable" || req.Action == "delete" {
+		revokeUserSessions(c, user.Id, false)
+	}
 	if req.Action == "disable" || req.Action == "promote" || req.Action == "demote" || req.Action == "set_role" {
 		if err := model.InvalidateUserCache(user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
@@ -1368,8 +1496,54 @@ func ManageUser(c *gin.Context) {
 }
 
 type emailBindRequest struct {
-	Email string `json:"email"`
-	Code  string `json:"code"`
+	Email   string `json:"email"`
+	Code    string `json:"code"`
+	OldCode string `json:"old_code"`
+}
+
+// emailChangeNeedsOldAddressCode reports whether replacing the current email
+// must also be confirmed from that address: accounts without 2FA or a Passkey
+// verify with the password or a recent sign-in, which a hijacked session could
+// satisfy (upstream 0973dc2b8 intent).
+func emailChangeNeedsOldAddressCode(user *model.User) (bool, error) {
+	if user.Email == "" {
+		return false, nil
+	}
+	state, err := model.GetUserVerificationState(user.Id)
+	if err != nil {
+		return false, err
+	}
+	return !state.HasTwoFA && !state.HasPasskey, nil
+}
+
+// SendOldEmailVerification sends a confirmation code to the caller's current
+// email before it is replaced.
+func SendOldEmailVerification(c *gin.Context) {
+	user, err := model.GetUserById(c.GetInt("id"), false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if user.Email == "" {
+		common.ApiErrorMsg(c, "No email address is bound.")
+		return
+	}
+	code, err := common.GetOrCreateVerificationCodeWithKey(user.Email, common.EmailBindOldAddressPurpose(user.Id), 6)
+	if err != nil {
+		verificationStoreError(c)
+		return
+	}
+	systemName := common.GetBrandingSettings().SystemName
+	subject := fmt.Sprintf("%s邮箱换绑确认", systemName)
+	content := fmt.Sprintf("<p>您好，你正在把%s账号的邮箱换绑为新的地址。</p>"+
+		"<p>请在换绑页面填写当前邮箱的确认码: <strong>%s</strong></p>"+
+		"<p>确认码 %d 分钟内有效。如果不是本人操作，请立即修改密码并开启两步验证。</p>", systemName, code, common.VerificationValidMinutes)
+	if err := common.SendEmail(subject, user.Email, content); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordUserSecurityAudit(c, user.Id, "user.email_binding_resend", map[string]any{"address": "current"})
+	common.ApiSuccess(c, nil)
 }
 
 func EmailBind(c *gin.Context) {
@@ -1381,17 +1555,69 @@ func EmailBind(c *gin.Context) {
 	email := req.Email
 	email = model.NormalizeEmail(email)
 	code := req.Code
-	if !common.VerifyCodeWithKey(email, code, common.EmailVerificationPurpose) {
+	// eflow: 验证码按发码用户隔离，先校验再在写库前原子消费，防止并发重复使用。
+	purpose := common.EmailBindVerificationPurpose(c.GetInt("id"))
+	valid, err := common.VerifyCodeWithKey(email, code, purpose)
+	if err != nil {
+		verificationStoreError(c)
+		return
+	}
+	if !valid {
 		common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 		return
 	}
 	user := model.User{
 		Id: c.GetInt("id"),
 	}
-	err := user.FillUserById()
+	err = user.FillUserById()
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// eflow: 已有邮箱时换绑等于转移找回密码的通道：没有 2FA/Passkey 的账号先核对发到当前邮箱的
+	// 确认码（在消费验证凭证之前，避免填错码浪费凭证），再要绑定新邮箱的一次性验证凭证。
+	needsOldCode, err := emailChangeNeedsOldAddressCode(&user)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	oldEmail := user.Email
+	oldPurpose := common.EmailBindOldAddressPurpose(user.Id)
+	if needsOldCode {
+		valid, err := common.VerifyCodeWithKey(oldEmail, req.OldCode, oldPurpose)
+		if err != nil {
+			verificationStoreError(c)
+			return
+		}
+		if !valid {
+			writeSecurityStatusError(c, http.StatusOK, "EMAIL_OLD_CODE_INVALID", "Enter the confirmation code sent to your current email address.")
+			return
+		}
+	}
+	if user.Email != "" {
+		proofContext, err := common.Marshal(service.AccountBindingContext{Provider: "email", Email: email})
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: proofContext}) == nil {
+			return
+		}
+	}
+	valid, err = common.ConsumeVerificationCodeWithKey(email, code, purpose)
+	if err != nil {
+		verificationStoreError(c)
+		return
+	}
+	if !valid {
+		common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
+		return
+	}
+	if needsOldCode {
+		if valid, err := common.ConsumeVerificationCodeWithKey(oldEmail, req.OldCode, oldPurpose); err != nil || !valid {
+			writeSecurityStatusError(c, http.StatusOK, "EMAIL_OLD_CODE_INVALID", "Enter the confirmation code sent to your current email address.")
+			return
+		}
 	}
 	if err := model.BindEmailToUser(&user, email); err != nil {
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
@@ -1400,6 +1626,10 @@ func EmailBind(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	recordUserSecurityAudit(c, user.Id, "user.binding_bind", map[string]any{"provider": "email"})
+	if oldEmail != "" && oldEmail != email {
+		notifyEmailChanged(oldEmail)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1498,8 +1728,8 @@ func UpdateUserSetting(c *gin.Context) {
 
 	// 如果是邮件类型，验证邮箱地址
 	if req.QuotaWarningType == dto.NotifyTypeEmail && req.NotificationEmail != "" {
-		// 验证邮箱格式
-		if !strings.Contains(req.NotificationEmail, "@") {
+		// 只接受单个裸地址：SMTP 发送按 ; 拆收件人，放行 ; , 会变成群发任意第三方。
+		if !isSingleNotificationEmail(req.NotificationEmail) {
 			common.ApiErrorI18n(c, i18n.MsgSettingEmailInvalid)
 			return
 		}
@@ -1557,20 +1787,27 @@ func UpdateUserSetting(c *gin.Context) {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
 
-	// 构建设置
-	settings := dto.UserSetting{
-		NotifyType:                       req.QuotaWarningType,
-		QuotaWarningThreshold:            req.QuotaWarningThreshold,
-		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
-		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
-		RecordIpLog:                      req.RecordIpLog,
-	}
+	// 以现有设置为底，只改写通知相关字段，保留侧栏模块、语言等其他设置。
+	settings := existingSettings
+	settings.NotifyType = req.QuotaWarningType
+	settings.QuotaWarningThreshold = req.QuotaWarningThreshold
+	settings.UpstreamModelUpdateNotifyEnabled = upstreamModelUpdateNotifyEnabled
+	settings.AcceptUnsetRatioModel = req.AcceptUnsetModelRatioModel
+	settings.RecordIpLog = req.RecordIpLog
+	settings.WebhookUrl = ""
+	settings.WebhookSecret = ""
+	settings.NotificationEmail = ""
+	settings.BarkUrl = ""
+	settings.GotifyUrl = ""
+	settings.GotifyToken = ""
+	settings.GotifyPriority = 0
 
-	// 如果是webhook类型,添加webhook相关设置
+	// 如果是webhook类型,添加webhook相关设置；密钥留空表示沿用原密钥
 	if req.QuotaWarningType == dto.NotifyTypeWebhook {
 		settings.WebhookUrl = req.WebhookUrl
-		if req.WebhookSecret != "" {
-			settings.WebhookSecret = req.WebhookSecret
+		settings.WebhookSecret = req.WebhookSecret
+		if req.WebhookSecret == "" {
+			settings.WebhookSecret = existingSettings.WebhookSecret
 		}
 	}
 
@@ -1603,4 +1840,53 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	common.ApiSuccessI18n(c, i18n.MsgSettingSaved, nil)
+}
+
+// isSingleNotificationEmail 判断通知邮箱是单个不带显示名的地址，且不含分隔符与控制字符。
+func isSingleNotificationEmail(value string) bool {
+	if strings.ContainsAny(value, ";,") || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+		return false
+	}
+	addr, err := mail.ParseAddress(value)
+	return err == nil && addr.Name == "" && addr.Address == value
+}
+
+// isHTTPSRequest 判断浏览器侧是否经 HTTPS 访问（直连 TLS 或反代声明的 X-Forwarded-Proto），
+// 用于给 e-flowcode-auth cookie 打 Secure；本地 HTTP 开发环境保持可用。
+func isHTTPSRequest(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	proto, _, _ := strings.Cut(c.GetHeader("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
+
+// notifyEmailChanged tells the previous address that the account email changed.
+func notifyEmailChanged(previous string) {
+	systemName := common.GetBrandingSettings().SystemName
+	subject := fmt.Sprintf("%s账号邮箱已更换", systemName)
+	content := fmt.Sprintf("<p>您好，你的%s账号已换绑到新的邮箱地址。</p>"+
+		"<p>如果不是本人操作，请立即联系管理员。</p>", systemName)
+	go func() {
+		if err := common.SendEmail(subject, previous, content); err != nil {
+			common.SysError("notify previous email address: " + err.Error())
+		}
+	}()
+}
+
+func eflowSessionPublicID(sid string) string {
+	if sid == "" {
+		return ""
+	}
+	return common.SessionPublicID(sid)
+}
+
+// issueEflowAuthCookie sets the sub-site identity cookie bound to the session sid.
+func issueEflowAuthCookie(c *gin.Context, userID int, sid string) {
+	token, err := common.IssueEflowAuthForSession(userID, eflowSessionPublicID(sid))
+	if err != nil || token == "" {
+		return
+	}
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie(common.EflowAuthCookieName, token, int(common.EflowAuthTTLSeconds), "/", "", isHTTPSRequest(c), true)
 }

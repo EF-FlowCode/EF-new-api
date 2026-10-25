@@ -1,12 +1,26 @@
 .github
 .git
+.agents
+.ai-governance
+.codegraph
+.playwright-cli
+.rolling
+.releases
+scripts/__pycache__
+new-api-eflow-release-*.tar*
+output
 *.md
+!THIRD-PARTY-LICENSES.md
 .vscode
 .gitignore
 Makefile
 docs
 .eslintcache
 .gocache
+# 本地缓存和构建产物；容器内重新生成前端 dist。
+/.cache/
+/build/
+/web/dist/
 /web/node_modules
 /web/*/node_modules
 /web/*/dist

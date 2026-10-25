@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/pkg/billingexpr"
+	relaycommon "eflow.local/new-api/relay/common"
 	"github.com/shopspring/decimal"
 )
 
@@ -263,6 +263,37 @@ func TestTryTieredSettle_CacheTokensAffectSettlement(t *testing.T) {
 	}
 	if quota2 != 14750 {
 		t.Fatalf("cache quota = %d, want 14750", quota2)
+	}
+}
+
+func TestTryTieredSettle_FlatPriceCacheReadRoundsFromAbsolutePrice(t *testing.T) {
+	info := makeRelayInfo(`tier("default", p * 3 + c * 15 + cr * 1)`, 1.0, 0, 0)
+	info.TieredBillingSnapshot.BillingMode = "flat_price"
+
+	ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{CR: 3})
+	if !ok {
+		t.Fatal("expected flat price settlement")
+	}
+	// $1 / 1M * 3 tokens * 500K quota/$ = 1.5 quota, half-away-from-zero => 2.
+	if quota != 2 {
+		t.Fatalf("quota = %d, want 2", quota)
+	}
+	if result == nil || result.MatchedTier != "default" {
+		t.Fatalf("matched tier = %v, want default", result)
+	}
+}
+
+func TestTryTieredSettle_FlatPriceUsesIndependentCacheWritePrices(t *testing.T) {
+	info := makeRelayInfo(`tier("default", p * 3 + c * 15 + cc * 4 + cc1h * 9)`, 1.0, 0, 0)
+	info.TieredBillingSnapshot.BillingMode = "flat_price"
+
+	ok, quota, _ := TryTieredSettle(info, billingexpr.TokenParams{CC: 4, CC1h: 3})
+	if !ok {
+		t.Fatal("expected flat price settlement")
+	}
+	// (4 * $4 + 3 * $9) / 1M * 500K = 21.5 quota => 22.
+	if quota != 22 {
+		t.Fatalf("quota = %d, want 22", quota)
 	}
 }
 
@@ -658,6 +689,36 @@ func TestBuildTieredTokenParams_Len_Claude(t *testing.T) {
 	}
 }
 
+func TestBuildTieredTokenParams_ClaudeUnsplitCacheWrites(t *testing.T) {
+	expr := `tier("base", p * 3 + c * 15 + cr * 0.3 + cc * 3.75 + cc1h * 6)`
+	for _, tc := range []struct {
+		name             string
+		split5m, split1h int
+		wantCC, wantCC1h float64
+	}{
+		{"total without split", 0, 0, 10000, 0},
+		{"split missing part of total", 0, 4000, 6000, 4000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usage := &dto.Usage{
+				PromptTokens:                100,
+				CompletionTokens:            50,
+				UsageSemantic:               "anthropic",
+				PromptTokensDetails:         dto.InputTokenDetails{CachedCreationTokens: 10000},
+				ClaudeCacheCreation5mTokens: tc.split5m,
+				ClaudeCacheCreation1hTokens: tc.split1h,
+			}
+			params := BuildTieredTokenParams(usage, true, billingexpr.UsedVars(expr))
+			if params.CC != tc.wantCC || params.CC1h != tc.wantCC1h {
+				t.Fatalf("cc = %f, cc1h = %f, want %f, %f", params.CC, params.CC1h, tc.wantCC, tc.wantCC1h)
+			}
+			if params.Len != float64(100+10000) {
+				t.Fatalf("Len = %f, want %d (len counts every cache write)", params.Len, 100+10000)
+			}
+		})
+	}
+}
+
 func TestBuildTieredTokenParams_Len_TierCondition(t *testing.T) {
 	// Test that len-based tier conditions work correctly when p is reduced by cache
 	usage := &dto.Usage{
@@ -737,13 +798,13 @@ func TestStress_TieredBilling_1000Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan string, 1000)
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
 			rng := rand.New(rand.NewSource(seed))
 
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				usage := randomUsage(rng)
 				groupRatio := 0.5 + rng.Float64()*2.0
 
@@ -827,4 +888,28 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 			ratioQuota(usage, false, 1.5, 5.0, 0.1, 1.0, 1.5)
 		}
 	})
+}
+
+func TestBuildTieredTokenParams_ClaudeFoldsUnpricedCacheReadsIntoInput(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     5000,
+		CompletionTokens: 2000,
+		UsageSemantic:    "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 3000,
+			TextTokens:   5000,
+		},
+		ClaudeCacheCreation5mTokens: 1000,
+		ClaudeCacheCreation1hTokens: 500,
+	}
+
+	params := BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 3 + c * 15)`))
+	if params.P != 8000 {
+		t.Fatalf("P = %f, want 8000: unpriced cache reads bill as input, cache writes do not", params.P)
+	}
+
+	params = BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 3 + c * 15 + cr * 0.3)`))
+	if params.P != 5000 {
+		t.Fatalf("P = %f, want 5000: separately priced cache reads stay out of input", params.P)
+	}
 }

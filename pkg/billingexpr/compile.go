@@ -20,6 +20,9 @@ const DefaultExprVersion = 1
 // Format: "v1:tier(...)" → version=1, body="tier(...)".
 // No prefix defaults to DefaultExprVersion.
 func ParseExprVersion(exprStr string) (version int, body string) {
+	if strings.HasPrefix(exprStr, "v2:") {
+		return 2, exprStr[3:]
+	}
 	if strings.HasPrefix(exprStr, "v1:") {
 		return 1, exprStr[3:]
 	}
@@ -27,9 +30,10 @@ func ParseExprVersion(exprStr string) (version int, body string) {
 }
 
 type cachedEntry struct {
-	prog     *vm.Program
-	usedVars map[string]bool
-	version  int
+	prog      *vm.Program
+	usedVars  map[string]bool
+	version   int
+	usageKeys map[string]bool
 }
 
 var (
@@ -38,34 +42,35 @@ var (
 )
 
 // compileEnvPrototypeV1 is the v1 type-checking prototype used at compile time.
-var compileEnvPrototypeV1 = map[string]interface{}{
-	"p":    float64(0),
-	"c":    float64(0),
-	"len":  float64(0),
-	"cr":   float64(0),
-	"cc":   float64(0),
-	"cc1h": float64(0),
-	"img":  float64(0),
-	"img_o": float64(0),
-	"ai":   float64(0),
-	"ao":   float64(0),
-	"tier":                   func(string, float64) float64 { return 0 },
-	"header":                 func(string) string { return "" },
-	"param":                  func(string) interface{} { return nil },
-	"has":                    func(interface{}, string) bool { return false },
-	"hour":                   func(string) int { return 0 },
-	"minute":                 func(string) int { return 0 },
-	"weekday":                func(string) int { return 0 },
-	"month":                  func(string) int { return 0 },
-	"day":                    func(string) int { return 0 },
-	"max":                    math.Max,
-	"min":                    math.Min,
-	"abs":                    math.Abs,
-	"ceil":                   math.Ceil,
-	"floor":                  math.Floor,
+var compileEnvPrototypeV1 = map[string]any{
+	"p":       float64(0),
+	"c":       float64(0),
+	"len":     float64(0),
+	"cr":      float64(0),
+	"cc":      float64(0),
+	"cc1h":    float64(0),
+	"img":     float64(0),
+	"img_o":   float64(0),
+	"ai":      float64(0),
+	"ao":      float64(0),
+	"tier":    func(string, float64) float64 { return 0 },
+	"header":  func(string) string { return "" },
+	"param":   func(string) any { return nil },
+	"u":       func(string) (any, error) { return nil, nil },
+	"has":     func(any, string) bool { return false },
+	"hour":    func(string) int { return 0 },
+	"minute":  func(string) int { return 0 },
+	"weekday": func(string) int { return 0 },
+	"month":   func(string) int { return 0 },
+	"day":     func(string) int { return 0 },
+	"max":     math.Max,
+	"min":     math.Min,
+	"abs":     math.Abs,
+	"ceil":    math.Ceil,
+	"floor":   math.Floor,
 }
 
-func getCompileEnv(version int) map[string]interface{} {
+func getCompileEnv(version int) map[string]any {
 	switch version {
 	default:
 		return compileEnvPrototypeV1
@@ -93,6 +98,13 @@ func compileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
 	cacheMu.RUnlock()
 
 	version, body := ParseExprVersion(exprStr)
+	usageKeys, err := expressionUsageKeys(body)
+	if err != nil {
+		return nil, err
+	}
+	if len(usageKeys) != 0 && version != 2 {
+		return nil, fmt.Errorf("u() requires a v2 amount expression")
+	}
 	prog, err := expr.Compile(body, expr.Env(getCompileEnv(version)), expr.AsFloat64())
 	if err != nil {
 		return nil, fmt.Errorf("expr compile error: %w", err)
@@ -104,7 +116,7 @@ func compileFromCacheByHash(exprStr, hash string) (*vm.Program, error) {
 	if len(cache) >= maxCacheSize {
 		cache = make(map[string]*cachedEntry, 64)
 	}
-	cache[hash] = &cachedEntry{prog: prog, usedVars: vars, version: version}
+	cache[hash] = &cachedEntry{prog: prog, usedVars: vars, version: version, usageKeys: usageKeys}
 	cacheMu.Unlock()
 
 	return prog, nil

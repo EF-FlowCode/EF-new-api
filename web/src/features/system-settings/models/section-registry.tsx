@@ -140,6 +140,7 @@ const MODELS_SECTIONS = [
           CreateCacheRatio: settings.CreateCacheRatio,
           CompletionRatio: settings.CompletionRatio,
           ImageRatio: settings.ImageRatio,
+          BatchInputRatio: settings.BatchInputRatio,
           AudioRatio: settings.AudioRatio,
           AudioCompletionRatio: settings.AudioCompletionRatio,
           ExposeRatioEnabled: settings.ExposeRatioEnabled,

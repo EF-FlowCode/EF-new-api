@@ -23,6 +23,11 @@ type Midjourney struct {
 	Quota       int    `json:"quota"`
 	Buttons     string `json:"buttons"`
 	Properties  string `json:"properties"`
+
+	// Billing markers are internal and persist the accounting source used by
+	// asynchronous failure/refund handling.
+	TokenId          int `json:"-" gorm:"default:0"`
+	BillingChannelId int `json:"-" gorm:"default:0"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -155,6 +160,21 @@ func (midjourney *Midjourney) Update() error {
 	var err error
 	err = DB.Save(midjourney).Error
 	return err
+}
+
+// UpdateBillingState updates only fields used by the asynchronous billing
+// lifecycle, avoiding a stale task snapshot overwriting status or media data.
+func (midjourney *Midjourney) UpdateBillingState() error {
+	return DB.Model(midjourney).
+		Select("quota", "token_id", "billing_channel_id").
+		Updates(midjourney).Error
+}
+
+func (midjourney *Midjourney) GetBillingChannelId() int {
+	if midjourney.BillingChannelId > 0 {
+		return midjourney.BillingChannelId
+	}
+	return midjourney.ChannelId
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

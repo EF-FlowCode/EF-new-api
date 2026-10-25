@@ -3,7 +3,7 @@ package model_setting
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/setting/config"
 )
 
 // QwenSettings defines Qwen model configuration. 注意bool要以enabled结尾才可以生效编辑
@@ -37,12 +37,13 @@ func init() {
 
 // GetQwenSettings
 func GetQwenSettings() *QwenSettings {
-	return &qwenSettings
+	setting := config.MustSnapshot[QwenSettings]("qwen")
+	return &setting
 }
 
 // IsSyncImageModel
 func IsSyncImageModel(model string) bool {
-	for _, m := range qwenSettings.SyncImageModels {
+	for _, m := range GetQwenSettings().SyncImageModels {
 		if strings.Contains(model, m) {
 			return true
 		}

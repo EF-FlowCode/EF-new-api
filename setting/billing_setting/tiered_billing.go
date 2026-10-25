@@ -2,14 +2,18 @@ package billing_setting
 
 import (
 	"fmt"
+	"strings"
 
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/pkg/billingexpr"
+	"eflow.local/new-api/pkg/knowledge"
+	"eflow.local/new-api/setting/config"
+	"eflow.local/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
 )
 
 const (
 	BillingModeRatio      = "ratio"
+	BillingModeFlatPrice  = "flat_price"
 	BillingModeTieredExpr = "tiered_expr"
 	// eflow: 仅作模型广场展示标记——结算仍走 ratio（ModelRatio）。
 	// 用于阿里 ASR 这类「按音频秒数」计费的模型：内部把秒数当 token、
@@ -19,16 +23,47 @@ const (
 	BillingExprField        = "billing_expr"
 )
 
+func IsExpressionBillingMode(mode string) bool {
+	return mode == BillingModeFlatPrice || mode == BillingModeTieredExpr
+}
+
+// IsKnownBillingMode reports whether a stored billing_mode is one the runtime
+// understands; anything else would silently fall back to ratio billing.
+func IsKnownBillingMode(mode string) bool {
+	switch mode {
+	case BillingModeRatio, BillingModeFlatPrice, BillingModeTieredExpr, BillingModeAudioSeconds, BillingModeDimensional:
+		return true
+	}
+	return false
+}
+
+// NormalizeExpressionBillingMode classifies expression modes by their actual
+// structure. This keeps legacy New API data compatible while ensuring dynamic
+// expressions are never presented as flat prices.
+func NormalizeExpressionBillingMode(mode, expression string) string {
+	if !IsExpressionBillingMode(mode) || strings.TrimSpace(expression) == "" {
+		return mode
+	}
+	if _, ok := billingexpr.ParseFlatTokenBillingExpr(expression); ok {
+		return BillingModeFlatPrice
+	}
+	return BillingModeTieredExpr
+}
+
 // BillingSetting is managed by config.GlobalConfig.Register.
-// DB keys: billing_setting.billing_mode, billing_setting.billing_expr
+// Runtime projections: billing_mode, billing_expr and task_expressions.
+// Persistent authority: ModelPricing.
 type BillingSetting struct {
-	BillingMode map[string]string `json:"billing_mode"`
-	BillingExpr map[string]string `json:"billing_expr"`
+	TaskPriorityVersion int                                 `json:"task_priority_version"`
+	BillingMode         map[string]string                   `json:"billing_mode"`
+	BillingExpr         map[string]string                   `json:"billing_expr"`
+	TaskExpressions     map[string]map[string]TaskPriceRule `json:"task_expressions"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode: make(map[string]string),
-	BillingExpr: make(map[string]string),
+	BillingMode:     make(map[string]string),
+	BillingExpr:     make(map[string]string),
+	TaskExpressions: make(map[string]map[string]TaskPriceRule),
 }
 
 func init() {
@@ -39,58 +74,86 @@ func init() {
 // Read accessors (hot path, must be fast)
 // ---------------------------------------------------------------------------
 
-func GetBillingMode(model string) string {
-	mode := BillingModeRatio
-	config.GlobalConfig.Read("billing_setting", func(cfg interface{}) {
-		if setting, ok := cfg.(*BillingSetting); ok {
-			if configured, exists := setting.BillingMode[model]; exists {
-				mode = configured
+// GetBillingRule resolves the mode and expression from one immutable config
+// version so a concurrent publication cannot mix fields from two versions.
+func GetBillingRule(model string) (mode, expression string, hasExpression bool) {
+	mode = BillingModeRatio
+	setting := billingSettingSnapshot()
+	if configured, exists := setting.BillingMode[model]; exists {
+		mode = configured
+	}
+	expression, hasExpression = setting.BillingExpr[model]
+	// A configured per-call price wins over the synthesized knowledge rule,
+	// matching the price-before-ratio order of ModelPriceHelper.
+	if !hasExpression {
+		if capability, ok := knowledge.Lookup(model); ok && capability.Kind != "" && !hasModelPrice(model) {
+			if inputRatio, configured := ratio_setting.GetModelRatioCopy()[ratio_setting.FormatMatchingModelName(model)]; configured {
+				input := inputRatio * 2
+				image := input
+				if imageRatio, hasImage := ratio_setting.GetImageRatio(model); hasImage {
+					image *= imageRatio
+				}
+				expression = (knowledge.Prices{Input: &input, Image: &image}).Expression()
+				hasExpression = true
+				mode = BillingModeTieredExpr
 			}
 		}
-	})
+	}
+	return mode, expression, hasExpression
+}
+
+func GetBillingMode(model string) string {
+	mode, _, _ := GetBillingRule(model)
 	return mode
 }
 
 func GetBillingExpr(model string) (string, bool) {
-	var expr string
-	var exists bool
-	config.GlobalConfig.Read("billing_setting", func(cfg interface{}) {
-		if setting, ok := cfg.(*BillingSetting); ok {
-			expr, exists = setting.BillingExpr[model]
-		}
-	})
-	return expr, exists
+	_, expression, exists := GetBillingRule(model)
+	return expression, exists
 }
 
 func GetBillingModeCopy() map[string]string {
-	result := map[string]string{}
-	config.GlobalConfig.Read("billing_setting", func(cfg interface{}) {
-		if setting, ok := cfg.(*BillingSetting); ok {
-			result = lo.Assign(setting.BillingMode)
-		}
-	})
-	return result
+	return lo.Assign(billingSettingSnapshot().BillingMode)
 }
 
 func GetBillingExprCopy() map[string]string {
-	result := map[string]string{}
-	config.GlobalConfig.Read("billing_setting", func(cfg interface{}) {
-		if setting, ok := cfg.(*BillingSetting); ok {
-			result = lo.Assign(setting.BillingExpr)
-		}
-	})
-	return result
+	return lo.Assign(billingSettingSnapshot().BillingExpr)
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {
 	extra := make(map[string]any, 2)
-	if modes := GetBillingModeCopy(); len(modes) > 0 {
+	setting := billingSettingSnapshot()
+	exprs := lo.Assign(setting.BillingExpr)
+	modes := lo.Assign(setting.BillingMode)
+	for name := range ratio_setting.GetModelRatioCopy() {
+		if _, known := knowledge.Lookup(name); !known {
+			continue
+		}
+		if _, exists := exprs[name]; exists {
+			continue
+		}
+		mode, expression, hasExpression := GetBillingRule(name)
+		if hasExpression {
+			modes[name] = mode
+			exprs[name] = expression
+		}
+	}
+	if len(modes) > 0 {
+		for model, mode := range modes {
+			if expression, ok := exprs[model]; ok {
+				modes[model] = NormalizeExpressionBillingMode(mode, expression)
+			}
+		}
 		extra[BillingModeField] = modes
 	}
-	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
+	if len(exprs) > 0 {
 		extra[BillingExprField] = exprs
 	}
 	return lo.Assign(base, extra)
+}
+
+func billingSettingSnapshot() BillingSetting {
+	return config.MustSnapshot[BillingSetting]("billing_setting")
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +170,13 @@ func smokeTestExpr(exprStr string) error {
 	}
 	// A fixed sample body cannot exercise arbitrary param() paths. Runtime
 	// evaluation remains strict and rejects missing or wrongly typed values.
-	if billingexpr.UsedVars(exprStr)["param"] {
+	keys, err := billingexpr.UsedUsageKeys(exprStr)
+	if err != nil {
+		return err
+	}
+	// Live usage schema is validated on changed saves and against the exact
+	// selected binding at execution. Reads/startup must survive paused plugins.
+	if len(keys) > 0 || billingexpr.UsedVars(exprStr)["param"] {
 		return nil
 	}
 
@@ -139,4 +208,9 @@ func smokeTestExpr(exprStr string) error {
 		}
 	}
 	return nil
+}
+
+func hasModelPrice(model string) bool {
+	_, priced := ratio_setting.GetModelPrice(model, false)
+	return priced
 }

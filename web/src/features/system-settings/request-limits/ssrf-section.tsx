@@ -25,7 +25,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const ssrfSchema = z.object({
   fetch_setting: z.object({
@@ -50,7 +50,7 @@ type NormalizedSSRFValues = {
   'fetch_setting.ip_filter_mode': boolean
   'fetch_setting.domain_list': string[]
   'fetch_setting.ip_list': string[]
-  'fetch_setting.allowed_ports': number[]
+  'fetch_setting.allowed_ports': string[]
   'fetch_setting.apply_ip_filter_for_domain': boolean
 }
 
@@ -62,7 +62,7 @@ type SSRFSectionProps = {
     'fetch_setting.ip_filter_mode': boolean
     'fetch_setting.domain_list': string[]
     'fetch_setting.ip_list': string[]
-    'fetch_setting.allowed_ports': number[]
+    'fetch_setting.allowed_ports': string[]
     'fetch_setting.apply_ip_filter_for_domain': boolean
   }
 }
@@ -76,8 +76,8 @@ const splitLines = (value: string) =>
 const parsePorts = (value: string) =>
   value
     .split(',')
-    .map((item) => Number.parseInt(item.trim(), 10))
-    .filter((port) => Number.isFinite(port))
+    .map((item) => item.trim())
+    .filter(Boolean)
 
 const buildFormDefaults = (
   defaults: SSRFSectionProps['defaultValues']
@@ -133,7 +133,7 @@ const isEqual = (a: unknown, b: unknown) => {
 
 export function SSRFSection({ defaultValues }: SSRFSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const baselineRef = useRef<NormalizedSSRFValues>(
     normalizeDefaults(defaultValues)
   )
@@ -164,13 +164,15 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
       return
     }
 
-    for (const key of updates) {
-      const value = normalized[key]
-      await updateOption.mutateAsync({
-        key,
-        value: Array.isArray(value) ? JSON.stringify(value) : value,
+    await updateOptions.mutateAsync(
+      updates.map((key) => {
+        const value = normalized[key]
+        return {
+          key,
+          value: Array.isArray(value) ? JSON.stringify(value) : value,
+        }
       })
-    }
+    )
 
     baselineRef.current = normalized
   }
@@ -386,8 +388,8 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save SSRF settings')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save SSRF settings')}
           </Button>
         </form>
       </Form>

@@ -2,12 +2,13 @@ package dto
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
 
 // MaxImageN caps the image generation count. Without this bound a huge or
@@ -40,6 +41,35 @@ type ImageRequest struct {
 	Image            json.RawMessage `json:"image,omitempty"`
 	// 用匿名参数接收额外参数
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ImageCount validates the quantity before pricing. Top-level zero keeps the
+// legacy default of one; an explicit Ali parameters.n must be positive.
+func (i *ImageRequest) ImageCount(useProviderParameters bool) (int, error) {
+	n := uint(1)
+	if i.N != nil && *i.N != 0 {
+		n = *i.N
+	}
+	if n > MaxImageN {
+		return 0, fmt.Errorf("n must be an integer between 1 and %d", MaxImageN)
+	}
+	if useProviderParameters {
+		if raw, exists := i.Extra["parameters"]; exists {
+			var parameters struct {
+				N *uint `json:"n"`
+			}
+			if err := json.Unmarshal(raw, &parameters); err != nil {
+				return 0, fmt.Errorf("invalid image parameters: %w", err)
+			}
+			if parameters.N != nil {
+				if *parameters.N == 0 || *parameters.N > MaxImageN {
+					return 0, fmt.Errorf("parameters.n must be an integer between 1 and %d", MaxImageN)
+				}
+				n = *parameters.N
+			}
+		}
+	}
+	return int(n), nil
 }
 
 func (i *ImageRequest) UnmarshalJSON(data []byte) error {

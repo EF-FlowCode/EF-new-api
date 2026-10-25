@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )
@@ -30,6 +30,7 @@ func GetAllLogs(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
+	model.FormatAdminLogs(logs, c.GetInt("role"))
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
@@ -113,7 +114,6 @@ func GetLogsStat(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, "")
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -142,7 +142,6 @@ func GetLogsSelfStat(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, tokenName)
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
@@ -152,28 +151,6 @@ func GetLogsSelfStat(c *gin.Context) {
 			"tpm":   quotaNum.Tpm,
 			//"token": tokenNum,
 		},
-	})
-	return
-}
-
-func DeleteHistoryLogs(c *gin.Context) {
-	targetTimestamp, _ := strconv.ParseInt(c.Query("target_timestamp"), 10, 64)
-	if targetTimestamp == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "target timestamp is required",
-		})
-		return
-	}
-	count, err := model.DeleteOldLog(c.Request.Context(), targetTimestamp, 100)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    count,
 	})
 	return
 }

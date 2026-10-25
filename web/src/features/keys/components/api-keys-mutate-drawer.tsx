@@ -128,13 +128,14 @@ export function ApiKeysMutateDrawer({
   const groupsRaw = groupsData?.data || {}
   // eflow: 隐藏 'auto' 分组——distributor 走特殊语义、不是真正的可选分组，
   // 之前 UI 上把它当默认让用户踩坑（403 / 计费混乱），统一过滤掉。
-  const groups: ApiKeyGroupOption[] = Object.entries(groupsRaw)
+  const allGroups: ApiKeyGroupOption[] = Object.entries(groupsRaw)
     .filter(([key]) => key !== 'auto')
     .map(([key, info]) => ({
       value: key,
       label: key,
       desc: info.desc || key,
       ratio: info.ratio,
+      available: info.available !== false,
     }))
   const schema = getApiKeyFormSchema(t)
 
@@ -143,32 +144,47 @@ export function ApiKeysMutateDrawer({
     defaultValues: getApiKeyFormDefaultValues(defaultUseAutoGroup),
   })
 
+  const selectedGroupValue = form.watch('group')
+  const groups: ApiKeyGroupOption[] = allGroups.filter(
+    (group) => group.available !== false || group.value === selectedGroupValue
+  )
+
   // Load existing data when updating
   useEffect(() => {
-    if (open && isUpdate && currentRow) {
+    if (!open) {
+      // Reset on close so the next record never shows this one's values;
+      // reset() alone would restore the last loaded record.
+      form.reset(getApiKeyFormDefaultValues(defaultUseAutoGroup))
+      return
+    }
+    if (isUpdate && currentRow) {
       // For update, fetch fresh data
       getApiKey(currentRow.id).then((result) => {
         if (result.success && result.data) {
           form.reset(transformApiKeyToFormDefaults(result.data))
         }
       })
-    } else if (open && !isUpdate) {
+    } else if (!isUpdate) {
       // For create, reset to defaults
       form.reset(getApiKeyFormDefaultValues(defaultUseAutoGroup))
     }
   }, [open, isUpdate, currentRow, form, defaultUseAutoGroup])
 
   const onSubmit = async (data: ApiKeyFormValues) => {
-    if (
-      groupsData?.success === true &&
-      !groups.some((group) => group.value === data.group)
-    ) {
-      form.setError('group', {
-        message: t(
-          'This group is no longer authorized. Please select an available group.'
-        ),
-      })
-      return
+    if (groupsData?.success === true) {
+      const selectedGroup = allGroups.find(
+        (group) => group.value === data.group
+      )
+      if (!selectedGroup || selectedGroup.available === false) {
+        form.setError('group', {
+          message: t(
+            selectedGroup?.available === false
+              ? 'This group is unavailable in your region. Please select an available group.'
+              : 'This group is no longer authorized. Please select an available group.'
+          ),
+        })
+        return
+      }
     }
 
     setIsSubmitting(true)
@@ -231,7 +247,7 @@ export function ApiKeysMutateDrawer({
 
   const handleSetExpiry = (months: number, days: number, hours: number) => {
     if (months === 0 && days === 0 && hours === 0) {
-      form.setValue('expired_time', undefined)
+      form.setValue('expired_time', null)
       return
     }
 
@@ -251,23 +267,18 @@ export function ApiKeysMutateDrawer({
     ? t('Enter quota in tokens')
     : t('Enter quota in {{currency}}', { currency: currencyLabel })
   const selectedGroup = form.watch('group')
+  const unavailableSelectedGroup = allGroups.find(
+    (group) => group.value === selectedGroup && group.available === false
+  )
   const selectedGroupUnavailable =
     groupsData?.success === true &&
     Boolean(selectedGroup) &&
-    !groups.some((group) => group.value === selectedGroup)
+    unavailableSelectedGroup !== undefined
   const noAuthorizedGroups = groupsData?.success === true && groups.length === 0
   const unlimitedQuota = form.watch('unlimited_quota')
 
   return (
-    <Sheet
-      open={open}
-      onOpenChange={(v) => {
-        onOpenChange(v)
-        if (!v) {
-          form.reset()
-        }
-      }}
-    >
+    <Sheet open={open} modal={false} onOpenChange={onOpenChange}>
       <SheetContent
         side={side}
         className='bg-background flex !h-dvh !w-screen max-w-none gap-0 overflow-hidden p-0 sm:!w-full sm:!max-w-[620px]'
@@ -328,7 +339,7 @@ export function ApiKeysMutateDrawer({
                     {selectedGroupUnavailable && !fieldState.error && (
                       <FormDescription className='text-destructive'>
                         {t(
-                          'This group is no longer authorized. Please select an available group.'
+                          'This group is unavailable in your region. Please select an available group.'
                         )}
                       </FormDescription>
                     )}
@@ -380,8 +391,8 @@ export function ApiKeysMutateDrawer({
                     <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center'>
                       <FormControl>
                         <DateTimePicker
-                          value={field.value}
-                          onChange={field.onChange}
+                          value={field.value ?? undefined}
+                          onChange={(date) => field.onChange(date ?? null)}
                           placeholder={t('Never expires')}
                           className='min-w-0 [&_input[type=time]]:w-24 sm:[&_input[type=time]]:w-32'
                         />

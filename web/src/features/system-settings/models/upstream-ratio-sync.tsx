@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import {
   fetchUpstreamRatios,
   getUpstreamChannels,
-  updateSystemOption,
+  updateSystemOptionsBulk,
 } from '../api'
 import type {
   DifferencesMap,
@@ -30,9 +30,13 @@ import {
   OPENROUTER_ENDPOINT,
 } from './constants'
 import {
-  NUMERIC_SYNC_FIELDS,
-  RATIO_SYNC_FIELDS,
+  buildPricingSyncUpdates,
+  getBillingCategory,
+  getConfiguredBillingCategory,
   getPreferredSyncField,
+  getResolutionBillingCategory,
+  type BillingCategory,
+  type PricingOptionRecords,
   type ResolutionsMap,
 } from './upstream-ratio-sync-helpers'
 import { UpstreamRatioSyncTable } from './upstream-ratio-sync-table'
@@ -49,6 +53,7 @@ type UpstreamRatioSyncProps = {
     CacheRatio: string
     CreateCacheRatio: string
     ImageRatio: string
+    BatchInputRatio: string
     AudioRatio: string
     AudioCompletionRatio: string
     'billing_setting.billing_mode': string
@@ -68,25 +73,6 @@ function getDefaultEndpointForChannel(channel: UpstreamChannel): string {
   if (channel.id === OFFICIAL_CHANNEL_ID) return OFFICIAL_CHANNEL_ENDPOINT
   if (channel.type === OPENROUTER_CHANNEL_TYPE) return OPENROUTER_ENDPOINT
   return DEFAULT_ENDPOINT
-}
-
-function getBillingCategory(ratioType: string): 'price' | 'ratio' | 'tiered' {
-  if (ratioType === 'model_price') return 'price'
-  if (ratioType === 'billing_mode' || ratioType === 'billing_expr')
-    return 'tiered'
-  return 'ratio'
-}
-
-function optionKeyBySyncField(ratioType: string): string {
-  const explicit: Record<string, string> = {
-    billing_mode: 'billing_setting.billing_mode',
-    billing_expr: 'billing_setting.billing_expr',
-  }
-  if (explicit[ratioType]) return explicit[ratioType]
-  return ratioType
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('')
 }
 
 function parseJsonRecord<T>(raw: string | undefined | null): Record<string, T> {
@@ -196,11 +182,8 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
   })
 
   const { mutate: syncMutate, isPending: isSyncPending } = useMutation({
-    mutationFn: async (updates: Array<{ key: string; value: string }>) => {
-      for (const update of updates) {
-        await updateSystemOption(update)
-      }
-    },
+    mutationFn: (updates: Array<{ key: string; value: string }>) =>
+      updateSystemOptionsBulk({ options: updates }),
     onSuccess: () => {
       toast.success(t('Prices synced successfully'))
       queryClient.invalidateQueries({ queryKey: ['system-options'] })
@@ -276,21 +259,17 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       setResolutions((prev) => {
         const newModelRes = { ...(prev[model] || {}) }
 
-        // Clear conflicting categories
+        // A model can only select one effective billing category per sync.
         Object.keys(newModelRes).forEach((rt) => {
-          if (
-            category !== 'tiered' &&
-            getBillingCategory(rt) !== 'tiered' &&
-            getBillingCategory(rt) !== category
-          ) {
+          if (getBillingCategory(rt) !== category) {
             delete newModelRes[rt]
           }
         })
 
         newModelRes[finalType] = finalValue
 
-        // When selecting a tiered field, auto-populate paired fields from the same source
-        if (category === 'tiered' && sourceName && modelDiffs) {
+        // Expression billing needs mode and expression from the same source.
+        if (category === 'expression' && sourceName && modelDiffs) {
           const modeVal = modelDiffs.billing_mode?.upstreams?.[sourceName]
           const exprVal = modelDiffs.billing_expr?.upstreams?.[sourceName]
           if (modeVal !== undefined && modeVal !== null && modeVal !== 'same') {
@@ -323,6 +302,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       CacheRatio: parseJsonRecord<number>(modelRatios.CacheRatio),
       CreateCacheRatio: parseJsonRecord<number>(modelRatios.CreateCacheRatio),
       ImageRatio: parseJsonRecord<number>(modelRatios.ImageRatio),
+      BatchInputRatio: parseJsonRecord<number>(modelRatios.BatchInputRatio),
       AudioRatio: parseJsonRecord<number>(modelRatios.AudioRatio),
       AudioCompletionRatio: parseJsonRecord<number>(
         modelRatios.AudioCompletionRatio
@@ -339,75 +319,12 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
   type ParsedRatios = typeof parsedRatios
 
-  const getLocalBillingCategory = (
-    model: string,
-    currentRatios: ParsedRatios
-  ): 'price' | 'ratio' | null => {
-    if (currentRatios.ModelPrice[model] !== undefined) return 'price'
-    if (
-      currentRatios.ModelRatio[model] !== undefined ||
-      currentRatios.CompletionRatio[model] !== undefined ||
-      currentRatios.CacheRatio[model] !== undefined ||
-      currentRatios.CreateCacheRatio[model] !== undefined ||
-      currentRatios.ImageRatio[model] !== undefined ||
-      currentRatios.AudioRatio[model] !== undefined ||
-      currentRatios.AudioCompletionRatio[model] !== undefined
-    )
-      return 'ratio'
-    return null
-  }
-
   const performSync = useCallback(
     async (currentRatios: ParsedRatios): Promise<boolean> => {
-      const finalRatios: Record<string, Record<string, number | string>> = {
-        ModelRatio: { ...currentRatios.ModelRatio },
-        CompletionRatio: { ...currentRatios.CompletionRatio },
-        CacheRatio: { ...currentRatios.CacheRatio },
-        CreateCacheRatio: { ...currentRatios.CreateCacheRatio },
-        ImageRatio: { ...currentRatios.ImageRatio },
-        AudioRatio: { ...currentRatios.AudioRatio },
-        AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
-        ModelPrice: { ...currentRatios.ModelPrice },
-        'billing_setting.billing_mode': {
-          ...currentRatios['billing_setting.billing_mode'],
-        },
-        'billing_setting.billing_expr': {
-          ...currentRatios['billing_setting.billing_expr'],
-        },
-      }
-
-      Object.entries(resolutions).forEach(([model, ratios]) => {
-        const selectedTypes = Object.keys(ratios)
-        const hasPrice = selectedTypes.includes('model_price')
-        const hasRatio = selectedTypes.some((rt) =>
-          RATIO_SYNC_FIELDS.includes(rt as RatioType)
-        )
-
-        if (hasPrice) {
-          delete finalRatios.ModelRatio[model]
-          delete finalRatios.CompletionRatio[model]
-          delete finalRatios.CacheRatio[model]
-          delete finalRatios.CreateCacheRatio[model]
-          delete finalRatios.ImageRatio[model]
-          delete finalRatios.AudioRatio[model]
-          delete finalRatios.AudioCompletionRatio[model]
-        }
-        if (hasRatio) {
-          delete finalRatios.ModelPrice[model]
-        }
-
-        Object.entries(ratios).forEach(([ratioType, value]) => {
-          const optionKey = optionKeyBySyncField(ratioType)
-          finalRatios[optionKey][model] = NUMERIC_SYNC_FIELDS.has(ratioType)
-            ? Number(value)
-            : value
-        })
-      })
-
-      const updates = Object.entries(finalRatios).map(([key, value]) => ({
-        key,
-        value: JSON.stringify(value, null, 2),
-      }))
+      const updates = buildPricingSyncUpdates(
+        currentRatios as PricingOptionRecords,
+        resolutions
+      )
 
       return new Promise<boolean>((resolve) => {
         syncMutate(updates, {
@@ -437,29 +354,49 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
     const fixedPriceLabel = t('Fixed price')
     const modelRatioLabel = t('Model ratio')
     const completionRatioLabel = t('Completion ratio')
+    const expressionLabel = t('Expression billing')
+
+    const describeCurrent = (
+      category: BillingCategory,
+      model: string
+    ): string => {
+      if (category === 'price') {
+        return `${fixedPriceLabel}: ${currentRatios.ModelPrice[model]}`
+      }
+      if (category === 'expression') {
+        const mode =
+          currentRatios['billing_setting.billing_mode'][model] ?? 'tiered_expr'
+        const expression =
+          currentRatios['billing_setting.billing_expr'][model] ?? '-'
+        return `${expressionLabel}: ${mode}\n${expression}`
+      }
+      return `${modelRatioLabel}: ${currentRatios.ModelRatio[model] ?? '-'}\n${completionRatioLabel}: ${currentRatios.CompletionRatio[model] ?? '-'}`
+    }
+
+    const describeSelected = (
+      category: BillingCategory,
+      ratios: Record<string, number | string>
+    ): string => {
+      if (category === 'price') {
+        return `${fixedPriceLabel}: ${ratios.model_price}`
+      }
+      if (category === 'expression') {
+        return `${expressionLabel}: ${ratios.billing_mode ?? 'tiered_expr'}\n${ratios.billing_expr ?? '-'}`
+      }
+      return `${modelRatioLabel}: ${ratios.model_ratio ?? '-'}\n${completionRatioLabel}: ${ratios.completion_ratio ?? '-'}`
+    }
 
     Object.entries(resolutions).forEach(([model, ratios]) => {
-      const localCat = getLocalBillingCategory(model, currentRatios)
+      const localCat = getConfiguredBillingCategory(
+        model,
+        currentRatios as PricingOptionRecords
+      )
       const selectedTypes = Object.keys(ratios)
-      let newCat: 'price' | 'ratio' | 'tiered'
-      if ('model_price' in ratios) {
-        newCat = 'price'
-      } else if (RATIO_SYNC_FIELDS.some((rt) => selectedTypes.includes(rt))) {
-        newCat = 'ratio'
-      } else {
-        newCat = 'tiered'
-      }
+      const newCat = getResolutionBillingCategory(ratios)
 
-      if (localCat && newCat !== 'tiered' && localCat !== newCat) {
-        const currentDesc =
-          localCat === 'price'
-            ? `${fixedPriceLabel}: ${currentRatios.ModelPrice[model]}`
-            : `${modelRatioLabel}: ${currentRatios.ModelRatio[model] ?? '-'}\n${completionRatioLabel}: ${currentRatios.CompletionRatio[model] ?? '-'}`
-
-        const newDesc =
-          newCat === 'price'
-            ? `${fixedPriceLabel}: ${ratios.model_price}`
-            : `${modelRatioLabel}: ${ratios.model_ratio ?? '-'}\n${completionRatioLabel}: ${ratios.completion_ratio ?? '-'}`
+      if (localCat && newCat && localCat !== newCat) {
+        const currentDesc = describeCurrent(localCat, model)
+        const newDesc = describeSelected(newCat, ratios)
 
         const channelNames = selectedTypes
           .map((rt) => findSourceChannel(model, rt as RatioType, ratios[rt]))

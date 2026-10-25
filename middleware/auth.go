@@ -7,16 +7,17 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/requestip"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/pkg/requestip"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/ratio_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -34,120 +35,106 @@ func validUserInfo(username string, role int) bool {
 	return true
 }
 
+// rejectUserAuth preserves the reason across gateways without logging credentials.
+func rejectUserAuth(c *gin.Context, status int, code, messageKey string) {
+	c.Header("Cache-Control", "no-store")
+	logger.LogWarn(c, fmt.Sprintf("authentication rejected code=%s instance=%s path=%s", code, common.NodeName, c.Request.URL.Path))
+	c.JSON(status, gin.H{"success": false, "code": code, "message": common.TranslateMessage(c, messageKey)})
+	c.Abort()
+}
+
 func authHelper(c *gin.Context, minRole int) {
 	session := sessions.Default(c)
 	id := session.Get("id")
 	useAccessToken := false
+	var tokenLookup *accessTokenLookup
 	if id == nil {
-		// Check access token
+		// Check access token: a scoped nap_ token or a legacy system access token.
 		accessToken := c.Request.Header.Get("Authorization")
 		if accessToken == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"success": false,
-				"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
-			})
-			c.Abort()
+			// eflow: 主会话已失效（登出、改密、被踢）时一并清掉子站身份 cookie，子站随之视为未登录。
+			if _, err := c.Cookie(common.EflowAuthCookieName); err == nil {
+				c.SetSameSite(http.SameSiteStrictMode)
+				c.SetCookie(common.EflowAuthCookieName, "", -1, "/", "", c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https"), true)
+			}
+			rejectUserAuth(c, http.StatusUnauthorized, "session_missing_or_invalid", i18n.MsgAuthNotLoggedIn)
 			return
 		}
-		user, authErr := model.ValidateAccessToken(accessToken)
+		lookup, authErr := lookupAccessToken(accessToken, time.Now().Unix())
 		if authErr != nil {
-			if errors.Is(authErr, model.ErrDatabase) {
+			if tokenErr, ok := asAccessTokenAuthError(authErr); ok {
+				rejectAccessToken(c, tokenErr)
+			} else if errors.Is(authErr, model.ErrDatabase) {
 				common.SysLog("ValidateAccessToken database error: " + authErr.Error())
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
-				})
+				rejectUserAuth(c, http.StatusServiceUnavailable, "auth_dependency_unavailable", i18n.MsgDatabaseError)
 			} else {
-				c.JSON(http.StatusOK, gin.H{
-					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
-				})
+				rejectUserAuth(c, http.StatusUnauthorized, "access_token_invalid", i18n.MsgAuthAccessTokenInvalid)
 			}
-			c.Abort()
 			return
 		}
-		if user != nil && user.Username != "" {
-			if !validUserInfo(user.Username, user.Role) {
-				c.JSON(http.StatusOK, gin.H{
-					"success": false,
-					"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
-				})
-				c.Abort()
-				return
-			}
-			// Token is valid
-			id = user.Id
-			useAccessToken = true
-		} else {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
-			})
-			c.Abort()
+		if !validUserInfo(lookup.user.Username, lookup.user.Role) {
+			rejectUserAuth(c, http.StatusUnauthorized, "identity_invalid", i18n.MsgAuthUserInfoInvalid)
 			return
 		}
+		id = lookup.user.Id
+		useAccessToken = true
+		tokenLookup = lookup
 	}
-	// get header New-Api-User
+	// get header New-Api-User. Scoped access tokens identify their owner, so the
+	// header is optional for them; when present it must still match.
 	apiUserIdStr := c.Request.Header.Get("New-Api-User")
-	if apiUserIdStr == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdNotProvided),
-		})
-		c.Abort()
-		return
-	}
-	apiUserId, err := strconv.Atoi(apiUserIdStr)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdFormatError),
-		})
-		c.Abort()
-		return
-
-	}
 	idInt, ok := id.(int)
-	if !ok || idInt != apiUserId {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
-		})
-		c.Abort()
+	if !ok {
+		rejectUserAuth(c, http.StatusUnauthorized, "user_id_mismatch", i18n.MsgAuthUserIdMismatch)
 		return
+	}
+	if apiUserIdStr == "" {
+		if tokenLookup == nil || tokenLookup.legacy {
+			rejectUserAuth(c, http.StatusUnauthorized, "user_id_required", i18n.MsgAuthUserIdNotProvided)
+			return
+		}
+	} else {
+		apiUserId, err := strconv.Atoi(apiUserIdStr)
+		if err != nil {
+			rejectUserAuth(c, http.StatusUnauthorized, "user_id_invalid", i18n.MsgAuthUserIdFormatError)
+			return
+		}
+		if idInt != apiUserId {
+			rejectUserAuth(c, http.StatusUnauthorized, "user_id_mismatch", i18n.MsgAuthUserIdMismatch)
+			return
+		}
 	}
 	userCache, err := model.GetUserCache(idInt)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
-		})
-		c.Abort()
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			rejectUserAuth(c, http.StatusUnauthorized, "identity_invalid", i18n.MsgAuthUserInfoInvalid)
+		} else {
+			rejectUserAuth(c, http.StatusServiceUnavailable, "auth_dependency_unavailable", i18n.MsgDatabaseError)
+		}
 		return
 	}
 	if userCache.Status != common.UserStatusEnabled {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
-		})
-		c.Abort()
+		rejectUserAuth(c, http.StatusForbidden, "account_disabled", i18n.MsgAuthUserBanned)
 		return
 	}
 	if userCache.Role < minRole {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
-		})
-		c.Abort()
+		rejectUserAuth(c, http.StatusForbidden, "permission_denied", i18n.MsgAuthInsufficientPrivilege)
 		return
 	}
 	if !validUserInfo(userCache.Username, userCache.Role) {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
-		})
-		c.Abort()
+		rejectUserAuth(c, http.StatusUnauthorized, "identity_invalid", i18n.MsgAuthUserInfoInvalid)
 		return
+	}
+	if tokenLookup == nil {
+		// eflow: 登录设备列表的最近活跃时间，每会话每分钟最多写一次。
+		common.TouchSession(common.CurrentSessionID(session), c.ClientIP(), 30*24*time.Hour)
+	}
+	if tokenLookup != nil {
+		tokenLookup.user.Role = userCache.Role
+		if !enforceAccessTokenRoute(c, tokenLookup, userCache.Role) {
+			return
+		}
+		setAccessTokenContext(c, tokenLookup)
 	}
 	// 防止不同newapi版本冲突，导致数据不通用
 	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
@@ -158,7 +145,18 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Set("user_group", userCache.Group)
 	c.Set("use_access_token", useAccessToken)
 
+	// eflow: 客服及以上角色的写操作统一在鉴权链路兜底留审计，新增接口无需单独挂中间件；
+	// handler 自行记录了更细的审计时（ContextKeyAuditLogged）跳过。访问令牌请求另记一条
+	// access_token 审计（写操作已由兜底审计记录时跳过，读操作按令牌和路由限频）。
+	var auditWriter *auditResponseWriter
+	if minRole >= common.RoleCustomerServiceUser {
+		auditWriter = beginAdminAudit(c)
+	}
 	c.Next()
+	finishAdminAudit(c, auditWriter)
+	if tokenLookup != nil {
+		finishAccessTokenAudit(c, tokenLookup)
+	}
 }
 
 func TryUserAuth() func(c *gin.Context) {
@@ -250,10 +248,6 @@ func RootAuth() func(c *gin.Context) {
 	}
 }
 
-func WssAuth(c *gin.Context) {
-
-}
-
 // TokenOrUserAuth allows either session-based user auth or API token auth.
 // Used for endpoints that need to be accessible from both the dashboard and API clients.
 func TokenOrUserAuth() func(c *gin.Context) {
@@ -322,6 +316,15 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			c.Abort()
 			return
 		}
+		// eflow: 只读接口同样受令牌 IP 白名单约束，泄露的 key 不能从任意 IP 读取用量和日志（上游 7de10f2c6）。
+		if err := checkTokenIpLimits(c, token); err != nil {
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			c.Abort()
+			return
+		}
 
 		userCache, err := model.GetUserCache(token.UserId)
 		if err != nil {
@@ -349,21 +352,56 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 	}
 }
 
+var (
+	errTokenIpUnparsable = errors.New("无法解析客户端 IP 地址")
+	errTokenIpNotAllowed = errors.New("您的 IP 不在令牌允许访问的列表中")
+)
+
+// checkTokenIpLimits 校验令牌的 IP 白名单；未配置白名单时放行。
+func checkTokenIpLimits(c *gin.Context, token *model.Token) error {
+	allowIps := token.GetIpLimits()
+	if len(allowIps) == 0 {
+		return nil
+	}
+	clientIp := requestip.GetClientIP(c)
+	logger.LogDebug(c, "Token has IP restrictions, checking client IP %s", clientIp)
+	ip := net.ParseIP(clientIp)
+	if ip == nil {
+		return errTokenIpUnparsable
+	}
+	if !common.IsIpInCIDRList(ip, allowIps) {
+		return errTokenIpNotAllowed
+	}
+	logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
+	return nil
+}
+
 func TokenAuth() func(c *gin.Context) {
+	return tokenAuth(false)
+}
+
+func KnowledgeTaskAccessAuth() func(c *gin.Context) {
+	return tokenAuth(true)
+}
+
+func apiKeyFromWebSocketSubprotocol(protocols string) (string, bool) {
+	const insecureAPIKeyPrefix = "openai-insecure-api-key."
+	for part := range strings.SplitSeq(protocols, ",") {
+		part = strings.TrimSpace(part)
+		if after, ok := strings.CutPrefix(part, insecureAPIKeyPrefix); ok {
+			key := after
+			return key, key != ""
+		}
+	}
+	return "", false
+}
+
+func tokenAuth(allowExhausted bool) func(c *gin.Context) {
 	return func(c *gin.Context) {
-		// 先检测是否为ws
-		if c.Request.Header.Get("Sec-WebSocket-Protocol") != "" {
-			// Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-xxx, openai-beta.realtime-v1
-			// read sk from Sec-WebSocket-Protocol
-			key := c.Request.Header.Get("Sec-WebSocket-Protocol")
-			parts := strings.Split(key, ",")
-			for _, part := range parts {
-				part = strings.TrimSpace(part)
-				if strings.HasPrefix(part, "openai-insecure-api-key") {
-					key = strings.TrimPrefix(part, "openai-insecure-api-key.")
-					break
-				}
-			}
+		// Browsers cannot set Authorization on WebSocket upgrades, so realtime
+		// clients may send the key as a subprotocol; other subprotocols (for
+		// example plain "realtime") keep the Authorization header untouched.
+		if key, ok := apiKeyFromWebSocketSubprotocol(strings.Join(c.Request.Header.Values("Sec-WebSocket-Protocol"), ",")); ok {
 			c.Request.Header.Set("Authorization", "Bearer "+key)
 		}
 		// 检查path包含/v1/messages 或 /v1/models
@@ -374,7 +412,8 @@ func TokenAuth() func(c *gin.Context) {
 			}
 		}
 		// gemini api 从query中获取key
-		if strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
+		if c.Request.URL.Path == "/v1/models" ||
+			strings.HasPrefix(c.Request.URL.Path, "/v1beta/models") ||
 			strings.HasPrefix(c.Request.URL.Path, "/v1beta/openai/models") ||
 			strings.HasPrefix(c.Request.URL.Path, "/v1/models/") {
 			skKey := c.Query("key")
@@ -405,7 +444,11 @@ func TokenAuth() func(c *gin.Context) {
 			parts = strings.Split(key, "-")
 			key = parts[0]
 		}
-		token, err := model.ValidateUserToken(key)
+		validate := model.ValidateUserToken
+		if allowExhausted {
+			validate = model.ValidateTaskAccessToken
+		}
+		token, err := validate(key)
 		if token != nil {
 			id := c.GetInt("id")
 			if id == 0 {
@@ -424,20 +467,13 @@ func TokenAuth() func(c *gin.Context) {
 			return
 		}
 
-		allowIps := token.GetIpLimits()
-		if len(allowIps) > 0 {
-			clientIp := requestip.GetClientIP(c)
-			logger.LogDebug(c, "Token has IP restrictions, checking client IP %s", clientIp)
-			ip := net.ParseIP(clientIp)
-			if ip == nil {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "无法解析客户端 IP 地址")
-				return
+		if err := checkTokenIpLimits(c, token); err != nil {
+			if errors.Is(err, errTokenIpUnparsable) {
+				abortWithOpenAiMessage(c, http.StatusForbidden, err.Error())
+			} else {
+				abortWithOpenAiMessage(c, http.StatusForbidden, err.Error(), types.ErrorCodeAccessDenied)
 			}
-			if common.IsIpInCIDRList(ip, allowIps) == false {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "您的 IP 不在令牌允许访问的列表中", types.ErrorCodeAccessDenied)
-				return
-			}
-			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
+			return
 		}
 
 		userCache, err := model.GetUserCache(token.UserId)

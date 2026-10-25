@@ -3,38 +3,28 @@ package service
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
 )
 
-func TestIsAvailabilityExcluded(t *testing.T) {
-	cfg := operation_setting.GroupMonitoringSetting{
-		AvailabilityExcludeStatusCodes: []int{400, 413, 429},
-		AvailabilityExcludeKeywords:    []string{"field messages is required", "not implemented"},
-		AvailabilityExcludeModels:      []string{"banned-model"},
+func TestCountFilteredFinalErrors(t *testing.T) {
+	cfg := operation_setting.GroupMonitoringSetting{}
+	monitored := map[string]struct{}{"vip": {}}
+	rows := []model.MonitoringErrorRow{
+		{RequestId: "failed", Group: "vip", ChannelId: 44, ModelName: "gpt", Content: "first", Other: `{"status_code":503}`},
+		{RequestId: "failed", Group: "vip", ChannelId: 110, ModelName: "gpt", Content: "last", Other: `{"status_code":502}`},
+		{RequestId: "recovered", Group: "vip", ChannelId: 44, ModelName: "gpt", Content: "retry", Other: `{"status_code":503}`},
 	}
+	succeeded := map[string]struct{}{"recovered": {}}
 
-	tests := []struct {
-		name       string
-		statusCode int
-		modelName  string
-		content    string
-		want       bool
-	}{
-		{"keyword substring case-insensitive", 500, "gpt-5.5", "status_code=500, NOT IMPLEMENTED", true},
-		{"keyword exact phrase", 500, "gpt-5.5", "status_code=500, not implemented", true},
-		{"status code match", 429, "gpt-5.5", "rate limited", true},
-		{"model match", 0, "banned-model", "", true},
-		{"success no exclusion", 0, "gpt-5.5", "", false},
-		{"real 500 not a keyword stays counted", 500, "gpt-5.5", "upstream connection reset", false},
-		{"503 not in exclude codes stays counted", 503, "gpt-5.5", "service unavailable", false},
+	got := countFilteredFinalErrors(cfg, rows, succeeded, monitored)
+
+	if got[channelKey{Group: "vip", ChannelId: 44}] != 0 {
+		t.Fatalf("retried or recovered attempts must not be counted: %#v", got)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isAvailabilityExcluded(cfg, tt.statusCode, tt.modelName, tt.content); got != tt.want {
-				t.Errorf("isAvailabilityExcluded(%d, %q, %q) = %v, want %v",
-					tt.statusCode, tt.modelName, tt.content, got, tt.want)
-			}
-		})
+	if got[channelKey{Group: "vip", ChannelId: 110}] != 1 {
+		t.Fatalf("final failed request must be counted once on its last channel: %#v", got)
 	}
 }
 
@@ -156,14 +146,17 @@ func TestRecordMonitoringMetric_SkipsAutoGroup(t *testing.T) {
 }
 
 func TestTriggerAggregationRefresh(t *testing.T) {
+	previousRedis, previousMaster := common.RedisEnabled, common.IsMasterNode
+	common.RedisEnabled, common.IsMasterNode = false, true
+	t.Cleanup(func() { common.RedisEnabled, common.IsMasterNode = previousRedis, previousMaster })
 	// Drain the channel first
 	select {
 	case <-triggerCh:
 	default:
 	}
 
-	ok := TriggerAggregationRefresh()
-	if !ok {
+	ok, err := TriggerAggregationRefresh()
+	if !ok || err != nil {
 		t.Error("expected TriggerAggregationRefresh to return true")
 	}
 
@@ -172,5 +165,18 @@ func TestTriggerAggregationRefresh(t *testing.T) {
 	case <-triggerCh:
 	default:
 		t.Error("expected trigger signal in channel")
+	}
+}
+
+func TestParseBucketValues_ResponseTimeUsesAllRequests(t *testing.T) {
+	// 两条请求，其中一条命中可用率排除（不计入 t）：均值应为 (1000+3000)/2。
+	bd := ParseBucketValues(map[string]string{"t": "1", "s": "1", "rt": "4000", "n": "2"})
+	if bd.RespCount != 2 || bd.RespTimeMs/bd.RespCount != 2000 {
+		t.Fatalf("avg response time = %d/%d, want 4000/2", bd.RespTimeMs, bd.RespCount)
+	}
+	// 旧版本桶没有 n：退回 t。
+	legacy := ParseBucketValues(map[string]string{"t": "3", "rt": "300"})
+	if legacy.RespCount != 3 {
+		t.Fatalf("legacy RespCount = %d, want 3", legacy.RespCount)
 	}
 }

@@ -1,16 +1,19 @@
 package controller
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/config"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,7 +28,7 @@ func GetModerationConfig(c *gin.Context) {
 		masked.APIKeys = append(masked.APIKeys, operation_setting.MaskModerationKey(k))
 	}
 	common.ApiSuccess(c, gin.H{
-		"config":   masked,
+		"config":    masked,
 		"key_count": len(cfg.APIKeys),
 	})
 }
@@ -39,10 +42,10 @@ type updateModerationConfigRequest struct {
 	PreserveExistingKeys *bool `json:"preserve_existing_keys"`
 }
 
-// UpdateModerationConfig persists a new ModerationSetting and reloads the
-// engine in-process. If the request payload contains masked entries (only
-// stars + 4 chars), those are merged from the previous config to avoid
-// destroying real keys when the admin saves a partial form.
+// UpdateModerationConfig persists a new ModerationSetting in one Option
+// transaction and reloads the engine in-process. Masked entries (stars +
+// 4 chars) must uniquely match a current key, otherwise the save is
+// rejected so a stale form can never silently drop or replace real keys.
 func UpdateModerationConfig(c *gin.Context) {
 	var req updateModerationConfigRequest
 	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
@@ -58,7 +61,12 @@ func UpdateModerationConfig(c *gin.Context) {
 		preserve = *req.PreserveExistingKeys
 	}
 	if preserve {
-		req.APIKeys = mergePreservedModerationKeys(current.APIKeys, req.APIKeys)
+		keys, err := mergePreservedModerationKeys(current.APIKeys, req.APIKeys)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		req.APIKeys = keys
 	}
 	operation_setting.NormalizeModerationSetting(&req.ModerationSetting)
 	configMap, err := config.ConfigToMap(&req.ModerationSetting)
@@ -66,11 +74,28 @@ func UpdateModerationConfig(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	values := make(map[string]string, len(configMap))
 	for key, value := range configMap {
-		if err = model.UpdateOption("moderation."+key, value); err != nil {
-			common.ApiError(c, err)
-			return
+		values["moderation."+key] = value
+	}
+	if err = model.UpdateOptionsBulkValidated(values, func(locked map[string]string) error {
+		if !preserve {
+			return nil
 		}
+		var keys []string
+		raw := locked["moderation.api_keys"]
+		if raw != "" {
+			if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+				return err
+			}
+		}
+		if !slices.Equal(keys, current.APIKeys) {
+			return errors.New("审核密钥已更新，请刷新后重试")
+		}
+		return nil
+	}); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	service.ReloadModerationConfig()
 	GetModerationConfig(c)
@@ -79,7 +104,7 @@ func UpdateModerationConfig(c *gin.Context) {
 // mergePreservedModerationKeys substitutes incoming "***abcd" placeholders
 // with the matching entries from the existing key list. New keys (raw text)
 // pass through unchanged.
-func mergePreservedModerationKeys(existing, incoming []string) []string {
+func mergePreservedModerationKeys(existing, incoming []string) ([]string, error) {
 	out := make([]string, 0, len(incoming))
 	for _, k := range incoming {
 		k = strings.TrimSpace(k)
@@ -91,45 +116,29 @@ func mergePreservedModerationKeys(existing, incoming []string) []string {
 				out = append(out, real)
 				continue
 			}
-			// masked entry without a match — drop it to avoid storing junk
-			continue
+			return nil, errors.New("审核密钥掩码已失效或不唯一，请刷新或输入完整密钥")
 		}
 		out = append(out, k)
 	}
-	return out
+	return out, nil
 }
 
 func isMaskedKey(k string) bool {
-	if len(k) < 5 {
-		return false
-	}
-	starsEnd := -1
-	for i, r := range k {
-		if r != '*' {
-			starsEnd = i
-			break
-		}
-	}
-	return starsEnd > 0
+	return strings.HasPrefix(k, "*")
 }
 
 func findKeyBySuffix(keys []string, masked string) string {
-	suffix := masked
-	for i, r := range masked {
-		if r != '*' {
-			suffix = masked[i:]
-			break
+	match := ""
+	for _, key := range keys {
+		if operation_setting.MaskModerationKey(key) != masked {
+			continue
 		}
-	}
-	if len(suffix) < 4 {
-		return ""
-	}
-	for _, k := range keys {
-		if strings.HasSuffix(k, suffix) {
-			return k
+		if match != "" && match != key {
+			return ""
 		}
+		match = key
 	}
-	return ""
+	return match
 }
 
 // SubmitModerationDebug enqueues a debug moderation job and returns the

@@ -1,8 +1,6 @@
 package model
 
 import (
-	"time"
-
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -36,7 +34,7 @@ func UpsertPerfMetric(metric *PerfMetric) error {
 			{Name: "group"},
 			{Name: "bucket_ts"},
 		},
-		DoUpdates: clause.Assignments(map[string]interface{}{
+		DoUpdates: clause.Assignments(map[string]any{
 			"request_count":    gorm.Expr("perf_metrics.request_count + ?", metric.RequestCount),
 			"success_count":    gorm.Expr("perf_metrics.success_count + ?", metric.SuccessCount),
 			"total_latency_ms": gorm.Expr("perf_metrics.total_latency_ms + ?", metric.TotalLatencyMs),
@@ -120,11 +118,4 @@ func DeletePerfMetricsBefore(cutoffTs int64) error {
 		return nil
 	}
 	return DB.Where("bucket_ts < ?", cutoffTs).Delete(&PerfMetric{}).Error
-}
-
-func PerfMetricStartTime(hours int) int64 {
-	if hours <= 0 {
-		hours = 24
-	}
-	return time.Now().Add(-time.Duration(hours) * time.Hour).Unix()
 }

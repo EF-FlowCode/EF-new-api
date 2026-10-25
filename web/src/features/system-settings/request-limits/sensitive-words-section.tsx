@@ -16,7 +16,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const sensitiveSchema = z.object({
   CheckSensitiveEnabled: z.boolean(),
@@ -34,7 +34,7 @@ export function SensitiveWordsSection({
   defaultValues,
 }: SensitiveWordsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const form = useForm<SensitiveFormValues>({
     resolver: zodResolver(sensitiveSchema),
     defaultValues,
@@ -50,9 +50,10 @@ export function SensitiveWordsSection({
         value !== defaultValues[key as keyof SensitiveFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value: value ?? '' }))
+    )
   }
 
   return (
@@ -137,8 +138,8 @@ export function SensitiveWordsSection({
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending
               ? t('Saving...')
               : t('Save sensitive words')}
           </Button>

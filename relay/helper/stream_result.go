@@ -1,7 +1,7 @@
 package helper
 
 import (
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaycommon "eflow.local/new-api/relay/common"
 )
 
 // StreamResult is passed to each dataHandler invocation, providing methods
@@ -10,6 +10,7 @@ import (
 type StreamResult struct {
 	status  *relaycommon.StreamStatus
 	stopped bool
+	done    bool
 }
 
 func newStreamResult(status *relaycommon.StreamStatus) *StreamResult {
@@ -39,6 +40,7 @@ func (r *StreamResult) Stop(err error) {
 func (r *StreamResult) Done() {
 	r.status.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	r.stopped = true
+	r.done = true
 }
 
 // IsStopped returns whether Stop() or Done() was called during this chunk.

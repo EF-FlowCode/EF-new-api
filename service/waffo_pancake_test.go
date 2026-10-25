@@ -2,14 +2,12 @@ package service
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/glebarez/sqlite"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/internal/testdb"
+	"eflow.local/new-api/model"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -17,22 +15,15 @@ import (
 func setupWaffoPancakeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
+	db := testdb.OpenMySQL8(t, &model.User{}, &model.TopUp{})
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldRedisEnabled := common.RedisEnabled
+	model.DB, model.LOG_DB = db, db
 	common.RedisEnabled = false
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-
-	model.DB = db
-	model.LOG_DB = db
-
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
-
 	t.Cleanup(func() {
-		sqlDB, err := db.DB()
-		if err == nil {
-			_ = sqlDB.Close()
-		}
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.RedisEnabled = oldRedisEnabled
 	})
 
 	return db

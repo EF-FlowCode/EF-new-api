@@ -23,8 +23,7 @@ export const TICKET_STATUS_META: Record<TicketStatus, TicketStatusMeta> = {
   },
   [TICKET_STATUS.CLOSED]: {
     labelKey: 'Closed',
-    badgeClass:
-      'border-muted-foreground/40 bg-muted/40 text-muted-foreground',
+    badgeClass: 'border-muted-foreground/40 bg-muted/40 text-muted-foreground',
   },
 }
 
@@ -35,9 +34,20 @@ export const TICKET_TYPE_LABELS: Record<TicketType, string> = {
 }
 
 export const TICKET_PRIORITY_META = {
-  1: { labelKey: 'High priority', className: 'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400' },
-  2: { labelKey: 'Normal priority', className: 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400' },
-  3: { labelKey: 'Low priority', className: 'border-muted-foreground/40 bg-muted/40 text-muted-foreground' },
+  1: {
+    labelKey: 'High priority',
+    className:
+      'border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400',
+  },
+  2: {
+    labelKey: 'Normal priority',
+    className:
+      'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400',
+  },
+  3: {
+    labelKey: 'Low priority',
+    className: 'border-muted-foreground/40 bg-muted/40 text-muted-foreground',
+  },
 } as const
 
 export function canReplyTicket(status: TicketStatus | undefined): boolean {

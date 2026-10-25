@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 // mapPeekBackend 是只为 pickBest 测试服务的假后端：Peek 按 fp 返回预设 in-flight，
@@ -20,10 +20,10 @@ func (b *mapPeekBackend) Peek(_ context.Context, _ int, fp, _ string, _ dto.Mode
 func (b *mapPeekBackend) Acquire(_ context.Context, _ int, _, _ string, _ dto.ModelQuota) Decision {
 	return Decision{Allowed: true}
 }
-func (b *mapPeekBackend) ReportSuccess(_ context.Context, _ int, _, _ string, _ int)     {}
-func (b *mapPeekBackend) ReportError(_ context.Context, _ int, _, _ string)              {}
+func (b *mapPeekBackend) ReportSuccess(_ context.Context, _ int, _, _ string, _ int)      {}
+func (b *mapPeekBackend) ReportError(_ context.Context, _ int, _, _ string)               {}
 func (b *mapPeekBackend) MarkCool(_ context.Context, _ int, _, _ string, _ int, _ string) {}
-func (b *mapPeekBackend) Snapshot(_ context.Context, _ int) []StateEntry                 { return nil }
+func (b *mapPeekBackend) Snapshot(_ context.Context, _ int) []StateEntry                  { return nil }
 func (b *mapPeekBackend) GetAffinity(_ context.Context, _ int, _, _ string) (string, bool) {
 	return "", false
 }
@@ -40,7 +40,7 @@ func glmTestCfg() *dto.SchedulerConfig {
 func TestPickBestAvoidsHighInFlight(t *testing.T) {
 	be := &mapPeekBackend{inflight: map[string]int{"fp0": 3, "fp1": 0, "fp2": 0}}
 	cands := []KeyCandidate{{Index: 0, Fp: "fp0"}, {Index: 1, Fp: "fp1"}, {Index: 2, Fp: "fp2"}}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		best := pickBest(context.Background(), be, 1, "m", cands, glmTestCfg())
 		if best == nil {
 			t.Fatal("pickBest returned nil")
@@ -59,7 +59,7 @@ func TestPickBestSpreadsOnTie(t *testing.T) {
 		{Index: 2, Fp: "fp2"}, {Index: 3, Fp: "fp3"},
 	}
 	counts := map[string]int{}
-	for i := 0; i < 400; i++ {
+	for range 400 {
 		best := pickBest(context.Background(), be, 1, "m", cands, glmTestCfg())
 		counts[best.Fp]++
 	}

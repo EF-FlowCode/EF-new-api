@@ -38,6 +38,7 @@ interface GroupOption {
   ratio?: number
   desc?: string
   description?: string
+  available?: boolean
 }
 
 interface ModelSelectorProps {
@@ -341,12 +342,16 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
       [groups, selectedGroup]
     )
 
+    const isUnavailable = (group: GroupOption) => group.available === false
+
     const handleGroupChange = useCallback(
       (value: string) => {
+        const selected = groups.find((group) => group.value === value)
+        if (selected?.available === false) return
         onGroupChange(value)
         setOpen(false)
       },
-      [onGroupChange]
+      [groups, onGroupChange]
     )
 
     // Shared command content
@@ -387,6 +392,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                 key={group.value}
                 value={group.value}
                 onSelect={handleGroupChange}
+                disabled={isUnavailable(group)}
                 className={cn(
                   'mb-0.5 flex items-center justify-between rounded-lg px-2 py-2 text-xs',
                   'transition-all duration-200',
@@ -398,6 +404,11 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                   <div className='flex min-w-0 flex-1 flex-col'>
                     <span className='text-foreground truncate text-[11px] font-medium'>
                       {group.label}
+                      {isUnavailable(group) && (
+                        <span className='text-destructive ml-1 font-normal'>
+                          {t('Unavailable in this region')}
+                        </span>
+                      )}
                     </span>
                     {(group.desc || group.description) && (
                       <div className='text-muted-foreground truncate text-[9px] leading-tight'>
@@ -431,7 +442,11 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
           <Drawer open={open} onOpenChange={setOpen}>
             <DrawerTrigger asChild>
               <GroupTriggerButton
-                currentLabel={currentGroup?.label || t('Group')}
+                currentLabel={
+                  currentGroup?.available === false
+                    ? `${currentGroup.label} - ${t('Unavailable in this region')}`
+                    : currentGroup?.label || t('Group')
+                }
                 triggerClassName={className}
                 isDisabled={disabled}
                 aria-expanded={open}
@@ -448,6 +463,7 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                       key={group.value}
                       variant='outline'
                       onClick={() => handleGroupChange(group.value)}
+                      disabled={isUnavailable(group)}
                       className={cn(
                         'flex h-auto w-full items-center justify-between rounded-lg p-4 text-left whitespace-normal',
                         'border-border hover:bg-accent',
@@ -460,6 +476,11 @@ export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
                         <div className='flex min-w-0 flex-1 flex-col'>
                           <span className='text-foreground text-sm font-medium'>
                             {group.label}
+                            {isUnavailable(group) && (
+                              <span className='text-destructive ml-1 font-normal'>
+                                {t('Unavailable in this region')}
+                              </span>
+                            )}
                           </span>
                           {(group.desc || group.description) && (
                             <div className='text-muted-foreground mt-0.5 text-xs'>

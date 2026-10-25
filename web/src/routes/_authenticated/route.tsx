@@ -1,12 +1,13 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
 import { AuthenticatedLayout } from '@/components/layout'
 import {
   getWorkspaceByPath,
   WORKSPACE_IDS,
 } from '@/components/layout/lib/workspace-registry'
-import { ROLE } from '@/lib/roles'
+import { isSessionExpiredError } from '@/features/auth/lib/session-expiry'
 
 // 内存中的验证标记，避免同一会话中重复验证
 let sessionVerified = false
@@ -37,13 +38,15 @@ export const Route = createFileRoute('/_authenticated')({
 
     // 本地有用户信息，但需要验证 session 是否有效（每个会话只验证一次）
     if (!sessionVerified) {
-      const res = await getSelf().catch(() => null)
+      const res = await getSelf().catch((error: unknown) =>
+        isSessionExpiredError(error) ? { success: false } : null
+      )
       if (res?.success && res.data) {
         // 验证成功，更新用户信息（可能有变化）
         auth.setUser(res.data)
         sessionVerified = true
-      } else {
-        // session 失效：清缓存。公开页降级为访客浏览，其余跳登录页
+      } else if (res) {
+        // 仅明确的 401 会话失效才清缓存；网络错误和 5xx 留待下次导航重试。
         auth.reset()
         if (pub) return
         throw redirect({
@@ -59,8 +62,7 @@ export const Route = createFileRoute('/_authenticated')({
     // /403，不再加载 admin 页面外壳。system-settings/* 另有更严的 SUPER_ADMIN 守卫。
     const role = useAuthStore.getState().auth.user?.role ?? 0
     const inAdminWorkspace =
-      getWorkspaceByPath(location.pathname).id ===
-      WORKSPACE_IDS.SYSTEM_SETTINGS
+      getWorkspaceByPath(location.pathname).id === WORKSPACE_IDS.SYSTEM_SETTINGS
     if (inAdminWorkspace && role < ROLE.SUPPORT) {
       throw redirect({ to: '/403' })
     }

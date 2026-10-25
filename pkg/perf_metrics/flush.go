@@ -2,12 +2,12 @@ package perfmetrics
 
 import (
 	"fmt"
-	"strconv"
+	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/perf_metrics_setting"
 )
 
 func flushLoop() {
@@ -19,12 +19,25 @@ func flushLoop() {
 			continue
 		}
 		flushCompletedBuckets()
-		cleanupExpiredMetrics(setting.RetentionDays)
+		if common.IsMasterNode {
+			cleanupExpiredMetrics(setting.RetentionDays)
+		}
 	}
 }
 
 func flushCompletedBuckets() {
-	currentBucket := bucketStart(time.Now().Unix())
+	_ = flushBuckets(bucketStart(time.Now().Unix()))
+}
+
+var flushMu sync.Mutex
+
+// FlushAll is called after request and async producers have drained.
+func FlushAll() error { return flushBuckets(1<<63 - 1) }
+
+func flushBuckets(currentBucket int64) error {
+	flushMu.Lock()
+	defer flushMu.Unlock()
+	var flushErr error
 	hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
 		if k.bucketTs >= currentBucket {
@@ -51,6 +64,7 @@ func flushCompletedBuckets() {
 			GenerationMs:   drained.generationMs,
 		})
 		if err != nil {
+			flushErr = err
 			bucket.addCounters(drained)
 			common.SysError(fmt.Sprintf("failed to flush perf metric bucket model=%s group=%s bucket=%d: %s", k.model, k.group, k.bucketTs, err.Error()))
 			return true
@@ -59,6 +73,7 @@ func flushCompletedBuckets() {
 		deleteOldEmptyBucket(k, key)
 		return true
 	})
+	return flushErr
 }
 
 func deleteOldEmptyBucket(k bucketKey, rawKey any) {
@@ -75,24 +90,4 @@ func cleanupExpiredMetrics(retentionDays int) {
 	if err := model.DeletePerfMetricsBefore(cutoff); err != nil {
 		common.SysError("failed to cleanup expired perf metrics: " + err.Error())
 	}
-}
-
-func redisCounters(values map[string]string) counters {
-	return counters{
-		requestCount:   parseRedisInt(values["req"]),
-		successCount:   parseRedisInt(values["ok"]),
-		totalLatencyMs: parseRedisInt(values["lat"]),
-		ttftSumMs:      parseRedisInt(values["ttft"]),
-		ttftCount:      parseRedisInt(values["ttft_n"]),
-		outputTokens:   parseRedisInt(values["out"]),
-		generationMs:   parseRedisInt(values["gen_ms"]),
-	}
-}
-
-func parseRedisInt(value string) int64 {
-	if value == "" {
-		return 0
-	}
-	parsed, _ := strconv.ParseInt(value, 10, 64)
-	return parsed
 }

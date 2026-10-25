@@ -27,7 +27,11 @@ import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
+import {
+  EndpointOverrideEditor,
+  ModelContextVisualEditor,
+} from './pricing-display-visual-editor'
 
 const createPricingSchema = (t: (key: string) => string) =>
   z
@@ -37,7 +41,33 @@ const createPricingSchema = (t: (key: string) => string) =>
         .number()
         .min(0.0001, t('Exchange rate must be greater than 0')),
       DisplayInCurrencyEnabled: z.boolean(),
-      DisplayTokenStatEnabled: z.boolean(),
+      PricingGroupEndpointOverrides: z.string().refine((value) => {
+        try {
+          const parsed = JSON.parse(value || '{}')
+          return (
+            parsed !== null &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed)
+          )
+        } catch {
+          return false
+        }
+      }, t('Expected a JSON object')),
+      ModelContextWindows: z.string().refine((value) => {
+        try {
+          const parsed = JSON.parse(value || '{}')
+          return (
+            parsed !== null &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed) &&
+            Object.values(parsed).every(
+              (item) => Number.isInteger(item) && Number(item) > 0
+            )
+          )
+        } catch {
+          return false
+        }
+      }, t('Expected a JSON object with positive integer values')),
       general_setting: z.object({
         quota_display_type: z.enum(['USD', 'CNY', 'TOKENS', 'CUSTOM']),
         custom_currency_symbol: z.string().max(8).optional(),
@@ -77,7 +107,7 @@ type PricingSectionProps = {
 
 export function PricingSection({ defaultValues }: PricingSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const pricingSchema = createPricingSchema(t)
 
@@ -90,23 +120,24 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
       >,
       defaultValues,
       onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
-          if (value === undefined || value === null) continue
-          if (typeof value === 'object') continue
+        const updates = Object.entries(changedFields).flatMap(
+          ([key, value]) => {
+            if (value === undefined || value === null) return []
+            if (typeof value === 'object') return []
 
-          let serialized: string | boolean = value as string | boolean
+            let serialized: string | boolean = value as string | boolean
 
-          if (typeof value === 'boolean') {
-            serialized = String(value)
-          } else if (typeof value === 'number') {
-            serialized = Number.isFinite(value) ? String(value) : '0'
+            if (typeof value === 'boolean') {
+              serialized = String(value)
+            } else if (typeof value === 'number') {
+              serialized = Number.isFinite(value) ? String(value) : '0'
+            }
+
+            return [{ key, value: serialized }]
           }
-
-          await updateOption.mutateAsync({
-            key,
-            value: serialized,
-          })
-        }
+        )
+        if (updates.length === 0) return
+        await updateOptions.mutateAsync(updates)
       },
     })
 
@@ -318,23 +349,44 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
 
             <FormField
               control={form.control}
-              name='DisplayTokenStatEnabled'
+              name='PricingGroupEndpointOverrides'
               render={({ field }) => (
-                <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                  <div className='space-y-0.5'>
-                    <FormLabel className='text-base'>
-                      {t('Display Token Statistics')}
-                    </FormLabel>
-                    <FormDescription>
-                      {t('Show token usage statistics in the UI')}
-                    </FormDescription>
-                  </div>
+                <FormItem>
+                  <FormLabel>{t('Group Endpoint Display')}</FormLabel>
                   <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
+                    <EndpointOverrideEditor
+                      value={field.value}
+                      onChange={field.onChange}
                     />
                   </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Configure group-specific endpoints shown in the model square. This only changes display, not request routing.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='ModelContextWindows'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Model Context Windows')}</FormLabel>
+                  <FormControl>
+                    <ModelContextVisualEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Configure model-specific maximum context windows in tokens. Models without a specific value use the fallback above.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
                 </FormItem>
               )}
             />
@@ -342,15 +394,15 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
             <div className='flex gap-2'>
               <Button
                 type='submit'
-                disabled={updateOption.isPending || isSubmitting}
+                disabled={updateOptions.isPending || isSubmitting}
               >
-                {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+                {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
               </Button>
               <Button
                 type='button'
                 variant='outline'
                 onClick={handleReset}
-                disabled={!isDirty || updateOption.isPending || isSubmitting}
+                disabled={!isDirty || updateOptions.isPending || isSubmitting}
               >
                 <RotateCcw className='mr-2 h-4 w-4' />
                 {t('Reset')}

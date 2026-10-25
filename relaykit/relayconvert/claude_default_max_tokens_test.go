@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	sharedclaude "eflow.local/new-api/relaykit/relayconvert/internal/shared/claude"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

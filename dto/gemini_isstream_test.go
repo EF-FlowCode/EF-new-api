@@ -5,13 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGeminiChatRequest_IsStream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
 	tests := []struct {
 		name     string
 		path     string
@@ -58,16 +55,14 @@ func TestGeminiChatRequest_IsStream(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
 			url := tt.path
 			if tt.query != "" {
 				url += "?" + tt.query
 			}
-			c.Request, _ = http.NewRequest("POST", url, nil)
+			httpRequest := httptest.NewRequest(http.MethodPost, url, nil)
 
 			req := &GeminiChatRequest{}
-			assert.Equal(t, tt.expected, req.IsStream(c))
+			assert.Equal(t, tt.expected, req.IsStream(httpRequest))
 		})
 	}
 }

@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -30,12 +30,12 @@ func convertCf2CompletionsRequest(textRequest dto.GeneralOpenAIRequest) *CfReque
 }
 
 func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 
 	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)
-	var responseText string
+	var responseText strings.Builder
 	isFirst := true
 
 	for scanner.Scan() {
@@ -58,7 +58,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 		}
 		for _, choice := range response.Choices {
 			choice.Delta.Role = "assistant"
-			responseText += choice.Delta.GetContentString()
+			responseText.WriteString(choice.Delta.GetContentString())
 		}
 		response.Id = id
 		response.Model = info.UpstreamModelName
@@ -75,7 +75,7 @@ func cfStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	if err := scanner.Err(); err != nil {
 		logger.LogError(c, "error_scanning_stream_response: "+err.Error())
 	}
-	usage := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	usage := service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 	if info.ShouldIncludeUsage {
 		response := helper.GenerateFinalUsageResponse(id, info.StartTime.Unix(), info.UpstreamModelName, *usage)
 		err := helper.ObjectData(c, response)
@@ -102,11 +102,11 @@ func cfHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response)
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
 	response.Model = info.UpstreamModelName
-	var responseText string
+	var responseText strings.Builder
 	for _, choice := range response.Choices {
-		responseText += choice.Message.StringContent()
+		responseText.WriteString(choice.Message.StringContent())
 	}
-	usage := service.ResponseText2Usage(c, responseText, info.UpstreamModelName, info.GetEstimatePromptTokens())
+	usage := service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 	response.Usage = *usage
 	response.Id = helper.GetResponseID(c)
 	jsonResponse, err := json.Marshal(response)

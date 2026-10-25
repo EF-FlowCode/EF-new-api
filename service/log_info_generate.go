@@ -4,18 +4,18 @@ import (
 	"encoding/base64"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/billing_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/pkg/billingexpr"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/setting/billing_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
 
-func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]any) {
 	if other == nil {
 		return
 	}
@@ -35,8 +35,8 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 }
 
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
-	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
-	other := make(map[string]interface{})
+	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]any {
+	other := make(map[string]any)
 	other["model_ratio"] = modelRatio
 	other["group_ratio"] = groupRatio
 	other["completion_ratio"] = completionRatio
@@ -58,7 +58,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other["is_system_prompt_overwritten"] = true
 	}
 
-	adminInfo := make(map[string]interface{})
+	adminInfo := make(map[string]any)
 	adminInfo["use_channel"] = ctx.GetStringSlice("use_channel")
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
@@ -74,6 +74,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
+	AppendResponseModelLogInfo(relayInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
@@ -92,14 +93,30 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	return other
 }
 
-func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+// AppendResponseModelLogInfo 把上游声明的响应模型写进日志 other.response_model（诊断用）。
+// 只存三个名字，是否不一致由读取方按名称现算（见 relay/common/response_model.go）。
+// 请求、上游、响应三者一致且没有模型映射时不写，避免冗余。
+func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other map[string]any) {
+	if relayInfo == nil || relayInfo.ResponseModel == nil || other == nil {
+		return
+	}
+	observation := relayInfo.ResponseModel
+	if observation.ReturnedModel == observation.RequestedModel &&
+		(observation.UpstreamModel == "" || observation.UpstreamModel == observation.RequestedModel) &&
+		(relayInfo.ChannelMeta == nil || !relayInfo.IsModelMapped) {
+		return
+	}
+	other["response_model"] = *observation
+}
+
+func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]any) {
 	if relayInfo == nil || other == nil || len(relayInfo.ParamOverrideAudit) == 0 {
 		return
 	}
 	other["po"] = relayInfo.ParamOverrideAudit
 }
 
-func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]any) {
 	if relayInfo == nil || other == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
 		return
 	}
@@ -108,7 +125,7 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	if !ss.IsNormalEnd() || ss.HasErrors() {
 		status = "error"
 	}
-	streamInfo := map[string]interface{}{
+	streamInfo := map[string]any{
 		"status":     status,
 		"end_reason": string(ss.EndReason),
 	}
@@ -126,7 +143,7 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	other["stream_status"] = streamInfo
 }
 
-func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[string]any) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -154,7 +171,7 @@ func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[st
 	other["request_conversion"] = chain
 }
 
-func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string]any) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -165,7 +182,7 @@ func appendFinalRequestFormat(relayInfo *relaycommon.RelayInfo, other map[string
 	}
 }
 
-func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]any {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["ws"] = true
 	info["audio_input"] = usage.InputTokenDetails.AudioTokens
@@ -177,7 +194,7 @@ func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	return info
 }
 
-func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]any {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["audio"] = true
 	info["audio_input"] = usage.PromptTokensDetails.AudioTokens
@@ -194,7 +211,7 @@ func GenerateClaudeOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	cacheCreationTokens int, cacheCreationRatio float64,
 	cacheCreationTokens5m int, cacheCreationRatio5m float64,
 	cacheCreationTokens1h int, cacheCreationRatio1h float64,
-	modelPrice float64, userGroupRatio float64) map[string]interface{} {
+	modelPrice float64, userGroupRatio float64) map[string]any {
 	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, cacheTokens, cacheRatio, modelPrice, userGroupRatio)
 	info["claude"] = true
 	info["cache_creation_tokens"] = cacheCreationTokens
@@ -210,8 +227,8 @@ func GenerateClaudeOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	return info
 }
 
-func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.PriceData) map[string]interface{} {
-	other := make(map[string]interface{})
+func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.PriceData) map[string]any {
+	other := make(map[string]any)
 	other["model_price"] = priceData.ModelPrice
 	other["group_ratio"] = priceData.GroupRatioInfo.GroupRatio
 	if priceData.GroupRatioInfo.HasSpecialRatio {
@@ -224,7 +241,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.Price
 // InjectTieredBillingInfo overlays tiered billing fields onto an existing
 // module-specific other map. Call this after GenerateTextOtherInfo /
 // GenerateClaudeOtherInfo / etc. when the request used tiered_expr billing.
-func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult) {
+func InjectTieredBillingInfo(other map[string]any, relayInfo *relaycommon.RelayInfo, result *billingexpr.TieredResult) {
 	if relayInfo == nil || other == nil {
 		return
 	}
@@ -232,7 +249,7 @@ func InjectTieredBillingInfo(other map[string]interface{}, relayInfo *relaycommo
 	if snap == nil {
 		return
 	}
-	other["billing_mode"] = "tiered_expr"
+	other["billing_mode"] = snap.BillingMode
 	other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
 	if result != nil {
 		other["matched_tier"] = result.MatchedTier

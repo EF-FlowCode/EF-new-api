@@ -3,9 +3,9 @@ package ratio_setting
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 )
 
 // from songquanpeng/one-api
@@ -98,10 +98,10 @@ var defaultModelRatio = map[string]float64{
 	"gpt-5-mini-2025-08-07":            0.125,
 	"gpt-5-nano":                       0.025,
 	"gpt-5-nano-2025-08-07":            0.025,
-	"gpt-5.5":                           2.5, // $5 / 1M tokens
-	"gpt-5.6-sol":                       2.5,
-	"gpt-5.6-terra":                     1.25,
-	"gpt-5.6-luna":                      0.5,
+	"gpt-5.5":                          2.5, // $5 / 1M tokens
+	"gpt-5.6-sol":                      2.5,
+	"gpt-5.6-terra":                    1.25,
+	"gpt-5.6-luna":                     0.5,
 	//"gpt-3.5-turbo-0301":           0.75, //deprecated
 	"gpt-3.5-turbo":          0.25,
 	"gpt-3.5-turbo-0613":     0.75,
@@ -117,18 +117,18 @@ var defaultModelRatio = map[string]float64{
 	"text-curie-001":         1,
 	//"text-davinci-002":               10,
 	//"text-davinci-003":               10,
-	"text-davinci-edit-001":                     10,
-	"code-davinci-edit-001":                     10,
-	"whisper-1":                                 15,  // $0.006 / minute -> $0.006 / 150 words -> $0.006 / 200 tokens -> $0.03 / 1k tokens
-	"tts-1":                                     7.5, // 1k characters -> $0.015
-	"tts-1-1106":                                7.5, // 1k characters -> $0.015
-	"tts-1-hd":                                  15,  // 1k characters -> $0.03
-	"tts-1-hd-1106":                             15,  // 1k characters -> $0.03
+	"text-davinci-edit-001": 10,
+	"code-davinci-edit-001": 10,
+	"whisper-1":             15,  // $0.006 / minute -> $0.006 / 150 words -> $0.006 / 200 tokens -> $0.03 / 1k tokens
+	"tts-1":                 7.5, // 1k characters -> $0.015
+	"tts-1-1106":            7.5, // 1k characters -> $0.015
+	"tts-1-hd":              15,  // 1k characters -> $0.03
+	"tts-1-hd-1106":         15,  // 1k characters -> $0.03
 	// 阿里 DashScope TTS（new-api 标准刻度：USD/1M = ModelRatio×2；汇率 1元=1美元）
-	"qwen-tts":                                  0.8, // 输入 1.6元/M token -> $1.6/1M；输出音频见 completion ratio 6.25 (-> $10/1M)
-	"qwen3-tts-flash":                           40,  // 0.8元/万字符 = 80元/1M -> $80/1M（按 characters 当 token）
-	"qwen3-tts-flash-realtime":                  50,  // 1元/万字符 = 100元/1M -> $100/1M（realtime 渠道用）
-	"qwen3-tts-instruct-flash-realtime":         50,  // 1元/万字符 -> $100/1M（realtime 渠道用）
+	"qwen-tts":                          0.8, // 输入 1.6元/M token -> $1.6/1M；输出音频见 completion ratio 6.25 (-> $10/1M)
+	"qwen3-tts-flash":                   40,  // 0.8元/万字符 = 80元/1M -> $80/1M（按 characters 当 token）
+	"qwen3-tts-flash-realtime":          50,  // 1元/万字符 = 100元/1M -> $100/1M（realtime 渠道用）
+	"qwen3-tts-instruct-flash-realtime": 50,  // 1元/万字符 -> $100/1M（realtime 渠道用）
 	// 阿里 DashScope ASR：官方按「音频时长 元/秒」计，把 seconds 当 token。
 	// new-api 标准刻度 元/1M单位 = ModelRatio×2（汇率 1元=1美元）：
 	//   0.00022 元/秒 = 220 元/1M秒 → ModelRatio=110
@@ -438,7 +438,7 @@ func GetModelRatio(name string) (float64, bool, string) {
 			}
 			//return 0, true, name
 		}
-		return 37.5, operation_setting.SelfUseModeEnabled, name
+		return 37.5, operation_setting.GetSiteModeSettings().SelfUseModeEnabled, name
 	}
 	return ratio, true, name
 }
@@ -690,11 +690,31 @@ var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
 }
 var imageRatioMap = types.NewRWMap[string, float64]()
+
+// Batch input prices use the same ratio scale as ModelRatio (USD/million
+// tokens divided by two) and are edited alongside the other model prices.
+var batchInputRatioMap = types.NewRWMap[string, float64]()
 var audioRatioMap = types.NewRWMap[string, float64]()
 var audioCompletionRatioMap = types.NewRWMap[string, float64]()
 
 func ImageRatio2JSONString() string {
 	return imageRatioMap.MarshalJSONString()
+}
+
+func BatchInputRatio2JSONString() string {
+	return batchInputRatioMap.MarshalJSONString()
+}
+
+func UpdateBatchInputRatioByJSONString(jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(batchInputRatioMap, jsonStr, InvalidateExposedDataCache)
+}
+
+func GetBatchInputRatio(name string) (float64, bool) {
+	return batchInputRatioMap.Get(FormatMatchingModelName(name))
+}
+
+func GetBatchInputRatioCopy() map[string]float64 {
+	return batchInputRatioMap.ReadAll()
 }
 
 func UpdateImageRatioByJSONString(jsonStr string) error {

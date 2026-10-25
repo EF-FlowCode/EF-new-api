@@ -8,7 +8,7 @@ import (
 func TestKeyRingRoundRobin(t *testing.T) {
 	ring := NewModerationKeyRing([]string{"a", "b", "c"})
 	got := make([]string, 0, 6)
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		k, _, ok := ring.NextKey()
 		if !ok {
 			t.Fatalf("NextKey should always succeed when no cooldown; iter=%d", i)
@@ -70,7 +70,7 @@ func TestKeyRingResetClearsCooldowns(t *testing.T) {
 	if ring.Size() != 3 {
 		t.Fatalf("expected size 3 after reset, got %d", ring.Size())
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if ring.CooldownAt(i) != 0 {
 			t.Fatalf("cooldown should be cleared after reset, idx=%d got=%d", i, ring.CooldownAt(i))
 		}

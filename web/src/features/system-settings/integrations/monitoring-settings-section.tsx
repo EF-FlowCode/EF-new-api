@@ -16,17 +16,36 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const numericString = z.string().refine((value) => {
   const trimmed = value.trim()
   if (!trimmed) return true
   return !Number.isNaN(Number(trimmed)) && Number(trimmed) >= 0
 }, 'Enter a non-negative number or leave empty')
+
+const CHANNEL_TEST_MODES = [
+  'scheduled_all',
+  'auto_ban_only',
+  'passive_recovery',
+] as const
+
+type ChannelTestMode = (typeof CHANNEL_TEST_MODES)[number]
+
+const DEFAULT_CHANNEL_TEST_MODE: ChannelTestMode = 'scheduled_all'
+const DEFAULT_CHANNEL_TEST_CONCURRENCY = 1
+const MAX_CHANNEL_TEST_CONCURRENCY = 32
 
 const monitoringSchema = z
   .object({
@@ -43,6 +62,15 @@ const monitoringSchema = z
         .number()
         .int()
         .min(1, 'Interval must be at least 1 minute'),
+      channel_test_mode: z.enum(CHANNEL_TEST_MODES),
+      channel_test_concurrency: z.coerce
+        .number()
+        .int()
+        .min(1, 'Concurrency must be at least 1')
+        .max(
+          MAX_CHANNEL_TEST_CONCURRENCY,
+          `Concurrency cannot exceed ${MAX_CHANNEL_TEST_CONCURRENCY}`
+        ),
     }),
   })
   .superRefine((values, ctx) => {
@@ -87,6 +115,8 @@ type MonitoringSettingsSectionProps = {
     AutomaticRetryStatusCodes: string
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
+    'monitor_setting.channel_test_mode': string
+    'monitor_setting.channel_test_concurrency': number
   }
 }
 
@@ -104,6 +134,22 @@ type NormalizedMonitoringValues = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.channel_test_mode': string
+  'monitor_setting.channel_test_concurrency': number
+}
+
+function normalizeChannelTestMode(value: string | undefined): ChannelTestMode {
+  return CHANNEL_TEST_MODES.includes(value as ChannelTestMode)
+    ? (value as ChannelTestMode)
+    : DEFAULT_CHANNEL_TEST_MODE
+}
+
+function normalizeChannelTestConcurrency(value: number | undefined): number {
+  if (!Number.isFinite(value)) return DEFAULT_CHANNEL_TEST_CONCURRENCY
+  return Math.min(
+    MAX_CHANNEL_TEST_CONCURRENCY,
+    Math.max(DEFAULT_CHANNEL_TEST_CONCURRENCY, Math.trunc(value as number))
+  )
 }
 
 const buildFormDefaults = (
@@ -123,6 +169,12 @@ const buildFormDefaults = (
       defaults['monitor_setting.auto_test_channel_enabled'],
     auto_test_channel_minutes:
       defaults['monitor_setting.auto_test_channel_minutes'],
+    channel_test_mode: normalizeChannelTestMode(
+      defaults['monitor_setting.channel_test_mode']
+    ),
+    channel_test_concurrency: normalizeChannelTestConcurrency(
+      defaults['monitor_setting.channel_test_concurrency']
+    ),
   },
 })
 
@@ -146,6 +198,12 @@ const normalizeDefaults = (
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
     defaults['monitor_setting.auto_test_channel_minutes'],
+  'monitor_setting.channel_test_mode': normalizeChannelTestMode(
+    defaults['monitor_setting.channel_test_mode']
+  ),
+  'monitor_setting.channel_test_concurrency': normalizeChannelTestConcurrency(
+    defaults['monitor_setting.channel_test_concurrency']
+  ),
 })
 
 const normalizeFormValues = (
@@ -168,13 +226,16 @@ const normalizeFormValues = (
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
     values.monitor_setting.auto_test_channel_minutes,
+  'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
+  'monitor_setting.channel_test_concurrency':
+    values.monitor_setting.channel_test_concurrency,
 })
 
 export function MonitoringSettingsSection({
   defaultValues,
 }: MonitoringSettingsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const baselineRef = useRef<NormalizedMonitoringValues>(
     normalizeDefaults(defaultValues)
   )
@@ -213,13 +274,9 @@ export function MonitoringSettingsSection({
       return
     }
 
-    for (const key of updates) {
-      const value = normalized[key]
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
-    }
+    await updateOptions.mutateAsync(
+      updates.map((key) => ({ key, value: normalized[key] }))
+    )
 
     baselineRef.current = normalized
   }
@@ -284,6 +341,74 @@ export function MonitoringSettingsSection({
                   </FormControl>
                   <FormDescription>
                     {t('How frequently the system tests all channels')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <div className='grid gap-6 md:grid-cols-2'>
+            <FormField
+              control={form.control}
+              name='monitor_setting.channel_test_mode'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Channel test mode')}</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('Select test mode')} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value='scheduled_all'>
+                        {t('Test all channels')}
+                      </SelectItem>
+                      <SelectItem value='auto_ban_only'>
+                        {t('Test auto-ban channels only')}
+                      </SelectItem>
+                      <SelectItem value='passive_recovery'>
+                        {t('Test channels in passive recovery')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    {t('Choose which channels the scheduled test cycle checks')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='monitor_setting.channel_test_concurrency'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Channel test concurrency')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={1}
+                      max={MAX_CHANNEL_TEST_CONCURRENCY}
+                      step={1}
+                      value={
+                        typeof field.value === 'number' &&
+                        Number.isFinite(field.value)
+                          ? field.value
+                          : ''
+                      }
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Maximum number of channels tested at the same time')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -475,8 +600,8 @@ export function MonitoringSettingsSection({
             />
           </div>
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending
               ? t('Saving...')
               : t('Save monitoring rules')}
           </Button>

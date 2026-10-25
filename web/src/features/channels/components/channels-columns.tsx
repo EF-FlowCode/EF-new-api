@@ -35,7 +35,7 @@ import {
   textColorMap,
 } from '@/components/status-badge'
 import { getCodexUsage } from '../api'
-import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
+import { CHANNEL_STATUS_CONFIG, isModelFetchableChannel } from '../constants'
 import {
   formatBalance,
   formatRelativeTime,
@@ -53,6 +53,8 @@ import {
   handleUpdateChannelBalance,
   createChannelFieldUpdateScheduler,
   isTagAggregateRow,
+  classifyChannelAddress,
+  formatChannelAddress,
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
@@ -116,7 +118,7 @@ function renderLimitedItems(
  */
 function UpstreamUpdateTags({ channel }: { channel: Channel }) {
   const { upstream, setCurrentRow } = useChannels()
-  if (!MODEL_FETCHABLE_TYPES.has(channel.type)) return null
+  if (!isModelFetchableChannel(channel.type, channel.settings)) return null
 
   const meta = parseUpstreamUpdateMeta(channel.settings)
   if (!meta.enabled) return null
@@ -951,6 +953,83 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         return groupArray.some((g) => value.includes(g))
       },
       size: 150,
+      enableSorting: false,
+    },
+
+    // eflow: 上游地址列，区分 IP 直连与域名接入
+    {
+      id: 'address',
+      accessorFn: (row) => row.base_url || '',
+      meta: { label: t('Address'), mobileHidden: true },
+      header: t('Address'),
+      cell: ({ row }) => {
+        if (isTagAggregateRow(row.original)) {
+          const kinds = new Set(
+            row.original.children.map((child) =>
+              classifyChannelAddress(child.base_url)
+            )
+          )
+          const hosts = new Set(
+            row.original.children.map((child) =>
+              formatChannelAddress(child.base_url)
+            )
+          )
+          if (hosts.size === 1) {
+            const [host] = hosts
+            const [kind] = kinds
+            return host ? (
+              <StatusBadge
+                label={truncateText(host, 28)}
+                variant={kind === 'ip' ? 'amber' : 'teal'}
+                copyText={host}
+                size='sm'
+                className='font-mono'
+              />
+            ) : (
+              <span className='text-muted-foreground text-xs'>
+                {t('Default')}
+              </span>
+            )
+          }
+          return (
+            <span className='text-muted-foreground text-xs'>
+              {t('{{count}} addresses', { count: hosts.size })}
+            </span>
+          )
+        }
+
+        const baseUrl = row.original.base_url
+        const host = formatChannelAddress(baseUrl)
+        if (!host) {
+          return (
+            <span className='text-muted-foreground text-xs'>
+              {t('Default')}
+            </span>
+          )
+        }
+        const isIp = classifyChannelAddress(baseUrl) === 'ip'
+        return (
+          <TooltipProvider delayDuration={100}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span>
+                  <StatusBadge
+                    label={truncateText(host, 28)}
+                    variant={isIp ? 'amber' : 'teal'}
+                    copyText={baseUrl || host}
+                    size='sm'
+                    className='font-mono'
+                  />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side='top'>
+                {isIp ? t('IP address') : t('Domain')}: {baseUrl}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )
+      },
+      size: 220,
       enableSorting: false,
     },
 

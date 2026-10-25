@@ -186,7 +186,7 @@ function Sidebar({
           data-sidebar='sidebar'
           data-slot='sidebar'
           data-mobile='true'
-          className='bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden'
+          className='bg-sidebar text-sidebar-foreground pointer-events-auto z-60 w-(--sidebar-width) p-0 [&>button]:hidden'
           style={
             {
               '--sidebar-width': SIDEBAR_WIDTH_MOBILE,
@@ -528,7 +528,7 @@ function SidebarMenuButton({
     />
   )
 
-  if (!tooltip) {
+  if (!tooltip || isMobile || state !== 'collapsed') {
     return button
   }
 
@@ -541,12 +541,7 @@ function SidebarMenuButton({
   return (
     <Tooltip>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent
-        side='right'
-        align='center'
-        hidden={state !== 'collapsed' || isMobile}
-        {...tooltip}
-      />
+      <TooltipContent side='right' align='center' {...tooltip} />
     </Tooltip>
   )
 }

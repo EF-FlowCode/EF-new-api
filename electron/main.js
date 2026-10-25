@@ -76,14 +76,15 @@ function analyzeError(errorLogs) {
     };
   }
   
-  // 检测数据库错误
-  if (allLogs.includes('database is locked') || 
-      allLogs.includes('unable to open database')) {
+  // 检测 MySQL 数据库错误
+  if (allLogs.includes('Unknown database') ||
+      allLogs.includes('Lock wait timeout exceeded') ||
+      allLogs.includes('Deadlock found')) {
     return {
-      type: '数据文件被占用',
-      title: '无法访问数据文件',
-      message: '应用的数据文件正被其他程序占用',
-      solution: '可能的解决方案：\n\n1. 检查是否已经打开了另一个 New API 窗口\n   - 查看任务栏/Dock 中是否有其他 New API 图标\n   - 查看系统托盘（Windows）或菜单栏（Mac）中是否有 New API 图标\n\n2. 如果刚刚关闭过应用，请等待 10 秒后再试\n\n3. 重启电脑以释放被占用的文件\n\n4. 如果问题持续，可以尝试：\n   - 退出所有 New API 实例\n   - 删除数据目录中的临时文件（.db-shm 和 .db-wal）\n   - 重新启动应用'
+      type: 'MySQL 数据库错误',
+      title: '无法访问 MySQL 数据库',
+      message: 'MySQL 数据库不存在，或当前事务因锁等待失败',
+      solution: '可能的解决方案：\n\n1. 确认 MySQL 8 服务正在运行\n2. 检查 SQL_DSN 中的主机、端口和数据库名\n3. 确认数据库用户具备访问目标库的权限\n4. 查看 MySQL 日志，定位锁等待超时或死锁事务\n5. 排除问题后重新启动应用'
     };
   }
   
@@ -252,7 +253,7 @@ function startServer() {
     const env = { ...process.env, PORT: PORT.toString() };
 
     if (!env.SQL_DSN || !env.SQL_DSN.trim()) {
-      reject(new Error('SQL_DSN is required. Configure an external MySQL 8.0+ database before starting New API.'));
+      reject(new Error('SQL_DSN is required. Configure an external MySQL 8.x database before starting New API.'));
       return;
     }
 

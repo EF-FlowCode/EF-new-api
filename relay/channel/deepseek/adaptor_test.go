@@ -3,8 +3,9 @@ package deepseek
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/internal/testconfig"
+	relaycommon "eflow.local/new-api/relay/common"
 )
 
 func TestApplyDeepSeekV4ResponsesThinkingSuffix(t *testing.T) {
@@ -29,5 +30,24 @@ func TestApplyDeepSeekV4ResponsesThinkingSuffix(t *testing.T) {
 				t.Fatalf("unexpected relay info after suffix conversion: %+v", info)
 			}
 		})
+	}
+}
+
+func TestDeepSeekV4SuffixKeptForReservedModel(t *testing.T) {
+	testconfig.Set(t, "global", map[string]string{"thinking_model_blacklist": `["deepseek-v4-0324-max"]`})
+
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "deepseek-v4-0324-max"}}
+	chat := &dto.GeneralOpenAIRequest{Model: "deepseek-v4-0324-max"}
+	if err := applyDeepSeekV4OpenAIThinkingSuffix(info, chat); err != nil {
+		t.Fatal(err)
+	}
+	responses := dto.OpenAIResponsesRequest{Model: "deepseek-v4-0324-max"}
+	applyDeepSeekV4ResponsesThinkingSuffix(info, &responses)
+
+	if chat.Model != "deepseek-v4-0324-max" || chat.ReasoningEffort != "" || responses.Model != "deepseek-v4-0324-max" || responses.Reasoning != nil {
+		t.Fatalf("reserved model suffix must pass through: chat=%+v responses=%+v", chat, responses)
+	}
+	if info.UpstreamModelName != "deepseek-v4-0324-max" {
+		t.Fatalf("upstream model name changed: %q", info.UpstreamModelName)
 	}
 }

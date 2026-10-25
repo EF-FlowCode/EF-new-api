@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
-import { toast } from 'sonner'
-import { RefreshCw } from 'lucide-react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { RefreshCw } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -17,11 +19,9 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/tag-input'
-import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 // ----------------------------------------------------------------------------
 // Schema
@@ -35,9 +35,7 @@ const monitoringSchema = z.object({
   availability_exclude_models: z.array(z.string()),
   cache_hit_exclude_models: z.array(z.string()),
   availability_exclude_keywords: z.array(z.string()),
-  availability_exclude_status_codes: z.array(
-    z.string().regex(/^[1-5]\d{2}$/)
-  ),
+  availability_exclude_status_codes: z.array(z.string().regex(/^[1-5]\d{2}$/)),
   cache_tokens_separate_groups: z.array(z.string()),
 })
 
@@ -113,7 +111,7 @@ export function GroupMonitoringSettingsSection({
   defaultValues,
 }: GroupMonitoringSettingsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [refreshing, setRefreshing] = useState(false)
 
@@ -158,7 +156,7 @@ export function GroupMonitoringSettingsSection({
   useEffect(() => {
     let active = true
     api
-      .get('/api/group/')
+      .get('/api/group/', CALLER_HANDLED_REQUEST_CONFIG)
       .then((res) => {
         if (!active) return
         if (res.data?.success) {
@@ -217,15 +215,17 @@ export function GroupMonitoringSettingsSection({
         value: toJsonArrayString(values.cache_tokens_separate_groups),
       },
     ]
-    for (const upd of updates) {
-      await updateOption.mutateAsync(upd)
-    }
+    await updateOptions.mutateAsync(updates)
   }
 
   const handleRefreshNow = async () => {
     setRefreshing(true)
     try {
-      const res = await api.post('/api/monitoring/admin/refresh')
+      const res = await api.post(
+        '/api/monitoring/admin/refresh',
+        undefined,
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
       if (res.data?.success) {
         toast.success(t('Refreshed successfully'))
       } else {
@@ -271,10 +271,9 @@ export function GroupMonitoringSettingsSection({
                 <FormDescription>
                   {availableGroups.length === 0
                     ? t('Loading available groups…')
-                    : t(
-                        'Available groups: {{groups}}',
-                        { groups: availableGroups.join(', ') }
-                      )}
+                    : t('Available groups: {{groups}}', {
+                        groups: availableGroups.join(', '),
+                      })}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -409,9 +408,7 @@ export function GroupMonitoringSettingsSection({
               name='availability_exclude_keywords'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>
-                    {t('Exclude error message keywords')}
-                  </FormLabel>
+                  <FormLabel>{t('Exclude error message keywords')}</FormLabel>
                   <FormControl>
                     <TagInput
                       value={field.value}
@@ -433,9 +430,7 @@ export function GroupMonitoringSettingsSection({
               name='availability_exclude_status_codes'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>
-                    {t('Exclude HTTP status codes')}
-                  </FormLabel>
+                  <FormLabel>{t('Exclude HTTP status codes')}</FormLabel>
                   <FormControl>
                     <TagInput
                       value={field.value}
@@ -476,7 +471,7 @@ export function GroupMonitoringSettingsSection({
           />
 
           <div className='flex flex-wrap items-center gap-2'>
-            <Button type='submit' disabled={updateOption.isPending}>
+            <Button type='submit' disabled={updateOptions.isPending}>
               {t('Save monitoring settings')}
             </Button>
             <Button

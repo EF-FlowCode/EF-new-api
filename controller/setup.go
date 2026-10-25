@@ -1,19 +1,19 @@
 package controller
 
 import (
+	"errors"
+	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
 type Setup struct {
-	Status       bool   `json:"status"`
-	RootInit     bool   `json:"root_init"`
-	DatabaseType string `json:"database_type"`
+	Status   bool `json:"status"`
+	RootInit bool `json:"root_init"`
 }
 
 type SetupRequest struct {
@@ -25,10 +25,11 @@ type SetupRequest struct {
 }
 
 func GetSetup(c *gin.Context) {
+	setupComplete := constant.IsSetupComplete()
 	setup := Setup{
-		Status: constant.Setup,
+		Status: setupComplete,
 	}
-	if constant.Setup {
+	if setupComplete {
 		c.JSON(200, gin.H{
 			"success": true,
 			"data":    setup,
@@ -36,7 +37,6 @@ func GetSetup(c *gin.Context) {
 		return
 	}
 	setup.RootInit = model.RootUserExists()
-	setup.DatabaseType = "mysql"
 	c.JSON(200, gin.H{
 		"success": true,
 		"data":    setup,
@@ -44,17 +44,9 @@ func GetSetup(c *gin.Context) {
 }
 
 func PostSetup(c *gin.Context) {
-	// Check if setup is already completed
-	if constant.Setup {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "系统已经初始化完成",
-		})
-		return
-	}
-
 	// Check if root user already exists
 	rootExists := model.RootUserExists()
+	var rootUser *model.User
 
 	var req SetupRequest
 	err := c.ShouldBindJSON(&req)
@@ -68,15 +60,14 @@ func PostSetup(c *gin.Context) {
 
 	// If root doesn't exist, validate and create admin account
 	if !rootExists {
-		// Validate username length: max 12 characters to align with model.User validation
-		if len(req.Username) > 12 {
+		req.Username = strings.TrimSpace(req.Username)
+		if req.Username == "" {
 			c.JSON(200, gin.H{
 				"success": false,
-				"message": "用户名长度不能超过12个字符",
+				"message": "用户名不能为空",
 			})
 			return
 		}
-		// Validate password
 		if req.Password != req.ConfirmPassword {
 			c.JSON(200, gin.H{
 				"success": false,
@@ -84,16 +75,19 @@ func PostSetup(c *gin.Context) {
 			})
 			return
 		}
-
-		if len(req.Password) < 8 {
+		rootCandidate := model.User{
+			Username: req.Username,
+			Password: req.Password,
+		}
+		if err := common.Validate.Struct(&rootCandidate); err != nil {
 			c.JSON(200, gin.H{
 				"success": false,
-				"message": "密码长度至少为8个字符",
+				"message": "管理员账号参数不符合要求: " + err.Error(),
 			})
 			return
 		}
 
-		// Create root user
+		// Prepare the root user; persistence happens with all setup state below.
 		hashedPassword, err := common.Password2Hash(req.Password)
 		if err != nil {
 			c.JSON(200, gin.H{
@@ -102,7 +96,7 @@ func PostSetup(c *gin.Context) {
 			})
 			return
 		}
-		rootUser := model.User{
+		rootUser = &model.User{
 			Username:    req.Username,
 			Password:    hashedPassword,
 			Role:        common.RoleRootUser,
@@ -111,51 +105,22 @@ func PostSetup(c *gin.Context) {
 			AccessToken: nil,
 			Quota:       100000000,
 		}
-		err = model.DB.Create(&rootUser).Error
-		if err != nil {
-			c.JSON(200, gin.H{
-				"success": false,
-				"message": "创建管理员账号失败: " + err.Error(),
-			})
-			return
-		}
 	}
-
-	// Set operation modes
-	operation_setting.SelfUseModeEnabled = req.SelfUseModeEnabled
-	operation_setting.DemoSiteEnabled = req.DemoSiteEnabled
-
-	// Save operation modes to database for persistence
-	err = model.UpdateOption("SelfUseModeEnabled", boolToString(req.SelfUseModeEnabled))
-	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "保存自用模式设置失败: " + err.Error(),
-		})
-		return
-	}
-
-	err = model.UpdateOption("DemoSiteEnabled", boolToString(req.DemoSiteEnabled))
-	if err != nil {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "保存演示站点模式设置失败: " + err.Error(),
-		})
-		return
-	}
-
-	// Update setup status
-	constant.Setup = true
 
 	setup := model.Setup{
+		ID:            1,
 		Version:       common.Version,
 		InitializedAt: time.Now().Unix(),
 	}
-	err = model.DB.Create(&setup).Error
+	err = model.InitializeSystem(rootUser, req.SelfUseModeEnabled, req.DemoSiteEnabled, setup)
 	if err != nil {
+		message := "系统初始化失败: " + err.Error()
+		if errors.Is(err, model.ErrSetupAlreadyCompleted) {
+			message = "系统已经初始化完成"
+		}
 		c.JSON(200, gin.H{
 			"success": false,
-			"message": "系统初始化失败: " + err.Error(),
+			"message": message,
 		})
 		return
 	}
@@ -164,11 +129,4 @@ func PostSetup(c *gin.Context) {
 		"success": true,
 		"message": "系统初始化成功",
 	})
-}
-
-func boolToString(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
 }

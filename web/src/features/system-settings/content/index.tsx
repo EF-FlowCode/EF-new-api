@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useParams } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { getDomainTabItems } from '@/components/layout/config/admin-domains'
-import { SettingsSectionTabs } from '../components/settings-section-tabs'
+import { SettingsWorkbench } from '../components/settings-workbench'
 import { getOptionValue, useSystemOptions } from '../hooks/use-system-options'
 import type { ContentSettings } from '../types'
 import {
@@ -106,15 +106,12 @@ export function ContentSettings() {
 
   return (
     <div className='flex h-full w-full flex-1 flex-col'>
-      <div className='faded-bottom h-full w-full overflow-y-auto scroll-smooth pe-4 pb-12'>
-        <div className='space-y-4'>
-          <SettingsSectionTabs
-            items={getDomainTabItems(t, 'content', activeSection)}
-            activeSection={`content/${activeSection}`}
-          />
-          {sectionContent}
-        </div>
-      </div>
+      <SettingsWorkbench
+        items={getDomainTabItems(t, 'content', activeSection)}
+        activeSection={`content/${activeSection}`}
+      >
+        {sectionContent}
+      </SettingsWorkbench>
     </div>
   )
 }

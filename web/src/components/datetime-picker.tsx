@@ -12,6 +12,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
+import {
+  applyTimeOfDay,
+  DEFAULT_TIME,
+  formatTimeOfDay,
+} from './datetime-picker-time'
 
 const calendarLocales = {
   en: enUS,
@@ -42,23 +47,24 @@ export function DateTimePicker({
   const [open, setOpen] = React.useState(false)
   const [date, setDate] = React.useState<Date | undefined>(value)
   const [month, setMonth] = React.useState<Date | undefined>(value)
-  const [time, setTime] = React.useState<string>('00:00')
+  const [time, setTime] = React.useState<string>(DEFAULT_TIME)
 
   React.useEffect(() => {
     setDate(value)
     setMonth(value)
     if (value) {
-      const hours = value.getHours().toString().padStart(2, '0')
-      const minutes = value.getMinutes().toString().padStart(2, '0')
-      setTime(`${hours}:${minutes}`)
+      setTime(formatTimeOfDay(value))
+    } else {
+      setTime(DEFAULT_TIME)
     }
   }, [value])
 
   const handleDateSelect = (selectedDate: Date | undefined) => {
     if (selectedDate) {
-      const [hours, minutes] = time.split(':').map(Number)
-      const newDate = new Date(selectedDate)
-      newDate.setHours(hours, minutes, 0, 0)
+      const newDate =
+        applyTimeOfDay(selectedDate, time) ??
+        applyTimeOfDay(selectedDate, DEFAULT_TIME) ??
+        new Date(selectedDate)
       setDate(newDate)
       setMonth(newDate)
       onChange?.(newDate)
@@ -72,12 +78,14 @@ export function DateTimePicker({
 
   const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTime = e.target.value
+    // 清空或只清了一段时浏览器给出 ''：保留当前时间（输入框会重新显示它），
+    // 不向外发出非法日期。
+    if (!newTime) return
     setTime(newTime)
 
     if (date) {
-      const [hours, minutes] = newTime.split(':').map(Number)
-      const newDate = new Date(date)
-      newDate.setHours(hours, minutes, 0, 0)
+      const newDate = applyTimeOfDay(date, newTime)
+      if (!newDate) return
       setDate(newDate)
       onChange?.(newDate)
     }
@@ -86,7 +94,7 @@ export function DateTimePicker({
   const handleClear = () => {
     setDate(undefined)
     setMonth(undefined)
-    setTime('00:00')
+    setTime(DEFAULT_TIME)
     onChange?.(undefined)
   }
 
@@ -95,6 +103,7 @@ export function DateTimePicker({
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
+            type='button'
             variant='outline'
             className={cn(
               'flex-1 justify-between font-normal',
@@ -119,7 +128,9 @@ export function DateTimePicker({
       </Popover>
       <Input
         type='time'
+        step={1}
         value={time}
+        aria-label={t('Time')}
         onChange={handleTimeChange}
         className='w-32 appearance-none [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-calendar-picker-indicator]:appearance-none'
         disabled={!date}

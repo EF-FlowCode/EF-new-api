@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"gorm.io/gorm"
 )
 
@@ -121,7 +121,7 @@ func UpdateRiskRule(rule *RiskRule) error {
 		return errors.New("invalid risk rule")
 	}
 	rule.Name = strings.TrimSpace(rule.Name)
-	return DB.Model(&RiskRule{}).Where("id = ?", rule.Id).Updates(map[string]interface{}{
+	return DB.Model(&RiskRule{}).Where("id = ?", rule.Id).Updates(map[string]any{
 		"name":                  rule.Name,
 		"description":           rule.Description,
 		"enabled":               rule.Enabled,
@@ -164,11 +164,11 @@ func CountRiskRules() (int64, error) {
 // the misconfiguration.
 func CountEnabledRiskRulesWithoutGroups() (int64, error) {
 	var count int64
-	emptyGroups := DB.Where(map[string]interface{}{"groups": nil}).
-		Or(map[string]interface{}{"groups": ""}).
-		Or(map[string]interface{}{"groups": "[]"})
+	emptyGroups := DB.Where(map[string]any{"groups": nil}).
+		Or(map[string]any{"groups": ""}).
+		Or(map[string]any{"groups": "[]"})
 	err := DB.Model(&RiskRule{}).
-		Where(map[string]interface{}{"enabled": true}).
+		Where(map[string]any{"enabled": true}).
 		Where(emptyGroups).
 		Count(&count).Error
 	return count, err

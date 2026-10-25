@@ -1,3 +1,5 @@
+import { hasAdvancedCustomModelListRoute } from './lib/advanced-custom'
+
 // ============================================================================
 // Channel Types (from constant/channel.go)
 // All label/name values are i18n keys; use t(value) when displaying.
@@ -58,16 +60,29 @@ export const CHANNEL_TYPES = {
   55: 'Sora',
   56: 'Replicate',
   57: 'Codex',
-  58: 'AliHappyhorse',
-  59: 'AliTTS',
-  60: 'AliASR',
-  61: 'AliASRRealtime',
+  // Upstream numbers; relayed through fixed Advanced Custom route presets.
+  62: 'vLLM',
+  63: 'SGLang',
+  // eflow private Ali media types, kept clear of upstream's 58–63.
+  1001: 'AliHappyhorse',
+  1002: 'AliTTS',
+  1003: 'AliASR',
+  1004: 'AliASRRealtime',
 } as const
 
+export const CHANNEL_TYPE_VLLM = 62
+export const CHANNEL_TYPE_SGLANG = 63
+
+// Self-hosted inference servers have no built-in address.
+export const BASE_URL_REQUIRED_TYPES = new Set([
+  CHANNEL_TYPE_VLLM,
+  CHANNEL_TYPE_SGLANG,
+])
+
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15, 46, 23,
-  18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22, 21, 44, 2, 5, 36, 50,
-  51, 52, 53, 54, 55, 56, 58, 59, 60, 61,
+  1, 14, 33, 24, 43, 3, 41, 48, 42, 34, 20, 4, 62, 63, 40, 27, 25, 17, 26, 15,
+  46, 23, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 22, 21, 44, 2, 5,
+  36, 50, 51, 52, 53, 54, 55, 56, 1001, 1002, 1003, 1004,
 ]
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
@@ -88,6 +103,47 @@ export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
   }
   return ordered
 })()
+
+export const REQUEST_ENDPOINT_TYPE_OPTIONS: { value: string; label: string }[] =
+  [
+    { value: 'openai', label: 'Chat Completions' },
+    { value: 'openai-response', label: 'Responses' },
+    { value: 'openai-response-compact', label: 'Responses Compact' },
+    { value: 'anthropic', label: 'Anthropic Messages' },
+    { value: 'gemini', label: 'Gemini' },
+    { value: 'jina-rerank', label: 'Rerank' },
+    { value: 'image-generation', label: 'Image Generation' },
+    { value: 'embeddings', label: 'Embeddings' },
+    { value: 'openai-alpha-search', label: 'OpenAI Alpha Search' },
+  ]
+
+// Mirror of constant/channel_endpoint_capability.go: inbound endpoints each
+// restricted channel type's adaptor can serve. Types without an entry accept
+// every endpoint; channel selection filters by this unless overridden.
+export const CHANNEL_TYPE_REQUEST_ENDPOINTS: Record<number, string[]> = {
+  14: ['openai', 'anthropic'],
+  33: ['openai', 'anthropic'],
+  24: ['openai', 'anthropic', 'gemini', 'embeddings', 'image-generation'],
+  41: ['openai', 'anthropic', 'gemini', 'image-generation'],
+  17: [
+    'openai',
+    'openai-response',
+    'openai-response-compact',
+    'anthropic',
+    'embeddings',
+    'jina-rerank',
+    'image-generation',
+  ],
+  57: ['openai-response', 'openai-response-compact'],
+}
+
+// Endpoints of the fixed vLLM / SGLang route preset (model/channel_advanced_custom_preset.go).
+export const ADVANCED_CUSTOM_PRESET_REQUEST_ENDPOINTS = [
+  'openai',
+  'openai-response',
+  'embeddings',
+  'anthropic',
+]
 
 // ============================================================================
 // Channel Status (label values are i18n keys; use t(config.label) in components)
@@ -234,6 +290,7 @@ export const ERROR_MESSAGES = {
     'HTTP/2 connection shards must be between 1 and 8',
   INVALID_HTTP1_WITH_SHARDS:
     'HTTP/2 connection shards must be 1 when HTTP/1.1 is selected',
+  REQUIRED_BASE_URL: 'API address is required for this channel type',
   CREATE_FAILED: 'Failed to create channel',
   UPDATE_FAILED: 'Failed to update channel',
   DELETE_FAILED: 'Failed to delete channel',
@@ -372,7 +429,47 @@ export const FIELD_DESCRIPTIONS = {
 // ============================================================================
 
 export const MODEL_FETCHABLE_TYPES = new Set([
-  1, 4, 14, 17, 20, 23, 24, 25, 26, 27, 31, 34, 35, 40, 42, 43, 47, 48,
+  1,
+  4,
+  14,
+  17,
+  20,
+  23,
+  24,
+  25,
+  26,
+  27,
+  31,
+  34,
+  35,
+  40,
+  42,
+  43,
+  47,
+  48,
+  CHANNEL_TYPE_VLLM,
+  CHANNEL_TYPE_SGLANG,
+])
+
+// Advanced Custom is persisted in the legacy Custom (type 8) slot in this
+// fork. Only a configured /v1/models management route enables model discovery
+// controls for that type; ordinary Custom channels remain unchanged.
+export function isModelFetchableChannel(
+  type: number,
+  advancedCustomOrSettings?: unknown
+): boolean {
+  if (MODEL_FETCHABLE_TYPES.has(type)) return true
+  return type === 8 && hasAdvancedCustomModelListRoute(advancedCustomOrSettings)
+}
+
+// Request fields that are safe and meaningful for each gateway family.
+// Keep this mapping explicit: eflow's Ali media adapters (1001–1004) and
+// upstream gateway types must not inherit each other's field controls.
+export const OPENAI_FIELD_PASSTHROUGH_TYPES = new Set([1, 57])
+export const CLAUDE_FIELD_PASSTHROUGH_TYPES = new Set([14])
+export const FIELD_PASSTHROUGH_TYPES = new Set([
+  ...OPENAI_FIELD_PASSTHROUGH_TYPES,
+  ...CLAUDE_FIELD_PASSTHROUGH_TYPES,
 ])
 
 export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
@@ -384,6 +481,8 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   50: 'Format: AccessKey|SecretKey (or just ApiKey if upstream is New API)',
   51: 'Format: Access Key ID|Secret Access Key',
   57: 'Paste Codex OAuth JSON credential (access_token / refresh_token / account_id)',
+  62: 'vLLM API key, or EMPTY if authentication is disabled',
+  63: 'SGLang API key, or EMPTY if authentication is disabled',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {

@@ -10,15 +10,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/model"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/model"
+	relayconstant "eflow.local/new-api/relay/constant"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/ratio_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -31,14 +31,24 @@ type ModelRequest struct {
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		relayRuntimePolicy := service.GetOrCreateRelayRuntimePolicy(c)
 		var channel *model.Channel
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+			abortWithOpenAiMessage(c, invalidRequestStatus(err), i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
 		if ok {
+			// A pinned public protocol still authorizes the client's spelling.
+			// A token-specific channel must not bypass this check.
+			if service.TaskPublicRoute(c) != nil && common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled) {
+				limits, _ := common.GetContextKeyType[map[string]bool](c, constant.ContextKeyTokenModelLimit)
+				if _, allowed := limits[ratio_setting.FormatMatchingModelName(modelRequest.Model)]; !allowed {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "Token has no access to the requested model")
+					return
+				}
+			}
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
@@ -51,6 +61,10 @@ func Distribute() func(c *gin.Context) {
 			}
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if !model.ChannelSupportsRequestPath(channel, c.Request.URL.Path, modelRequest.Model) || !service.AllowsTaskPublicChannel(c, channel) {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "指定渠道不支持当前请求路径", types.ErrorCodeModelNotFound)
 				return
 			}
 		} else {
@@ -108,7 +122,7 @@ func Distribute() func(c *gin.Context) {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil {
 						if preferred.Status != common.ChannelStatusEnabled {
-							if service.ChannelAffinityFailoverOnChannelDownEnabled() {
+							if service.ChannelAffinityFailoverOnChannelDownEnabledForRequest(c) {
 								// Pinned channel is disabled (e.g. auto-banned) — unambiguously
 								// dead. Drop the stale pin and fall through to normal channel
 								// selection instead of trapping the conversation on a corpse.
@@ -117,9 +131,11 @@ func Distribute() func(c *gin.Context) {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 								return
 							}
+						} else if !model.ChannelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) || !service.AllowsTaskPublicChannel(c, preferred) {
+							service.EvictChannelAffinityKey(c)
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-							autoGroups := service.GetUserAutoGroup(userGroup, userAdditionalTiers)
+							autoGroups := service.GetUserAutoGroupWithPolicy(userGroup, userAdditionalTiers, relayRuntimePolicy.AutoGroupPolicy)
 							for _, g := range autoGroups {
 								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
 									selectGroup = g
@@ -138,12 +154,13 @@ func Distribute() func(c *gin.Context) {
 				}
 
 				if channel == nil {
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:        c,
-						ModelName:  modelRequest.Model,
-						TokenGroup: usingGroup,
-						Retry:      common.GetPointer(0),
-					})
+					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannelWithPolicy(&service.RetryParam{
+						Ctx:         c,
+						ModelName:   modelRequest.Model,
+						RequestPath: c.Request.URL.Path,
+						TokenGroup:  usingGroup,
+						Retry:       common.GetPointer(0),
+					}, relayRuntimePolicy)
 					if err != nil {
 						showGroup := usingGroup
 						if usingGroup == "auto" {
@@ -166,9 +183,14 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		if setupErr := SetupContextForChannel(c, channel, modelRequest.Model); setupErr != nil {
-			abortWithOpenAiMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
-			return
+		// Task fetches and origin-bound operations deliberately skip random channel
+		// selection. Their controllers recover the task and, when needed, its
+		// original channel. A token-bound channel is still published here.
+		if shouldSelectChannel || channel != nil {
+			if setupErr := SetupContextForChannel(c, channel, modelRequest.Model); setupErr != nil {
+				abortWithOpenAiMessage(c, setupErr.StatusCode, setupErr.Error(), setupErr.GetErrorCode())
+				return
+			}
 		}
 		c.Next()
 		if selected, ok := common.GetContextKeyType[*model.Channel](c, constant.ContextKeySelectedChannel); ok && selected != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
@@ -184,17 +206,14 @@ func Distribute() func(c *gin.Context) {
 // - multipart/form-data
 func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	if strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
-		modelRequest, err := getModelFromJSONBody(c)
-		if err != nil {
-			return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
-		}
-		return modelRequest, nil
+		// Callers add the "invalid request" prefix once when they report it.
+		return getModelFromJSONBody(c)
 	}
 
 	var modelRequest ModelRequest
 	err := common.UnmarshalBodyReusable(c, &modelRequest)
 	if err != nil {
-		return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+		return nil, err
 	}
 	return &modelRequest, nil
 }
@@ -244,6 +263,12 @@ func getJSONStringValue(result gjson.Result, field string) (string, error) {
 }
 
 func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
+	if route := service.TaskPublicRoute(c); route != nil {
+		return &ModelRequest{Model: route.Model}, true, nil
+	}
+	if name := c.GetString("knowledge_batch_model"); name != "" {
+		return &ModelRequest{Model: name}, true, nil
+	}
 	var modelRequest ModelRequest
 	shouldSelectChannel := true
 	var err error
@@ -258,7 +283,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			midjourneyRequest := dto.MidjourneyRequest{}
 			err = common.UnmarshalBodyReusable(c, &midjourneyRequest)
 			if err != nil {
-				return nil, false, errors.New(i18n.T(c, i18n.MsgDistributorInvalidMidjourney, map[string]any{"Error": err.Error()}))
+				return nil, false, err
 			}
 			midjourneyModel, mjErr, success := service.GetMjRequestModel(relayMode, &midjourneyRequest)
 			if mjErr != nil {

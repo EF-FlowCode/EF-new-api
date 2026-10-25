@@ -47,7 +47,10 @@ export async function getUserGroups(): Promise<GroupOption[]> {
     return []
   }
 
-  const groupData = data.data as Record<string, { desc: string; ratio: number }>
+  const groupData = data.data as Record<
+    string,
+    { desc: string; ratio: number; available?: boolean }
+  >
 
   // label is for button display (name only); desc is for dropdown content
   return Object.entries(groupData).map(([group, info]) => ({
@@ -55,5 +58,6 @@ export async function getUserGroups(): Promise<GroupOption[]> {
     value: group,
     ratio: info.ratio,
     desc: info.desc,
+    available: info.available !== false,
   }))
 }

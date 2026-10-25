@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/internal/jsonutil"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	"eflow.local/new-api/relaykit/relayconvert/internal/jsonutil"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
 )
 
 func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
@@ -20,6 +21,39 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 	openaiRequest := &dto.GeneralOpenAIRequest{
 		Model:  modelName,
 		Stream: kitutil.GetPointer(isStream),
+	}
+	reasoningIntent, err := reasoning.FromGemini(geminiRequest)
+	if err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	sourceModelName := modelName
+	if info != nil && info.GetOriginModelName() != "" {
+		sourceModelName = info.GetOriginModelName()
+	}
+	baseSourceModel := sourceModelName
+	opts := convmeta.OptionsOf(info)
+	preserveSuffix := opts.ShouldPreserveThinkingSuffix(sourceModelName)
+	if !preserveSuffix {
+		if suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info)); !suffix.IsEmpty() {
+			reasoningIntent, err = reasoning.MergeExplicitAndSuffix(reasoningIntent, suffix, sourceModelName)
+			if err != nil {
+				return nil, reasoning.AsClientError(err)
+			}
+		}
+	}
+	if baseSourceModel != "" && geminiRequest.GenerationConfig.ThinkingConfig != nil {
+		_, err = reasoning.ValidateGeminiThinkingConfig(baseSourceModel, geminiRequest.GenerationConfig.ThinkingConfig)
+		if err != nil {
+			return nil, reasoning.AsClientError(err)
+		}
+	}
+	reasoningIntent = reasoning.ResolveGeminiDefault(baseSourceModel, reasoningIntent)
+	effectiveEffort := reasoning.EffectiveEffort(reasoningIntent)
+	if err := reasoning.ApplyToOpenAIChat(openaiRequest, reasoningIntent); err != nil {
+		return nil, reasoning.AsClientError(err)
+	}
+	if effectiveEffort != "" && info != nil {
+		info.SetReasoningEffort(string(effectiveEffort))
 	}
 
 	var messages []dto.Message

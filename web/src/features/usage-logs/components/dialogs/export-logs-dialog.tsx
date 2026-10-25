@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Mail } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth-store'
 import dayjs from '@/lib/dayjs'
 import { Button } from '@/components/ui/button'
 import {
@@ -15,7 +16,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { useAuthStore } from '@/stores/auth-store'
 import { CompactDateTimeRangePicker } from '../compact-date-time-range-picker'
 
 interface ExportLogsDialogProps {
@@ -24,10 +24,18 @@ interface ExportLogsDialogProps {
   defaultStart?: Date
   defaultEnd?: Date
   exporting: boolean
-  onConfirm: (start: Date, end: Date) => void
+  onConfirm: (start: Date, end: Date, userId: number | null) => void
   // eflow: 离线导出（后台异步发邮件）。可选——传了才显示「离线导出」按钮。
   offlineExporting?: boolean
-  onConfirmOffline?: (start: Date, end: Date, email: string) => void
+  onConfirmOffline?: (
+    start: Date,
+    end: Date,
+    email: string,
+    userId: number | null
+  ) => void
+  // eflow: 仅超级管理员可导出指定用户；为 true 才显示「用户 ID」输入，默认带入筛选栏的用户。
+  canExportOthers?: boolean
+  defaultUserId?: string
 }
 
 export function ExportLogsDialog({
@@ -39,6 +47,8 @@ export function ExportLogsDialog({
   onConfirm,
   offlineExporting,
   onConfirmOffline,
+  canExportOthers,
+  defaultUserId,
 }: ExportLogsDialogProps) {
   const { t } = useTranslation()
   const { auth } = useAuthStore()
@@ -46,6 +56,7 @@ export function ExportLogsDialog({
   const [end, setEnd] = useState<Date | undefined>(defaultEnd)
   // eflow: 离线导出收件邮箱，默认预填绑定邮箱；不填则后端回落到绑定邮箱。
   const [email, setEmail] = useState<string>('')
+  const [userId, setUserId] = useState<string>('')
 
   useEffect(() => {
     // 打开对话框时把时间段重置成外部默认值——合法的 prop→state 同步
@@ -53,10 +64,10 @@ export function ExportLogsDialog({
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setStart(defaultStart)
       setEnd(defaultEnd)
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEmail(auth.user?.email || '')
+      setUserId(defaultUserId || '')
     }
-  }, [open, defaultStart, defaultEnd, auth.user?.email])
+  }, [open, defaultStart, defaultEnd, auth.user?.email, defaultUserId])
 
   const setMonth = (offset: number) => {
     const base = dayjs().add(offset, 'month')
@@ -68,7 +79,19 @@ export function ExportLogsDialog({
     setStart(dayjs().subtract(days, 'day').startOf('day').toDate())
   }
 
-  const canConfirm = !!start && !!end && start.getTime() <= end.getTime()
+  // 超级管理员留空 = 导出自己的日志；填了必须是正整数用户 ID。
+  const trimmedUserId = userId.trim()
+  const userIdValid =
+    !trimmedUserId || (/^\d+$/.test(trimmedUserId) && Number(trimmedUserId) > 0)
+  const targetUserId =
+    canExportOthers && trimmedUserId && userIdValid
+      ? Number(trimmedUserId)
+      : null
+  const canConfirm =
+    !!start &&
+    !!end &&
+    start.getTime() <= end.getTime() &&
+    (!canExportOthers || userIdValid)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -120,6 +143,24 @@ export function ExportLogsDialog({
               {t('30 Days')}
             </Button>
           </div>
+          {canExportOthers && (
+            <div className='space-y-1.5'>
+              <Input
+                type='text'
+                inputMode='numeric'
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                placeholder={t('User ID (leave blank to export your own)')}
+                aria-invalid={!userIdValid}
+                className='h-9'
+              />
+              {!userIdValid && (
+                <p className='text-destructive text-xs'>
+                  {t('Invalid filter ID')}
+                </p>
+              )}
+            </div>
+          )}
           <CompactDateTimeRangePicker
             start={start}
             end={end}
@@ -129,10 +170,12 @@ export function ExportLogsDialog({
             }}
           />
           {onConfirmOffline && (
-            <div className='space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2.5'>
-              <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+            <div className='border-border/60 bg-muted/20 space-y-1.5 rounded-md border p-2.5'>
+              <div className='text-muted-foreground flex items-center gap-1.5 text-xs'>
                 <Mail className='size-3.5' />
-                {t('Offline export sends a ZIP to your email in the background')}
+                {t(
+                  'Offline export sends a ZIP to your email in the background'
+                )}
               </div>
               <Input
                 type='email'
@@ -156,7 +199,8 @@ export function ExportLogsDialog({
             <Button
               variant='secondary'
               onClick={() => {
-                if (start && end) onConfirmOffline(start, end, email.trim())
+                if (start && end)
+                  onConfirmOffline(start, end, email.trim(), targetUserId)
               }}
               disabled={!canConfirm || exporting || offlineExporting}
             >
@@ -170,7 +214,7 @@ export function ExportLogsDialog({
           )}
           <Button
             onClick={() => {
-              if (start && end) onConfirm(start, end)
+              if (start && end) onConfirm(start, end, targetUserId)
             }}
             disabled={!canConfirm || exporting || offlineExporting}
           >

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/types"
 )
 
 type EmbeddingOptions struct {
@@ -23,6 +23,10 @@ type EmbeddingRequest struct {
 	Input            any      `json:"input"`
 	EncodingFormat   string   `json:"encoding_format,omitempty"`
 	Dimensions       *int     `json:"dimensions,omitempty"`
+	FPS              *float64 `json:"fps,omitempty"`
+	Instruct         string   `json:"instruct,omitempty"`
+	TextType         string   `json:"text_type,omitempty"`
+	EnableFusion     *bool    `json:"enable_fusion,omitempty"`
 	User             string   `json:"user,omitempty"`
 	Seed             *float64 `json:"seed,omitempty"`
 	Temperature      *float64 `json:"temperature,omitempty"`

@@ -4,7 +4,11 @@ import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
-import { api } from '@/lib/api'
+import {
+  api,
+  CALLER_HANDLED_REQUEST_CONFIG,
+  getRequestErrorMessage,
+} from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,6 +21,11 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 import { deleteUserAccount } from '../../api'
 
 // ============================================================================
@@ -39,6 +48,7 @@ export function DeleteAccountDialog({
   const { reset } = useAuthStore((state) => state.auth)
   const [loading, setLoading] = useState(false)
   const [confirmation, setConfirmation] = useState('')
+  const verification = useSecureVerification()
 
   const handleDelete = async () => {
     if (confirmation !== username) {
@@ -46,16 +56,15 @@ export function DeleteAccountDialog({
       return
     }
 
-    try {
-      setLoading(true)
-      const response = await deleteUserAccount()
+    const submit = async (proof?: SecurityProof) => {
+      const response = await deleteUserAccount(proof?.proof_token)
 
       if (response.success) {
         toast.success(t('Account deleted successfully'))
 
         // Logout and redirect
         try {
-          await api.get('/api/user/logout')
+          await api.get('/api/user/logout', CALLER_HANDLED_REQUEST_CONFIG)
         } catch {
           // Ignore logout errors
         }
@@ -66,8 +75,16 @@ export function DeleteAccountDialog({
       } else {
         toast.error(response.message || t('Failed to delete account'))
       }
-    } catch (_error) {
-      toast.error(t('Failed to delete account'))
+    }
+
+    try {
+      setLoading(true)
+      await verification.startVerification(submit, {
+        operation: { scope: 'account.delete' },
+        description: t('Confirm your identity before deleting your account.'),
+      })
+    } catch (error) {
+      toast.error(getRequestErrorMessage(error, t('Failed to delete account')))
     } finally {
       setLoading(false)
     }
@@ -83,64 +100,67 @@ export function DeleteAccountDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className='sm:max-w-md'>
-        <DialogHeader>
-          <DialogTitle className='text-destructive flex items-center gap-2'>
-            <AlertTriangle className='h-5 w-5' />
-            {t('Delete Account')}
-          </DialogTitle>
-          <DialogDescription>
-            {t(
-              'This action cannot be undone. This will permanently delete your account and remove all your data from our servers.'
-            )}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent className='sm:max-w-md'>
+          <DialogHeader>
+            <DialogTitle className='text-destructive flex items-center gap-2'>
+              <AlertTriangle className='h-5 w-5' />
+              {t('Delete Account')}
+            </DialogTitle>
+            <DialogDescription>
+              {t(
+                'This action cannot be undone. This will permanently delete your account and remove all your data from our servers.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
 
-        <div className='my-6 space-y-4'>
-          <Alert variant='destructive'>
-            <AlertTriangle className='h-4 w-4' />
-            <AlertDescription>
-              {t('Warning: This action is permanent and irreversible!')}
-            </AlertDescription>
-          </Alert>
+          <div className='my-6 space-y-4'>
+            <Alert variant='destructive'>
+              <AlertTriangle className='h-4 w-4' />
+              <AlertDescription>
+                {t('Warning: This action is permanent and irreversible!')}
+              </AlertDescription>
+            </Alert>
 
-          <div className='space-y-2'>
-            <Label htmlFor='confirmation'>
-              {t('Type')} <strong>{username}</strong> {t('to confirm')}
-            </Label>
-            <Input
-              id='confirmation'
-              type='text'
-              value={confirmation}
-              onChange={(e) => setConfirmation(e.target.value)}
-              disabled={loading}
-              placeholder={username}
-              autoComplete='off'
-            />
+            <div className='space-y-2'>
+              <Label htmlFor='confirmation'>
+                {t('Type')} <strong>{username}</strong> {t('to confirm')}
+              </Label>
+              <Input
+                id='confirmation'
+                type='text'
+                value={confirmation}
+                onChange={(e) => setConfirmation(e.target.value)}
+                disabled={loading}
+                placeholder={username}
+                autoComplete='off'
+              />
+            </div>
           </div>
-        </div>
 
-        <DialogFooter>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={() => handleOpenChange(false)}
-            disabled={loading}
-          >
-            {t('Cancel')}
-          </Button>
-          <Button
-            type='button'
-            variant='destructive'
-            onClick={handleDelete}
-            disabled={loading || confirmation !== username}
-          >
-            {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {loading ? t('Deleting...') : t('Delete Account')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <DialogFooter>
+            <Button
+              type='button'
+              variant='outline'
+              onClick={() => handleOpenChange(false)}
+              disabled={loading}
+            >
+              {t('Cancel')}
+            </Button>
+            <Button
+              type='button'
+              variant='destructive'
+              onClick={handleDelete}
+              disabled={loading || confirmation !== username}
+            >
+              {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+              {loading ? t('Deleting...') : t('Delete Account')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <SecureVerificationDialog {...verification.dialogProps} />
+    </>
   )
 }

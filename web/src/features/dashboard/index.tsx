@@ -205,9 +205,11 @@ export function Dashboard() {
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
-      <SectionPageLayout.Description>
-        {t(meta.descriptionKey)}
-      </SectionPageLayout.Description>
+      {activeSection !== 'overview' && (
+        <SectionPageLayout.Description>
+          {t(meta.descriptionKey)}
+        </SectionPageLayout.Description>
+      )}
       <SectionPageLayout.Content>
         <div className='space-y-3 sm:space-y-4'>
           {activeSection !== 'overview' && (

@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const behaviorSchema = z.object({
   RetryTimes: z.coerce.number().min(0).max(10),
@@ -35,7 +35,7 @@ export function SystemBehaviorSection({
   defaultValues,
 }: SystemBehaviorSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm({
     resolver: zodResolver(behaviorSchema),
@@ -49,9 +49,10 @@ export function SystemBehaviorSection({
       ([key, value]) => value !== defaultValues[key as keyof BehaviorFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value })
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value }))
+    )
   }
 
   return (
@@ -156,8 +157,8 @@ export function SystemBehaviorSection({
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

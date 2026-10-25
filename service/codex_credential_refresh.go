@@ -5,15 +5,30 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/model"
 )
 
 type CodexCredentialRefreshOptions struct {
 	ResetCaches bool
+	// StaleAccessToken is the access token the caller saw rejected. When the
+	// stored token already differs, another refresh won the race and its result
+	// is returned instead of spending the rotated refresh token a second time.
+	StaleAccessToken string
+}
+
+// codexRefreshLocks serializes refreshes per channel. OpenAI rotates refresh
+// tokens, so two concurrent refreshes with the same token make one of them
+// fail with invalid_grant (and can revoke the family).
+var codexRefreshLocks sync.Map
+
+func codexRefreshLock(channelID int) *sync.Mutex {
+	lock, _ := codexRefreshLocks.LoadOrStore(channelID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 type CodexOAuthKey struct {
@@ -40,6 +55,11 @@ func parseCodexOAuthKey(raw string) (*CodexOAuthKey, error) {
 }
 
 func RefreshCodexChannelCredential(ctx context.Context, channelID int, opts CodexCredentialRefreshOptions) (*CodexOAuthKey, *model.Channel, error) {
+	lock := codexRefreshLock(channelID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	// Read after acquiring the lock so the refresh token is the latest one.
 	ch, err := model.GetChannelById(channelID, true)
 	if err != nil {
 		return nil, nil, err
@@ -54,6 +74,9 @@ func RefreshCodexChannelCredential(ctx context.Context, channelID int, opts Code
 	oauthKey, err := parseCodexOAuthKey(strings.TrimSpace(ch.Key))
 	if err != nil {
 		return nil, nil, err
+	}
+	if stale := strings.TrimSpace(opts.StaleAccessToken); stale != "" && strings.TrimSpace(oauthKey.AccessToken) != stale {
+		return oauthKey, ch, nil
 	}
 	if strings.TrimSpace(oauthKey.RefreshToken) == "" {
 		return nil, nil, fmt.Errorf("codex channel: refresh_token is required to refresh credential")

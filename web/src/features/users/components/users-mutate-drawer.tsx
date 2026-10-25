@@ -37,6 +37,11 @@ import {
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 import { MultiSelect } from '@/components/multi-select'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 import { createUser, updateUser, getUser, getUserGroupOptions } from '../api'
 import { BINDING_FIELDS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
@@ -87,6 +92,11 @@ export function UsersMutateDrawer({
     resolver: zodResolver(userFormSchema),
     defaultValues: USER_FORM_DEFAULT_VALUES,
   })
+  // The primary tier is always effective; offering it again as an additional tier is redundant.
+  const primaryTier = form.watch('group')
+  const additionalTierOptions = customerTierOptions.filter(
+    (option) => option.value !== primaryTier
+  )
 
   // Load existing data when updating
   useEffect(() => {
@@ -109,6 +119,8 @@ export function UsersMutateDrawer({
 
   const currentQuotaRaw = form.watch('quota_dollars') || 0
 
+  const verification = useSecureVerification()
+
   const onSubmit = async (data: UserFormValues) => {
     if (!isUpdate) {
       const passwordLength = data.password?.length || 0
@@ -121,12 +133,16 @@ export function UsersMutateDrawer({
       }
     }
 
-    setIsSubmitting(true)
-    try {
-      const payload = transformFormDataToPayload(data, currentRow?.id)
+    const payload = transformFormDataToPayload(data, currentRow?.id)
+    // Resetting the password or email, or creating an administrator, needs a
+    // proof; the backend asks for it and the request is retried once verified.
+    const submit = async (proof?: SecurityProof) => {
       const result = isUpdate
-        ? await updateUser(payload as typeof payload & { id: number })
-        : await createUser(payload)
+        ? await updateUser(
+            payload as typeof payload & { id: number },
+            proof?.proof_token
+          )
+        : await createUser(payload, proof?.proof_token)
 
       if (result.success) {
         toast.success(
@@ -144,6 +160,17 @@ export function UsersMutateDrawer({
               : t(ERROR_MESSAGES.CREATE_FAILED))
         )
       }
+    }
+
+    setIsSubmitting(true)
+    try {
+      await verification.withVerification(submit, {
+        operation:
+          isUpdate && payload.id
+            ? { scope: 'admin.user.update', context: { user_id: payload.id } }
+            : { scope: 'admin.user.create', context: { role: payload.role } },
+        description: t('Confirm your identity before saving this user.'),
+      })
     } catch (_error) {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
@@ -266,6 +293,22 @@ export function UsersMutateDrawer({
                   )}
                 />
 
+                {isUpdate && (
+                  <FormField
+                    control={form.control}
+                    name='email'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Email')}</FormLabel>
+                        <FormControl>
+                          <Input {...field} type='email' />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
                 <FormField
                   control={form.control}
                   name='password'
@@ -361,8 +404,10 @@ export function UsersMutateDrawer({
                         <FormLabel>{t('Additional customer tiers')}</FormLabel>
                         <FormControl>
                           <MultiSelect
-                            options={customerTierOptions}
-                            selected={field.value || []}
+                            options={additionalTierOptions}
+                            selected={(field.value || []).filter(
+                              (tier) => tier !== primaryTier
+                            )}
                             onChange={field.onChange}
                             placeholder={t(
                               'Search and select additional customer tiers'
@@ -511,6 +556,8 @@ export function UsersMutateDrawer({
           onSuccess={refreshUserData}
         />
       )}
+
+      <SecureVerificationDialog {...verification.dialogProps} />
     </>
   )
 }

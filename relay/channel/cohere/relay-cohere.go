@@ -1,19 +1,18 @@
 package cohere
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -56,12 +55,13 @@ func requestOpenAI2Cohere(textRequest dto.GeneralOpenAIRequest) *CohereRequest {
 }
 
 func requestConvertRerank2Cohere(rerankRequest dto.RerankRequest) *CohereRerankRequest {
+	query, _ := rerankRequest.Query.(string)
 	topN := lo.FromPtrOr(rerankRequest.TopN, 1)
 	if topN <= 0 {
 		topN = 1
 	}
 	cohereReq := CohereRerankRequest{
-		Query:           rerankRequest.Query,
+		Query:           query,
 		Documents:       rerankRequest.Documents,
 		Model:           rerankRequest.Model,
 		TopN:            topN,
@@ -86,7 +86,7 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	createdTime := common.GetTimestamp()
 	usage := &dto.Usage{}
 	responseText := ""
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
@@ -105,6 +105,9 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		for scanner.Scan() {
 			data := scanner.Text()
 			dataChan <- data
+		}
+		if err := scanner.Err(); err != nil {
+			common.SysLog("error reading stream: " + err.Error())
 		}
 		stopChan <- true
 	}()

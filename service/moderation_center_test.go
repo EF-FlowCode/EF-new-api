@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 )
 
 func TestBuildModerationRequestEmitsMultiModalArray(t *testing.T) {
@@ -220,7 +221,7 @@ func TestExtractLastMessagePayloadOpenAIMultiModal(t *testing.T) {
 
 func TestExtractLastMessagePayloadClaude(t *testing.T) {
 	req := &dto.ClaudeRequest{
-		System:   "You are helpful.",
+		System: "You are helpful.",
 		Messages: []dto.ClaudeMessage{
 			{Role: "user", Content: "first question"},
 			{Role: "assistant", Content: "first answer"},
@@ -256,6 +257,7 @@ func TestExtractLastMessagePayloadEmptyMessages(t *testing.T) {
 // already full, pushing a third event drops the OLDEST while preserving
 // the newest. This is the inverse of stdlib select-default ("drop new").
 func TestRingBufferDropsOldestWhenFull(t *testing.T) {
+	baseline := drainpool.Pending()
 	m := &moderationCenter{queue: make(chan *moderationEvent, 2)}
 	a := &moderationEvent{RequestID: "a", Group: "vip"}
 	b := &moderationEvent{RequestID: "b", Group: "vip"}
@@ -263,13 +265,23 @@ func TestRingBufferDropsOldestWhenFull(t *testing.T) {
 	m.enqueue(a)
 	m.enqueue(b)
 	m.enqueue(c) // ring drop: a evicted, b+c remain
+	if drainpool.Pending() != baseline+2 {
+		t.Fatal("drain count must exclude evicted events")
+	}
 	if got := <-m.queue; got.RequestID != "b" {
 		t.Fatalf("expected oldest survivor 'b', got %q", got.RequestID)
+	} else {
+		got.drainDone()
 	}
 	if got := <-m.queue; got.RequestID != "c" {
 		t.Fatalf("expected newest 'c' to survive, got %q", got.RequestID)
+	} else {
+		got.drainDone()
 	}
 	if m.dropCount.Load() == 0 {
 		t.Fatal("dropCount should reflect the discarded oldest event")
+	}
+	if drainpool.Pending() != baseline {
+		t.Fatal("completed events remain pending")
 	}
 }

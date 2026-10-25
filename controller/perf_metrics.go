@@ -3,9 +3,13 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/model"
+	perfmetrics "eflow.local/new-api/pkg/perf_metrics"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -65,7 +69,7 @@ func GetPerfMetrics(c *gin.Context) {
 		return
 	}
 
-	result.Groups = filterActiveGroups(result.Groups)
+	result.Groups = filterPerfGroupsForUser(c, result.Groups)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -73,10 +77,32 @@ func GetPerfMetrics(c *gin.Context) {
 	})
 }
 
-func filterActiveGroups(groups []perfmetrics.GroupResult) []perfmetrics.GroupResult {
-	activeRatios := ratio_setting.GetGroupRatioCopy()
+// filterPerfGroupsForUser keeps performance data aligned with the groups the
+// requesting user can actually use. Global ratio configuration alone is not an
+// authorization check and would expose private groups such as work_china.
+func filterPerfGroupsForUser(c *gin.Context, groups []perfmetrics.GroupResult) []perfmetrics.GroupResult {
+	userGroup := ""
+	var additionalTiers []string
+	if rawID, ok := c.Get("id"); ok {
+		if user, err := model.GetUserCache(rawID.(int)); err == nil {
+			userGroup = user.Group
+			additionalTiers = user.AdditionalCustomerTiers.Values()
+		}
+	}
+	usable := service.GetUserEffectiveGroups(userGroup, additionalTiers)
+	region := strings.ToUpper(strings.TrimSpace(c.GetHeader("CF-IPCountry")))
+	if _, matched := operation_setting.GetWebGroupSetting().GetRegionRule(region); matched {
+		for group := range usable {
+			if !operation_setting.GetWebGroupSetting().IsGroupAvailable(region, group) {
+				delete(usable, group)
+			}
+		}
+	}
 	return lo.Filter(groups, func(g perfmetrics.GroupResult, _ int) bool {
-		_, ok := activeRatios[g.Group]
-		return ok || g.Group == "auto"
+		if g.Group == "auto" {
+			return true
+		}
+		_, ok := usable[g.Group]
+		return ok
 	})
 }

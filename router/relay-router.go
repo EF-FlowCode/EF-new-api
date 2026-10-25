@@ -1,11 +1,13 @@
 package router
 
 import (
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/types"
+	"strings"
+
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/controller"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/relay"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -15,6 +17,7 @@ func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.DecompressRequestMiddleware())
 	router.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	router.Use(middleware.StatsMiddleware())
+	SetTaskRouter(router)
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := router.Group("/v1/models")
 	modelsRouter.Use(middleware.RouteTag("relay"))
@@ -25,7 +28,7 @@ func SetRelayRouter(router *gin.Engine) {
 			case c.GetHeader("x-api-key") != "" && c.GetHeader("anthropic-version") != "":
 				controller.ListModels(c, constant.ChannelTypeAnthropic)
 			case c.GetHeader("x-goog-api-key") != "" || c.Query("key") != "": // 单独的适配
-				controller.RetrieveModel(c, constant.ChannelTypeGemini)
+				controller.ListModels(c, constant.ChannelTypeGemini)
 			default:
 				controller.ListModels(c, constant.ChannelTypeOpenAI)
 			}
@@ -71,6 +74,24 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
+	// Polling a background response neither selects a channel nor starts paid
+	// work, so like GET /v1/tasks/:key it must not spend model request/success
+	// allowance. Ownership is still enforced by the token user in PublicTask.
+	taskQuery := router.Group("/v1", middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth(), middleware.TaskQueryRateLimit())
+	taskQuery.GET("/responses/:response_id", controller.RetrievePublicTaskResponse)
+	taskQuery.GET("/responses/:response_id/content/:artifact_key", controller.RetrievePublicTaskContent)
+	// File access is owner-scoped and does not select a model/channel. Batch
+	// creation resolves the model from the owned file before normal routing.
+	relayV1Router.POST("/files", controller.UploadKnowledgeFile)
+	relayV1Router.POST("/batches", controller.PrepareKnowledgeBatch, middleware.Distribute(), controller.CreateKnowledgeBatch)
+	batchAccess := router.Group("/v1", middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.KnowledgeTaskAccessAuth(), middleware.ModelRequestRateLimit())
+	batchAccess.GET("/files", controller.ListKnowledgeFiles)
+	batchAccess.GET("/files/:id", controller.RetrieveKnowledgeFile)
+	batchAccess.GET("/files/:id/content", controller.DownloadKnowledgeFile)
+	batchAccess.DELETE("/files/:id", controller.DeleteKnowledgeFile)
+	batchAccess.GET("/batches", controller.ListKnowledgeBatches)
+	batchAccess.GET("/batches/:id", controller.RetrieveKnowledgeBatch)
+	batchAccess.POST("/batches/:id/cancel", controller.CancelKnowledgeBatch)
 	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
@@ -82,7 +103,7 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		//http router
 		httpRouter := relayV1Router.Group("")
-		httpRouter.Use(middleware.Distribute())
+		httpRouter.Use(middleware.PinTaskPublicProtocol(), middleware.Distribute())
 
 		// claude related routes
 		httpRouter.POST("/messages", func(c *gin.Context) {
@@ -98,9 +119,7 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 
 		// response related routes
-		httpRouter.POST("/responses", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIResponses)
-		})
+		httpRouter.POST("/responses", controller.RelayPublicResponses)
 		httpRouter.POST("/responses/compact", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIResponsesCompaction)
 		})
@@ -152,11 +171,6 @@ func SetRelayRouter(router *gin.Engine) {
 
 		// not implemented
 		httpRouter.POST("/images/variations", controller.RelayNotImplemented)
-		httpRouter.GET("/files", controller.RelayNotImplemented)
-		httpRouter.POST("/files", controller.RelayNotImplemented)
-		httpRouter.DELETE("/files/:id", controller.RelayNotImplemented)
-		httpRouter.GET("/files/:id", controller.RelayNotImplemented)
-		httpRouter.GET("/files/:id/content", controller.RelayNotImplemented)
 		httpRouter.POST("/fine-tunes", controller.RelayNotImplemented)
 		httpRouter.GET("/fine-tunes", controller.RelayNotImplemented)
 		httpRouter.GET("/fine-tunes/:id", controller.RelayNotImplemented)
@@ -179,14 +193,25 @@ func SetRelayRouter(router *gin.Engine) {
 	relaySunoRouter := router.Group("/suno")
 	relaySunoRouter.Use(middleware.RouteTag("relay"))
 	relaySunoRouter.Use(middleware.SystemPerformanceCheck())
-	relaySunoRouter.Use(middleware.TokenAuth(), middleware.Distribute())
+	relaySunoRouter.Use(middleware.TokenAuth())
 	{
-		relaySunoRouter.POST("/submit/:action", controller.RelayTask)
-		relaySunoRouter.POST("/fetch", controller.RelayTaskFetch)
-		relaySunoRouter.GET("/fetch/:id", controller.RelayTaskFetch)
+		relaySunoRouter.POST("/submit/:action", middleware.PinNativeTask(), middleware.Distribute(), middleware.ModelRequestRateLimit(), controller.RelayNativeTask)
+		// Keep owner-aware reads of legacy Suno tasks, including rows created
+		// before source identities existed. No new supplier request is admitted.
+		relaySunoRouter.POST("/fetch", middleware.Distribute(), controller.RelayTaskFetch)
+		relaySunoRouter.GET("/fetch/:id", middleware.Distribute(), controller.RelayTaskFetch)
 	}
 
 	relayGeminiRouter := router.Group("/v1beta")
+	// :countTokens is not implemented. Answer it like an unregistered route
+	// before auth/channel selection instead of silently relaying it as
+	// generateContent (#7283).
+	relayGeminiRouter.Use(func(c *gin.Context) {
+		if strings.HasSuffix(c.Request.URL.Path, ":countTokens") {
+			controller.RelayNotFound(c)
+			c.Abort()
+		}
+	})
 	relayGeminiRouter.Use(middleware.RouteTag("relay"))
 	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
 	relayGeminiRouter.Use(middleware.TokenAuth())

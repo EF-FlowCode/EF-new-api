@@ -232,6 +232,7 @@ export function DeploymentsTable() {
       <div className='space-y-3 sm:space-y-4'>
         <DataTableToolbar
           table={table}
+          searchMode='manual'
           searchPlaceholder={t('Search deployments...')}
           filters={[
             {

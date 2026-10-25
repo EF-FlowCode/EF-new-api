@@ -37,11 +37,23 @@
           "id": "stream_fixed_msg_0",
           "status": "in_progress",
           "role": "assistant",
-          "content": [],
-          "quality": "",
-          "size": ""
+          "content": []
         },
         "output_index": 0
+      }
+    },
+    {
+      "Type": "response.content_part.added",
+      "Payload": {
+        "type": "response.content_part.added",
+        "output_index": 0,
+        "content_index": 0,
+        "item_id": "stream_fixed_msg_0",
+        "part": {
+          "type": "output_text",
+          "text": "",
+          "annotations": []
+        }
       }
     },
     {
@@ -74,6 +86,20 @@
       }
     },
     {
+      "Type": "response.content_part.done",
+      "Payload": {
+        "type": "response.content_part.done",
+        "output_index": 0,
+        "content_index": 0,
+        "item_id": "stream_fixed_msg_0",
+        "part": {
+          "type": "output_text",
+          "text": "Hello world",
+          "annotations": []
+        }
+      }
+    },
+    {
       "Type": "response.output_item.done",
       "Payload": {
         "type": "response.output_item.done",
@@ -88,9 +114,7 @@
               "text": "Hello world",
               "annotations": []
             }
-          ],
-          "quality": "",
-          "size": ""
+          ]
         },
         "output_index": 0
       }
@@ -119,9 +143,7 @@
                   "text": "Hello world",
                   "annotations": []
                 }
-              ],
-              "quality": "",
-              "size": ""
+              ]
             }
           ],
           "parallel_tool_calls": false,
@@ -137,21 +159,6 @@
             "prompt_tokens": 4,
             "completion_tokens": 2,
             "total_tokens": 6,
-            "billing_usage": {
-              "source": "gemini_chat",
-              "semantic": "gemini",
-              "gemini_usage_metadata": {
-                "promptTokenCount": 4,
-                "toolUsePromptTokenCount": 0,
-                "candidatesTokenCount": 2,
-                "totalTokenCount": 6,
-                "thoughtsTokenCount": 0,
-                "cachedContentTokenCount": 0,
-                "promptTokensDetails": [],
-                "toolUsePromptTokensDetails": [],
-                "candidatesTokensDetails": []
-              }
-            },
             "prompt_tokens_details": {
               "cached_tokens": 0,
               "text_tokens": 0,
@@ -185,21 +192,6 @@
     "prompt_tokens": 4,
     "completion_tokens": 2,
     "total_tokens": 6,
-    "billing_usage": {
-      "source": "gemini_chat",
-      "semantic": "gemini",
-      "gemini_usage_metadata": {
-        "promptTokenCount": 4,
-        "toolUsePromptTokenCount": 0,
-        "candidatesTokenCount": 2,
-        "totalTokenCount": 6,
-        "thoughtsTokenCount": 0,
-        "cachedContentTokenCount": 0,
-        "promptTokensDetails": [],
-        "toolUsePromptTokensDetails": [],
-        "candidatesTokensDetails": []
-      }
-    },
     "prompt_tokens_details": {
       "cached_tokens": 0,
       "text_tokens": 0,

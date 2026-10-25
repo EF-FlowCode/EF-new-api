@@ -128,16 +128,18 @@ docker-compose up -d
 # 拉取最新镜像
 docker pull calciumion/new-api:latest
 
-# 使用 MySQL 8.0+（必需）
+# 仅支持 MySQL 8
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
-> **💡 提示：** `-v ./data:/data` 会将数据保存在当前目录的 `data` 文件夹中，你也可以改为绝对路径如 `-v /your/custom/path:/data`
+> **MySQL：** 请将 `mysql-host` 替换为容器可访问的 MySQL 8.x 主机名或 IP；不要使用 `localhost`，它指向 New API 容器自身。
+>
+> **本地文件：** `-v ./data:/data` 只持久化上传文件和其他本地运行文件；账号、配置和计费数据保存在 MySQL 中。
 
 </details>
 
@@ -168,6 +170,7 @@ docker run --name new-api -d --restart always \
 | ⚙️ 环境配置 | [环境变量](https://docs.newapi.pro/zh/docs/installation/config-maintenance/environment-variables) |
 | 📡 接口文档 | [API 文档](https://docs.newapi.pro/zh/docs/api) |
 | ❓ 常见问题 | [FAQ](https://docs.newapi.pro/zh/docs/support/faq) |
+| 📬 邮件投递 | [邮件格式、局部验证与投递排查](docs/guides/email-delivery.md) |
 | 💬 社区交流 | [交流渠道](https://docs.newapi.pro/zh/docs/support/community-interaction) |
 
 ---
@@ -182,7 +185,7 @@ docker run --name new-api -d --restart always \
 |------|------|
 | 🎨 全新 UI | 现代化的用户界面设计 |
 | 🌍 多语言 | 支持中文、英文、法语、日语 |
-| 🔄 数据兼容 | 完全兼容原版 One API 数据库 |
+| 🔄 数据兼容 | 支持 MySQL 8.x 上的原版 One API 表结构；其他数据库需要外部迁移 |
 | 📈 数据看板 | 可视化控制台与统计分析 |
 | 🔒 权限管理 | 令牌分组、模型限制、用户管理 |
 
@@ -200,6 +203,8 @@ docker run --name new-api -d --restart always \
 - 📱 Telegram 授权登录
 - 🔑 OIDC 统一认证
 - 🔍 Key 查询使用额度（配合 [new-api-key-tool](https://github.com/Calcium-Ion/new-api-key-tool)）
+
+标准 OAuth 登录（GitHub、Discord、OIDC、LinuxDO 及自定义提供商）的初始化接口 `/api/oauth/state` 和统一回调接口 `/api/oauth/:provider` 不使用 `CriticalRateLimit`，避免共享代理 IP 的访客互相阻断登录。OAuth state 会话校验和提供商验证继续生效；密码登录、注册、验证码及独立的微信/Telegram 接口保留各自的限流。若显式启用全局 API 限流，OAuth 接口仍受该全局策略约束。
 
 ### 🚀 高级功能
 
@@ -294,7 +299,7 @@ docker run --name new-api -d --restart always \
 
 | 组件 | 要求 |
 |------|------|
-| **数据库** | MySQL 8.0+（必须设置 `SQL_DSN`） |
+| **数据库** | MySQL 8.x |
 | **容器引擎** | Docker / Docker Compose |
 
 ### ⚙️ 环境变量配置
@@ -306,7 +311,7 @@ docker run --name new-api -d --restart always \
 |--------|--------------------------------------------------------------|--------|
 | `SESSION_SECRET` | 会话密钥（多机部署必须）                                                 | - |
 | `CRYPTO_SECRET` | 加密密钥（Redis 必须）                                               | - |
-| `SQL_DSN` | MySQL 8.0+ 连接字符串（必填）                                        | - |
+| `SQL_DSN` | MySQL 8 数据库连接字符串                                               | 必填 |
 | `REDIS_CONN_STRING` | Redis 连接字符串                                                  | - |
 | `STREAMING_TIMEOUT` | 流式超时时间（秒）                                                    | `300` |
 | `STREAM_SCANNER_MAX_BUFFER_MB` | 流式扫描器单行最大缓冲（MB），图像生成等超大 `data:` 片段（如 4K 图片 base64）需适当调大 | `64` |
@@ -347,18 +352,19 @@ docker-compose up -d
 <details>
 <summary><strong>方式 2：Docker 命令</strong></summary>
 
-**使用 MySQL 8.0+：**
+**使用 MySQL 8：**
 ```bash
 docker run --name new-api -d --restart always \
   -p 3000:3000 \
-  -e SQL_DSN="user:password@tcp(mysql-host:3306)/new-api?charset=utf8mb4&parseTime=True&loc=Local" \
+  -e SQL_DSN="root:replace_me@tcp(mysql-host:3306)/oneapi?charset=utf8mb4&parseTime=True&loc=Local" \
   -e TZ=Asia/Shanghai \
   -v ./data:/data \
   calciumion/new-api:latest
 ```
 
 > **💡 路径说明：**
-> - `./data:/data` - 相对路径，数据保存在当前目录的 data 文件夹
+> - 将 `mysql-host` 替换为容器可访问的 MySQL 8.x 地址；容器内的 `localhost` 不是数据库主机
+> - `./data:/data` - 持久化本地上传和运行文件；数据库数据仍保存在 MySQL 中
 > - 也可使用绝对路径，如：`/your/custom/path:/data`
 
 </details>
@@ -370,7 +376,7 @@ docker run --name new-api -d --restart always \
 2. 在应用商店搜索 **New-API**
 3. 一键安装
 
-📖 [图文教程](./docs/installation/BT.md)
+📖 [图文教程](docs/operations/bt-installation.md)
 
 </details>
 
@@ -461,3 +467,5 @@ docker run --name new-api -d --restart always \
 <sub>Built with ❤️ by QuantumNous</sub>
 
 </div>
+
+[eflow 分支文档导航](docs/README.md)

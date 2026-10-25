@@ -8,13 +8,13 @@ import (
 	"sync"
 
 	"context"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	claudemessages "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/claude_messages"
-	geminichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/gemini_chat"
-	oaichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_chat"
-	oairesponses "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_responses"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	claudemessages "eflow.local/new-api/relaykit/relayconvert/internal/claude_messages"
+	geminichat "eflow.local/new-api/relaykit/relayconvert/internal/gemini_chat"
+	oaichat "eflow.local/new-api/relaykit/relayconvert/internal/oai_chat"
+	oairesponses "eflow.local/new-api/relaykit/relayconvert/internal/oai_responses"
+	"eflow.local/new-api/relaykit/types"
 )
 
 type RequestConverterFunc func(c context.Context, info convmeta.Meta, request any) (any, error)
@@ -237,13 +237,23 @@ func executeRequestSpec(c context.Context, info convmeta.Meta, from types.RelayF
 
 func executeRequestSteps(c context.Context, info convmeta.Meta, from types.RelayFormat, target types.RelayFormat, request any, converter string, quality RequestConverterQuality, specs []RequestConverterSpec) (*RequestResult, error) {
 	current := request
-	steps := make([]RequestStep, 0, len(specs))
-	for _, spec := range specs {
-		var err error
-		current, err = prepareRequestForStep(current, spec, target)
+	var responseTools *convmeta.ResponsesToolState
+	if from == types.RelayFormatOpenAIResponses && target != from {
+		convmeta.SetResponsesTools(info, nil)
+		original, err := oairesponses.OpenAIResponsesRequestFromAny(request)
 		if err != nil {
 			return nil, err
 		}
+		prepared, tools, err := oairesponses.PrepareCustomTools(original)
+		if err != nil {
+			return nil, err
+		}
+		responseTools = tools
+		current = prepared
+	}
+	steps := make([]RequestStep, 0, len(specs))
+	for _, spec := range specs {
+		var err error
 
 		var step RequestStep
 		current, step, err = executeRequestStep(c, info, spec, current)
@@ -251,6 +261,9 @@ func executeRequestSteps(c context.Context, info convmeta.Meta, from types.Relay
 			return nil, err
 		}
 		steps = append(steps, step)
+	}
+	if from == types.RelayFormatOpenAIResponses && target != from {
+		convmeta.SetResponsesTools(info, responseTools)
 	}
 
 	converters := make([]string, 0, len(steps))
@@ -320,28 +333,6 @@ func executeRequestStep(c context.Context, info convmeta.Meta, spec RequestConve
 		From:      spec.From,
 		To:        spec.To,
 	}, nil
-}
-
-func prepareRequestForStep(request any, spec RequestConverterSpec, finalTarget types.RelayFormat) (any, error) {
-	if spec.From != types.RelayFormatOpenAIResponses || finalTarget != types.RelayFormatGemini {
-		return request, nil
-	}
-
-	responsesRequest, ok := request.(*dto.OpenAIResponsesRequest)
-	if !ok {
-		if value, ok := request.(dto.OpenAIResponsesRequest); ok {
-			responsesRequest = &value
-		}
-	}
-	if responsesRequest == nil {
-		return nil, fmt.Errorf("expected OpenAI responses request, got %T", request)
-	}
-
-	prepared, err := oairesponses.PrepareOpenAIResponsesRequest(*responsesRequest)
-	if err != nil {
-		return nil, err
-	}
-	return &prepared, nil
 }
 
 func lookupRequestRoute(from types.RelayFormat, to types.RelayFormat) (RequestConverterSpec, bool) {
@@ -478,11 +469,7 @@ func convertOpenAIResponsesRequestToGeminiChat(c context.Context, info convmeta.
 		return nil, err
 	}
 
-	prepared, err := oairesponses.PrepareOpenAIResponsesRequest(*responsesRequest)
-	if err != nil {
-		return nil, err
-	}
-	return oairesponses.OpenAIResponsesRequestToGeminiChat(c, &prepared, info)
+	return oairesponses.OpenAIResponsesRequestToGeminiChat(c, responsesRequest, info)
 }
 
 func convertResponsesRequestToChat(_ context.Context, _ convmeta.Meta, request any) (any, error) {

@@ -1,10 +1,10 @@
 package controller
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,6 +30,8 @@ func GetSubscription(c *gin.Context) {
 	}
 	quota := remainQuota + usedQuota
 	amount := float64(quota)
+	quotaPerUnit := common.GetQuotaPerUnit()
+	epayConfig := operation_setting.GetEpayConfig()
 	// OpenAI 兼容接口中的 *_USD 字段含义保持“额度单位”对应值：
 	// 我们将其解释为以“站点展示类型”为准：
 	// - USD: 直接除以 QuotaPerUnit
@@ -37,11 +39,11 @@ func GetSubscription(c *gin.Context) {
 	// - TOKENS: 直接使用 tokens 数量
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		amount = amount / quotaPerUnit * epayConfig.USDExchangeRate
 	case operation_setting.QuotaDisplayTypeTokens:
 		// amount 保持 tokens 数值
 	default:
-		amount = amount / common.QuotaPerUnit
+		amount = amount / quotaPerUnit
 	}
 	subscription := OpenAISubscriptionResponse{
 		Object:             "billing_subscription",
@@ -74,13 +76,15 @@ func GetUsage(c *gin.Context) {
 		return
 	}
 	amount := float64(quota)
+	quotaPerUnit := common.GetQuotaPerUnit()
+	epayConfig := operation_setting.GetEpayConfig()
 	switch operation_setting.GetQuotaDisplayType() {
 	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		amount = amount / quotaPerUnit * epayConfig.USDExchangeRate
 	case operation_setting.QuotaDisplayTypeTokens:
 		// tokens 保持原值
 	default:
-		amount = amount / common.QuotaPerUnit
+		amount = amount / quotaPerUnit
 	}
 	usage := OpenAIUsageResponse{
 		Object:     "list",

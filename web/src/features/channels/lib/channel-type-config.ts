@@ -116,9 +116,29 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       baseUrl: 'Default: https://api.replicate.com',
     },
   },
-  58: {
-    id: 58,
-    name: CHANNEL_TYPES[58],
+  62: {
+    id: 62,
+    name: CHANNEL_TYPES[62],
+    icon: 'Vllm',
+    hints: {
+      baseUrl: 'vLLM server address, without /v1',
+      key: 'vLLM API key, or EMPTY if authentication is disabled',
+      models: 'Models fetched from upstream /v1/models',
+    },
+  },
+  63: {
+    id: 63,
+    name: CHANNEL_TYPES[63],
+    icon: 'SGLang',
+    hints: {
+      baseUrl: 'SGLang server address, without /v1',
+      key: 'SGLang API key, or EMPTY if authentication is disabled',
+      models: 'Models fetched from upstream /v1/models',
+    },
+  },
+  1001: {
+    id: 1001,
+    name: CHANNEL_TYPES[1001],
     icon: 'qwen',
     defaultBaseUrl: 'https://dashscope.aliyuncs.com',
     hints: {
@@ -128,9 +148,9 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       baseUrl: 'Default: https://dashscope.aliyuncs.com',
     },
   },
-  59: {
-    id: 59,
-    name: CHANNEL_TYPES[59],
+  1002: {
+    id: 1002,
+    name: CHANNEL_TYPES[1002],
     icon: 'qwen',
     defaultBaseUrl: 'https://dashscope.aliyuncs.com',
     hints: {

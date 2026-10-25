@@ -2,10 +2,11 @@ package system_setting
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/config"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/setting/config"
 )
 
 type PasskeySettings struct {
@@ -20,7 +21,7 @@ type PasskeySettings struct {
 
 var defaultPasskeySettings = PasskeySettings{
 	Enabled:              false,
-	RPDisplayName:        common.SystemName,
+	RPDisplayName:        common.GetBrandingSettings().SystemName,
 	RPID:                 "",
 	Origins:              "",
 	AllowInsecureOrigin:  false,
@@ -33,18 +34,34 @@ func init() {
 }
 
 func GetPasskeySettings() *PasskeySettings {
-	if defaultPasskeySettings.RPID == "" && ServerAddress != "" {
+	setting := config.MustSnapshot[PasskeySettings]("passkey")
+	serverAddress := GetServerAddress()
+	if setting.RPID == "" && serverAddress != "" {
 		// 从ServerAddress提取域名作为RPID
 		// ServerAddress可能是 "https://newapi.pro" 这种格式
-		serverAddr := strings.TrimSpace(ServerAddress)
+		serverAddr := strings.TrimSpace(serverAddress)
 		if parsed, err := url.Parse(serverAddr); err == nil && parsed.Host != "" {
-			defaultPasskeySettings.RPID = parsed.Host
+			setting.RPID = parsed.Host
 		} else {
-			defaultPasskeySettings.RPID = serverAddr
+			setting.RPID = serverAddr
 		}
 	}
-	if defaultPasskeySettings.Origins == "" || defaultPasskeySettings.Origins == "[]" {
-		defaultPasskeySettings.Origins = ServerAddress
+	if setting.Origins == "" || setting.Origins == "[]" {
+		setting.Origins = serverAddress
 	}
-	return &defaultPasskeySettings
+	return &setting
+}
+
+// RPIDs returns the allowed relying party IDs, primary first. eflow: rp_id may
+// list several comma-separated domains (upstream 385d2dfd1 intent); the RP ID
+// of a request is the allowed one that matches its host.
+func (s *PasskeySettings) RPIDs() []string {
+	var ids []string
+	for _, part := range strings.Split(s.RPID, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part != "" && !slices.Contains(ids, part) {
+			ids = append(ids, part)
+		}
+	}
+	return ids
 }

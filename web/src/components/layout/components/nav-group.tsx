@@ -44,8 +44,10 @@ export function NavGroup({ title, items }: NavGroupProps) {
   const href = useLocation({ select: (location) => location.href })
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{title}</SidebarGroupLabel>
+    <SidebarGroup className='py-1.5'>
+      <SidebarGroupLabel className='px-3 text-[10px] font-semibold tracking-[0.14em] uppercase'>
+        {title}
+      </SidebarGroupLabel>
       <SidebarMenu>
         {items.map((item) => {
           const key = `${item.title}-${item.url || item.type}`
@@ -98,7 +100,7 @@ function NavBadge({ children }: { children: ReactNode }) {
  * Sidebar menu link item
  */
 function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
-  const { setOpenMobile } = useSidebar()
+  const { isMobile, setOpenMobile } = useSidebar()
   // eflow: 外链（如文档站）渲染为普通 <a>，避免 TanStack <Link> 拦截
   if (item.external) {
     return (
@@ -125,7 +127,11 @@ function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
         isActive={checkIsActive(href, item)}
         tooltip={item.title}
       >
-        <Link to={item.url} onClick={() => setOpenMobile(false)}>
+        <Link
+          to={item.url}
+          preload={isMobile ? false : undefined}
+          onClick={() => setOpenMobile(false)}
+        >
           {item.icon && <item.icon />}
           <span>{item.title}</span>
           {item.badge && <NavBadge>{item.badge}</NavBadge>}
@@ -145,7 +151,7 @@ function SidebarMenuCollapsible({
   item: NavCollapsible
   href: string
 }) {
-  const { setOpenMobile } = useSidebar()
+  const { isMobile, setOpenMobile } = useSidebar()
   // 检查当前路径是否匹配子菜单项
   const isSubItemActive = checkIsActive(href, item)
   // 使用受控状态，初始值基于当前路径是否匹配
@@ -183,7 +189,11 @@ function SidebarMenuCollapsible({
                   asChild
                   isActive={checkIsActive(href, subItem)}
                 >
-                  <Link to={subItem.url} onClick={() => setOpenMobile(false)}>
+                  <Link
+                    to={subItem.url}
+                    preload={isMobile ? false : undefined}
+                    onClick={() => setOpenMobile(false)}
+                  >
                     {subItem.icon && <subItem.icon />}
                     <span>{subItem.title}</span>
                     {subItem.badge && <NavBadge>{subItem.badge}</NavBadge>}

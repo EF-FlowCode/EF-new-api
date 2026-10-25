@@ -1,4 +1,10 @@
 import { BILLING_CACHE_VAR_MAP } from './billing-expr'
+import {
+  expressionAmount,
+  expressionVersion,
+  legacyExpressionView,
+  toAmountExpression,
+} from './expression-units'
 
 export const CACHE_MODE_TIMED = 'timed'
 export const CACHE_MODE_GENERIC = 'generic'
@@ -110,6 +116,12 @@ function buildTierBodyExpr(tier: VisualTier): string {
 export function generateExprFromVisualConfig(
   config: VisualConfig | null | undefined
 ): string {
+  return toAmountExpression(generateLegacyExprFromVisualConfig(config))
+}
+
+function generateLegacyExprFromVisualConfig(
+  config: VisualConfig | null | undefined
+): string {
   if (!config || !config.tiers || config.tiers.length === 0) {
     return 'p * 0 + c * 0'
   }
@@ -151,9 +163,8 @@ export function tryParseVisualConfig(
   // expression isn't silently rewritten.
   if (/\bparam\s*\(/.test(exprStr)) return null
   try {
-    let body = exprStr
-    const versionMatch = body.match(/^v\d+:([\s\S]*)$/)
-    if (versionMatch) body = versionMatch[1]
+    const body = legacyExpressionView(exprStr)
+    if (body === null) return null
     const cacheVarNames = BILLING_CACHE_VAR_MAP.map((cv) => cv.exprVar)
     const optCacheStr = cacheVarNames
       .map((v) => `(?:\\s*\\+\\s*${v}\\s*\\*\\s*([\\d.eE+-]+))?`)
@@ -219,7 +230,7 @@ export function tryParseVisualConfig(
     if (tiers.length === 0) return null
 
     const cfg = normalizeVisualConfig({ tiers })
-    const regenerated = generateExprFromVisualConfig(cfg)
+    const regenerated = generateLegacyExprFromVisualConfig(cfg)
     if (regenerated.replace(/\s+/g, '') !== body.replace(/\s+/g, '')) {
       return null
     }
@@ -288,11 +299,14 @@ export function evalExprLocally(
     for (const field of ESTIMATOR_VARS) {
       env[field.var] = extraTokenValues[field.stateKey] || 0
     }
+    const { version, body } = expressionVersion(exprStr)
     const fn = new Function(
       ...Object.keys(env),
-      `"use strict"; return (${exprStr});`
+      `"use strict"; return (${body});`
     )
-    const cost = Number(fn(...Object.values(env))) || 0
+    const cost = expressionAmount(Number(fn(...Object.values(env))), version)
+    if (!Number.isFinite(cost) || cost < 0)
+      throw new Error('Invalid billing amount')
     return { cost, matchedTier, error: null }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)

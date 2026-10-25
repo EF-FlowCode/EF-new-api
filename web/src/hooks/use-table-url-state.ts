@@ -1,9 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   ColumnFiltersState,
   OnChangeFn,
   PaginationState,
 } from '@tanstack/react-table'
+import {
+  getOutOfRangePagePatch,
+  getServerPaginationSearchPatch,
+  readServerPagination,
+  resolveServerPaginationConfig,
+  type ServerPaginationConfig,
+} from '@/components/data-table/server-pagination-state'
 
 type SearchRecord = Record<string, unknown>
 
@@ -18,12 +25,7 @@ export type NavigateFn = (opts: {
 type UseTableUrlStateParams = {
   search: SearchRecord
   navigate: NavigateFn
-  pagination?: {
-    pageKey?: string
-    pageSizeKey?: string
-    defaultPage?: number
-    defaultPageSize?: number
-  }
+  pagination?: ServerPaginationConfig
   globalFilter?: {
     enabled?: boolean
     key?: string
@@ -76,10 +78,20 @@ export function useTableUrlState(
     columnFilters: columnFiltersCfg = [],
   } = params
 
-  const pageKey = paginationCfg?.pageKey ?? ('page' as string)
-  const pageSizeKey = paginationCfg?.pageSizeKey ?? ('pageSize' as string)
+  const pageKey = paginationCfg?.pageKey ?? 'page'
+  const pageSizeKey = paginationCfg?.pageSizeKey ?? 'pageSize'
   const defaultPage = paginationCfg?.defaultPage ?? 1
   const defaultPageSize = paginationCfg?.defaultPageSize ?? 20
+  const resolvedPaginationCfg = useMemo(
+    () =>
+      resolveServerPaginationConfig({
+        pageKey,
+        pageSizeKey,
+        defaultPage,
+        defaultPageSize,
+      }),
+    [pageKey, pageSizeKey, defaultPage, defaultPageSize]
+  )
 
   const globalFilterKey = globalFilterCfg?.key ?? ('filter' as string)
   const globalFilterEnabled = globalFilterCfg?.enabled ?? true
@@ -117,24 +129,15 @@ export function useTableUrlState(
   }, [search])
 
   const pagination: PaginationState = useMemo(() => {
-    const rawPage = (search as SearchRecord)[pageKey]
-    const rawPageSize = (search as SearchRecord)[pageSizeKey]
-    const pageNum = typeof rawPage === 'number' ? rawPage : defaultPage
-    const pageSizeNum =
-      typeof rawPageSize === 'number' ? rawPageSize : defaultPageSize
-    return { pageIndex: Math.max(0, pageNum - 1), pageSize: pageSizeNum }
-  }, [search, pageKey, pageSizeKey, defaultPage, defaultPageSize])
+    return readServerPagination(search, resolvedPaginationCfg)
+  }, [search, resolvedPaginationCfg])
 
   const onPaginationChange: OnChangeFn<PaginationState> = (updater) => {
     const next = typeof updater === 'function' ? updater(pagination) : updater
-    const nextPage = next.pageIndex + 1
-    const nextPageSize = next.pageSize
     navigate({
       search: (prev) => ({
         ...(prev as SearchRecord),
-        [pageKey]: nextPage <= defaultPage ? undefined : nextPage,
-        [pageSizeKey]:
-          nextPageSize === defaultPageSize ? undefined : nextPageSize,
+        ...getServerPaginationSearchPatch(next, resolvedPaginationCfg),
       }),
     })
   }
@@ -144,6 +147,15 @@ export function useTableUrlState(
     const raw = (search as SearchRecord)[globalFilterKey]
     return typeof raw === 'string' ? raw : ''
   })
+
+  // Keep browser back/forward navigation and direct URL changes in sync with
+  // the table state. Without this, a committed manual search can be visually
+  // stale after navigating back to a previous query.
+  useEffect(() => {
+    if (!globalFilterEnabled) return
+    const raw = (search as SearchRecord)[globalFilterKey]
+    setGlobalFilter(typeof raw === 'string' ? raw : '')
+  }, [globalFilterEnabled, globalFilterKey, search])
 
   const onGlobalFilterChange: OnChangeFn<string> | undefined =
     globalFilterEnabled
@@ -196,22 +208,29 @@ export function useTableUrlState(
     })
   }
 
-  const ensurePageInRange = (
-    pageCount: number,
-    opts: { resetTo?: 'first' | 'last' } = { resetTo: 'first' }
-  ) => {
-    const currentPage = (search as SearchRecord)[pageKey]
-    const pageNum = typeof currentPage === 'number' ? currentPage : defaultPage
-    if (pageCount > 0 && pageNum > pageCount) {
-      navigate({
-        replace: true,
-        search: (prev) => ({
-          ...(prev as SearchRecord),
-          [pageKey]: opts.resetTo === 'last' ? pageCount : undefined,
-        }),
-      })
-    }
-  }
+  const ensurePageInRange = useCallback(
+    (
+      pageCount: number,
+      opts: { resetTo?: 'first' | 'last' } = { resetTo: 'first' }
+    ) => {
+      const patch = getOutOfRangePagePatch(
+        search,
+        pageCount,
+        resolvedPaginationCfg,
+        opts.resetTo
+      )
+      if (patch) {
+        navigate({
+          replace: true,
+          search: (prev) => ({
+            ...(prev as SearchRecord),
+            ...patch,
+          }),
+        })
+      }
+    },
+    [navigate, resolvedPaginationCfg, search]
+  )
 
   return {
     globalFilter: globalFilterEnabled ? (globalFilter ?? '') : undefined,

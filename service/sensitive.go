@@ -4,14 +4,15 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/setting"
 )
 
 func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
+	settings := setting.GetSensitiveSettings()
 
 	for _, message := range messages {
 		arrayContent := message.ParseContent()
@@ -24,7 +25,7 @@ func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
 			if m.Text == "" {
 				continue
 			}
-			if ok, words := SensitiveWordContains(m.Text); ok {
+			if ok, words := sensitiveWordContains(m.Text, settings.Words); ok {
 				return words, errors.New("sensitive words detected")
 			}
 		}
@@ -33,28 +34,42 @@ func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
 }
 
 func CheckSensitiveText(text string) (bool, []string) {
-	return SensitiveWordContains(text)
+	return CheckSensitiveTextWithSettings(text, setting.GetSensitiveSettings())
+}
+
+// CheckSensitiveTextWithSettings keeps the enablement decision and dictionary
+// on the same runtime version for request paths that already hold a snapshot.
+func CheckSensitiveTextWithSettings(text string, settings setting.SensitiveSettings) (bool, []string) {
+	if !settings.ShouldCheckPrompt() {
+		return false, nil
+	}
+	return sensitiveWordContains(text, settings.Words)
 }
 
 // SensitiveWordContains 是否包含敏感词，返回是否包含敏感词和敏感词列表
 func SensitiveWordContains(text string) (bool, []string) {
-	if len(setting.SensitiveWords) == 0 {
+	return sensitiveWordContains(text, setting.GetSensitiveSettings().Words)
+}
+
+func sensitiveWordContains(text string, words []string) (bool, []string) {
+	if len(words) == 0 {
 		return false, nil
 	}
 	if len(text) == 0 {
 		return false, nil
 	}
 	checkText := strings.ToLower(text)
-	return AcSearch(checkText, setting.SensitiveWords, true)
+	return AcSearch(checkText, words, true)
 }
 
 // SensitiveWordReplace 敏感词替换，返回是否包含敏感词和替换后的文本
 func SensitiveWordReplace(text string, returnImmediately bool) (bool, []string, string) {
-	if len(setting.SensitiveWords) == 0 {
+	settings := setting.GetSensitiveSettings()
+	if len(settings.Words) == 0 {
 		return false, nil, text
 	}
 	checkText := strings.ToLower(text)
-	m := getOrBuildAC(setting.SensitiveWords)
+	m := getOrBuildAC(settings.Words)
 	hits := m.MultiPatternSearch([]rune(checkText), returnImmediately)
 	if len(hits) > 0 {
 		words := make([]string, 0, len(hits))

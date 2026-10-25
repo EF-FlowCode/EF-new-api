@@ -3,32 +3,27 @@ package controller
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 func TestOAuthInvitationCodeFollowsMasterSwitch(t *testing.T) {
-	originalEnabled := common.InvitationCodeEnabled
-	originalRequired := common.InvitationCodeOAuthRequired
-	t.Cleanup(func() {
-		common.InvitationCodeEnabled = originalEnabled
-		common.InvitationCodeOAuthRequired = originalRequired
-	})
-
-	common.InvitationCodeEnabled = false
-	common.InvitationCodeOAuthRequired = true
-	if shouldValidateOAuthInvitationCode("") {
+	settings := common.AuthSettings{
+		InvitationCodeEnabled:       false,
+		InvitationCodeOAuthRequired: true,
+	}
+	if shouldValidateOAuthInvitationCode("", settings) {
 		t.Fatal("disabled invitation registration must ignore OAuth-required setting")
 	}
-	if shouldValidateOAuthInvitationCode("stale-session-code") {
+	if shouldValidateOAuthInvitationCode("stale-session-code", settings) {
 		t.Fatal("disabled invitation registration must ignore stale OAuth invitation code")
 	}
 
-	common.InvitationCodeEnabled = true
-	if !shouldValidateOAuthInvitationCode("") {
+	settings.InvitationCodeEnabled = true
+	if !shouldValidateOAuthInvitationCode("", settings) {
 		t.Fatal("enabled invitation registration must enforce OAuth-required setting")
 	}
-	common.InvitationCodeOAuthRequired = false
-	if !shouldValidateOAuthInvitationCode("provided-code") {
+	settings.InvitationCodeOAuthRequired = false
+	if !shouldValidateOAuthInvitationCode("provided-code", settings) {
 		t.Fatal("enabled invitation registration must validate a provided code")
 	}
 }

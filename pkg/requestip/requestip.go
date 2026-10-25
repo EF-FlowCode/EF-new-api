@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -180,7 +180,7 @@ func parseHeaderIP(value string) string {
 	if value == "" {
 		return ""
 	}
-	for _, segment := range strings.Split(value, ",") {
+	for segment := range strings.SplitSeq(value, ",") {
 		if ip := normalizeIPToken(segment); ip != "" {
 			return ip
 		}
@@ -211,8 +211,8 @@ func parseForwardedHeaderIP(value string) string {
 	if value == "" {
 		return ""
 	}
-	for _, entry := range strings.Split(value, ",") {
-		for _, part := range strings.Split(entry, ";") {
+	for entry := range strings.SplitSeq(value, ",") {
+		for part := range strings.SplitSeq(entry, ";") {
 			part = strings.TrimSpace(part)
 			if !strings.HasPrefix(strings.ToLower(part), "for=") {
 				continue

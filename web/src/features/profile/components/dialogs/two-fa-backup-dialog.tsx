@@ -13,9 +13,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { CopyButton } from '@/components/copy-button'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 
 // ============================================================================
 // Two-FA Backup Codes Dialog Component
@@ -34,25 +37,29 @@ export function TwoFABackupDialog({
 }: TwoFABackupDialogProps) {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
-  const [code, setCode] = useState('')
   const [backupCodes, setBackupCodes] = useState<string[]>([])
+  const verification = useSecureVerification()
 
   const handleRegenerate = async () => {
-    if (!code) {
-      toast.error(t('Please enter your verification code'))
-      return
-    }
-
-    try {
-      setLoading(true)
-      const response = await regenerate2FABackupCodes(code)
-
+    const submit = async (proof?: SecurityProof) => {
+      const response = await regenerate2FABackupCodes(proof?.proof_token)
       if (response.success && response.data?.backup_codes) {
         setBackupCodes(response.data.backup_codes)
         toast.success(t('Backup codes regenerated successfully'))
       } else {
         toast.error(response.message || t('Failed to regenerate backup codes'))
       }
+    }
+
+    try {
+      setLoading(true)
+      await verification.startVerification(submit, {
+        operation: { scope: '2fa.backup_codes.regenerate' },
+        preferredMethod: '2fa',
+        description: t(
+          'Confirm with your authenticator code; existing backup codes cannot be used here.'
+        ),
+      })
     } catch (_error) {
       toast.error(t('Failed to regenerate backup codes'))
     } finally {
@@ -68,7 +75,6 @@ export function TwoFABackupDialog({
   const handleOpenChange = (open: boolean) => {
     if (!loading) {
       if (!open) {
-        setCode('')
         setBackupCodes([])
       }
       onOpenChange(open)
@@ -100,18 +106,6 @@ export function TwoFABackupDialog({
                   )}
                 </AlertDescription>
               </Alert>
-
-              <div className='space-y-2'>
-                <Label htmlFor='code'>{t('Verification Code')}</Label>
-                <Input
-                  id='code'
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  placeholder={t('Enter authenticator code')}
-                  maxLength={6}
-                  disabled={loading}
-                />
-              </div>
             </>
           ) : (
             <>
@@ -161,7 +155,7 @@ export function TwoFABackupDialog({
               >
                 {t('Cancel')}
               </Button>
-              <Button onClick={handleRegenerate} disabled={loading || !code}>
+              <Button onClick={handleRegenerate} disabled={loading}>
                 {loading && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
                 {loading ? t('Generating...') : t('Generate New Codes')}
               </Button>
@@ -171,6 +165,7 @@ export function TwoFABackupDialog({
           )}
         </DialogFooter>
       </DialogContent>
+      <SecureVerificationDialog {...verification.dialogProps} />
     </Dialog>
   )
 }

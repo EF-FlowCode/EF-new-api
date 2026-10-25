@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -52,6 +52,15 @@ func GetEnabledModels() []string {
 	return models
 }
 
+// GetConfiguredModels returns every model offered by any channel, including
+// channels that are currently disabled. Pricing must be ready before an
+// administrator re-enables or tests such a channel.
+func GetConfiguredModels() []string {
+	var models []string
+	DB.Table("abilities").Distinct("model").Pluck("model", &models)
+	return models
+}
+
 func GetAllEnableAbilities() []Ability {
 	var abilities []Ability
 	DB.Find(&abilities, "enabled = ?", true)
@@ -59,6 +68,9 @@ func GetAllEnableAbilities() []Ability {
 }
 
 func getPriority(group string, model string, retry int) (int, error) {
+	if retry < 0 {
+		retry = 0
+	}
 
 	var priorities []int
 	err := DB.Model(&Ability{}).
@@ -89,6 +101,9 @@ func getPriority(group string, model string, retry int) (int, error) {
 }
 
 func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
+	if retry < 0 {
+		retry = 0
+	}
 	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
 	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
 	if retry != 0 {
@@ -103,15 +118,36 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int) (*Channel, error) {
+// GetChannelForRequest is the request-path-aware variant used by relay
+// selection. The optional path prevents Advanced Custom channels from being
+// selected for an endpoint they do not expose.
+func GetChannelForRequest(group string, model string, retry int, requestPath string, filters ...func(*Channel) bool) (*Channel, error) {
 	var abilities []Ability
 
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
-	if err != nil {
-		return nil, err
+	var err error
+	if strings.TrimSpace(requestPath) == "" && len(filters) == 0 {
+		// Keep the existing query for the legacy path. Besides avoiding an
+		// unnecessary full-model scan, this preserves the historical weighting
+		// and retry behavior for every channel type.
+		channelQuery, queryErr := getChannelQuery(group, model, retry)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		err = channelQuery.Order("weight DESC").Find(&abilities).Error
+	} else {
+		// A path-aware lookup must filter before choosing the retry priority.
+		// Looking up only the globally highest priority first would make an
+		// incompatible Advanced Custom channel hide a compatible lower-priority
+		// channel. Fetch all priorities in descending order, filter candidates,
+		// then apply the retry index to the remaining priorities.
+		query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+			Order("priority DESC").Order("weight DESC")
+		err = query.Find(&abilities).Error
+		if err == nil {
+			abilities = filterAbilitiesByRequestPath(abilities, requestPath, model, filters...)
+			abilities = selectAbilitiesAtRetryPriority(abilities, retry)
+		}
 	}
-	err = channelQuery.Order("weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +173,95 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+// selectAbilitiesAtRetryPriority keeps only candidates at the priority
+// represented by retry. The input is expected to be ordered by priority
+// descending, as returned by GetChannelForRequest's path-aware query.
+func selectAbilitiesAtRetryPriority(abilities []Ability, retry int) []Ability {
+	if len(abilities) == 0 {
+		return abilities
+	}
+	if retry < 0 {
+		retry = 0
+	}
+
+	priorities := make([]int64, 0, len(abilities))
+	seen := make(map[int64]struct{}, len(abilities))
+	for _, ability := range abilities {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		if _, ok := seen[priority]; ok {
+			continue
+		}
+		seen[priority] = struct{}{}
+		priorities = append(priorities, priority)
+	}
+	if len(priorities) == 0 {
+		return nil
+	}
+	if retry >= len(priorities) {
+		retry = len(priorities) - 1
+	}
+	target := priorities[retry]
+	return lo.Filter(abilities, func(ability Ability, _ int) bool {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		return priority == target
+	})
+}
+
+func filterAbilitiesByRequestPath(abilities []Ability, requestPath string, modelName string, filters ...func(*Channel) bool) []Ability {
+	if (requestPath == "" && len(filters) == 0) || len(abilities) == 0 {
+		return abilities
+	}
+
+	channelIDs := make([]int, 0, len(abilities))
+	seen := make(map[int]struct{}, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := seen[ability.ChannelId]; ok {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		channelIDs = append(channelIDs, ability.ChannelId)
+	}
+
+	var channels []*Channel
+	if err := DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		if len(filters) > 0 {
+			return nil
+		}
+		// Path filtering is an optional constraint. If the metadata lookup fails,
+		// keep the historical candidate set and let the normal relay path report
+		// any actual channel failure.
+		return abilities
+	}
+	channelByID := make(map[int]*Channel, len(channels))
+	for _, channel := range channels {
+		channelByID[channel.Id] = channel
+	}
+
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		channel, ok := channelByID[ability.ChannelId]
+		if !ok {
+			if len(filters) > 0 {
+				continue
+			}
+			// Preserve stale ability rows so the subsequent channel lookup keeps
+			// surfacing the existing database-consistency error.
+			filtered = append(filtered, ability)
+			continue
+		}
+		if ChannelSupportsRequestPath(channel, requestPath, modelName) && channelPassesFilters(channel, filters) {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
@@ -325,4 +450,13 @@ func FixAbility() (int, int, error) {
 	}
 	InitChannelCache()
 	return successCount, failCount, nil
+}
+
+func channelPassesFilters(channel *Channel, filters []func(*Channel) bool) bool {
+	for _, filter := range filters {
+		if !filter(channel) {
+			return false
+		}
+	}
+	return true
 }

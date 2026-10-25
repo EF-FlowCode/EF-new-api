@@ -3,7 +3,7 @@ package oauth
 import (
 	"context"
 
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -33,4 +33,16 @@ type Provider interface {
 
 	// GetProviderPrefix returns the prefix for auto-generated usernames (e.g., "github_")
 	GetProviderPrefix() string
+
+	// ProviderUserIDColumn returns the users-table column that stores this provider's
+	// user ID. Providers that persist bindings elsewhere (for example, custom OAuth
+	// providers using user_oauth_bindings) return an empty string.
+	ProviderUserIDColumn() string
+}
+
+// NewUserValidator is an optional provider policy that only applies when an
+// OAuth identity would create a new local user. Existing logins and account
+// binding deliberately bypass this policy.
+type NewUserValidator interface {
+	ValidateNewUser(ctx context.Context, user *OAuthUser) error
 }

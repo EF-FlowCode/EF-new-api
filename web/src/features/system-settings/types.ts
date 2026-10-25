@@ -23,12 +23,7 @@ export type UpdateOptionsBulkRequest = {
 export type UpdateOptionResponse = {
   success: boolean
   message: string
-}
-
-export type DeleteLogsResponse = {
-  success: boolean
-  message: string
-  data?: number
+  data?: { saved?: boolean }
 }
 
 export type GeneralSettings = {
@@ -57,7 +52,8 @@ export type GeneralSettings = {
   'general_setting.custom_currency_exchange_rate': number
   RetryTimes: number
   DisplayInCurrencyEnabled: boolean
-  DisplayTokenStatEnabled: boolean
+  PricingGroupEndpointOverrides: string
+  ModelContextWindows: string
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
@@ -101,6 +97,8 @@ export type AuthSettings = {
   TelegramOAuthEnabled: boolean
   TelegramBotToken: string
   TelegramBotName: string
+  TelegramClientId: string
+  TelegramClientSecret: string
   LinuxDOOAuthEnabled: boolean
   LinuxDOClientId: string
   LinuxDOClientSecret: string
@@ -150,6 +148,8 @@ export type IntegrationSettings = {
   SMTPToken: string
   SMTPArchiveBcc: string
   SMTPSSLEnabled: boolean
+  SMTPStartTLSEnabled: boolean
+  SMTPInsecureSkipVerify: boolean
   SMTPForceAuthLogin: boolean
   TicketNotifyEnabled: boolean
   TicketAdminEmail: string
@@ -168,6 +168,8 @@ export type IntegrationSettings = {
   AutomaticRetryStatusCodes: string
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.channel_test_mode': string
+  'monitor_setting.channel_test_concurrency': number
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
   PayAddress: string
@@ -208,16 +210,11 @@ export type IntegrationSettings = {
   WaffoNotifyUrl: string
   WaffoReturnUrl: string
   WaffoPayMethods: string
-  WaffoPancakeEnabled: boolean
-  WaffoPancakeSandbox: boolean
   WaffoPancakeMerchantID: string
   WaffoPancakePrivateKey: string
-  WaffoPancakeWebhookPublicKey: string
-  WaffoPancakeWebhookTestKey: string
   WaffoPancakeStoreID: string
   WaffoPancakeProductID: string
   WaffoPancakeReturnURL: string
-  WaffoPancakeCurrency: string
   WaffoPancakeUnitPrice: number
   WaffoPancakeMinTopUp: number
   // Ticket system (custom) —— TicketNotifyEnabled / TicketAdminEmail 已在上方
@@ -240,6 +237,8 @@ export type IntegrationSettings = {
   'group_monitoring_setting.availability_exclude_keywords': string
   'group_monitoring_setting.availability_exclude_status_codes': string
   'group_monitoring_setting.cache_tokens_separate_groups': string
+  'web_group_setting.enabled': boolean
+  'web_group_setting.rules': string
 }
 
 export type ModelSettings = {
@@ -267,11 +266,13 @@ export type ModelSettings = {
   CreateCacheRatio: string
   CompletionRatio: string
   ImageRatio: string
+  BatchInputRatio: string
   AudioRatio: string
   AudioCompletionRatio: string
   ExposeRatioEnabled: boolean
   'billing_setting.billing_mode': string
   'billing_setting.billing_expr': string
+  'billing_setting.task_expressions': string
   'tool_price_setting.prices': string
   'payment_setting.amount_discount'?: string
   TopupGroupRatio: string
@@ -304,6 +305,10 @@ export type RequestLimitsSettings = {
   ModelRequestRateLimitSuccessCount: number
   ModelRequestRateLimitDurationMinutes: number
   ModelRequestRateLimitGroup: string
+  ModelRPMConfig: string
+  ModelRatio: string
+  ModelPrice: string
+  TopupGroupRatio: string
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string
@@ -313,7 +318,7 @@ export type RequestLimitsSettings = {
   'fetch_setting.ip_filter_mode': boolean
   'fetch_setting.domain_list': string[]
   'fetch_setting.ip_list': string[]
-  'fetch_setting.allowed_ports': number[]
+  'fetch_setting.allowed_ports': string[]
   'fetch_setting.apply_ip_filter_for_domain': boolean
 }
 
@@ -331,6 +336,7 @@ export type RatioType =
   | 'cache_ratio'
   | 'create_cache_ratio'
   | 'image_ratio'
+  | 'batch_input_ratio'
   | 'audio_ratio'
   | 'audio_completion_ratio'
   | 'model_price'

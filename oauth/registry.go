@@ -2,10 +2,11 @@ package oauth
 
 import (
 	"fmt"
+	"maps"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
 )
 
 var (
@@ -14,6 +15,10 @@ var (
 	// customProviderSlugs tracks which providers are custom (can be unregistered)
 	customProviderSlugs = make(map[string]bool)
 )
+
+type requestScopedProvider interface {
+	forRequest() Provider
+}
 
 // Register registers an OAuth provider with the given name
 func Register(name string, provider Provider) {
@@ -41,8 +46,12 @@ func Unregister(name string) {
 // GetProvider returns the OAuth provider for the given name
 func GetProvider(name string) Provider {
 	mu.RLock()
-	defer mu.RUnlock()
-	return providers[name]
+	provider := providers[name]
+	mu.RUnlock()
+	if scoped, ok := provider.(requestScopedProvider); ok {
+		return scoped.forRequest()
+	}
+	return provider
 }
 
 // GetAllProviders returns all registered OAuth providers
@@ -50,9 +59,7 @@ func GetAllProviders() map[string]Provider {
 	mu.RLock()
 	defer mu.RUnlock()
 	result := make(map[string]Provider, len(providers))
-	for k, v := range providers {
-		result[k] = v
-	}
+	maps.Copy(result, providers)
 	return result
 }
 

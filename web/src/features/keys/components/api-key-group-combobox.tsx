@@ -23,6 +23,7 @@ export type ApiKeyGroupOption = {
   label: string
   desc?: string
   ratio?: number | string
+  available?: boolean
 }
 
 type ApiKeyGroupComboboxProps = {
@@ -105,6 +106,8 @@ export function ApiKeyGroupCombobox({
   }, [options, searchValue])
 
   const handleSelect = (selectedValue: string) => {
+    const option = options.find((item) => item.value === selectedValue)
+    if (option?.available === false) return
     onValueChange(selectedValue)
     setOpen(false)
     setSearchValue('')
@@ -128,6 +131,11 @@ export function ApiKeyGroupCombobox({
                   value ||
                   placeholder ||
                   t('Select a group')}
+                {selectedOption?.available === false && (
+                  <span className='text-destructive ml-1 font-normal'>
+                    {t('Unavailable in this region')}
+                  </span>
+                )}
               </span>
               {selectedOption?.desc && (
                 <span className='text-muted-foreground block truncate text-[11px] sm:text-xs'>
@@ -162,6 +170,7 @@ export function ApiKeyGroupCombobox({
                   key={option.value}
                   value={option.value}
                   onSelect={handleSelect}
+                  disabled={option.available === false}
                   className='data-[selected=true]:bg-muted items-start gap-3 rounded-lg px-3 py-3 transition-colors'
                 >
                   <Check
@@ -173,6 +182,11 @@ export function ApiKeyGroupCombobox({
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate font-medium'>
                       {option.value}
+                      {option.available === false && (
+                        <span className='text-destructive ml-1 font-normal'>
+                          {t('Unavailable in this region')}
+                        </span>
+                      )}
                     </span>
                     {option.desc && (
                       <span className='text-muted-foreground block truncate text-xs'>

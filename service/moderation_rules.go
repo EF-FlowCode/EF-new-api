@@ -3,12 +3,13 @@ package service
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/types"
 )
 
 const (
@@ -159,13 +160,7 @@ func scoreForModerationCondition(result *ModerationResult, cond types.Moderation
 			return 0, false
 		}
 		applied := result.AppliedTypes[cond.Category]
-		matched := false
-		for _, t := range applied {
-			if t == want {
-				matched = true
-				break
-			}
-		}
+		matched := slices.Contains(applied, want)
 		if !matched {
 			return 0, false
 		}
@@ -392,7 +387,7 @@ func CreateModerationRule(rule *model.ModerationRule) error {
 	if err := model.CreateModerationRule(rule); err != nil {
 		return err
 	}
-	return ReloadModerationRules()
+	return reloadModerationRulesAndPublish()
 }
 
 func UpdateModerationRule(rule *model.ModerationRule) error {
@@ -402,14 +397,22 @@ func UpdateModerationRule(rule *model.ModerationRule) error {
 	if err := model.UpdateModerationRule(rule); err != nil {
 		return err
 	}
-	return ReloadModerationRules()
+	return reloadModerationRulesAndPublish()
 }
 
 func DeleteModerationRule(id int) error {
 	if err := model.DeleteModerationRule(id); err != nil {
 		return err
 	}
-	return ReloadModerationRules()
+	return reloadModerationRulesAndPublish()
+}
+
+// reloadModerationRulesAndPublish 重载本实例规则后通知其他实例；数据库已提交，
+// 即使本地重载失败也要通知。
+func reloadModerationRulesAndPublish() error {
+	err := ReloadModerationRules()
+	publishRuntimeRevision(runtimeSyncModerationRulesKey)
+	return err
 }
 
 // SeedDefaultModerationRules installs the canonical starter set on a fresh

@@ -9,14 +9,14 @@ export function Header({ className, children, ...props }: HeaderProps) {
     <header
       className={cn(
         // eflow: 统一壳顶栏毛玻璃——半透明 + backdrop-blur
-        'bg-background/70 z-50 h-16 shrink-0 border-b backdrop-blur-xl',
+        'bg-background/85 z-50 h-12 shrink-0 border-b backdrop-blur-xl',
         className
       )}
       {...props}
     >
-      <div className='flex h-full items-center gap-3 p-4 sm:gap-4'>
-        <SidebarTrigger variant='outline' />
-        <Separator orientation='vertical' className='h-6' />
+      <div className='flex h-full items-center gap-2 px-3 sm:gap-3 sm:px-4'>
+        <SidebarTrigger variant='outline' className='size-8' />
+        <Separator orientation='vertical' className='h-5' />
         {children}
       </div>
     </header>

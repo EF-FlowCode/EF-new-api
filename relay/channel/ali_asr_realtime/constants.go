@@ -7,11 +7,11 @@ import "strings"
 // DashScope 两套不同的实时协议：
 //
 //   - qwen3-asr-flash-realtime-* : DashScope OpenAI-realtime 兼容端点
-//       wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=<model>
-//       两端协议一致 → 原样双向透传，仅旁路统计上行音频字节用于按秒计费。
+//     wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=<model>
+//     两端协议一致 → 原样双向透传，仅旁路统计上行音频字节用于按秒计费。
 //   - fun-asr-realtime-*         : DashScope 自有 inference 协议
-//       wss://dashscope.aliyuncs.com/api-ws/v1/inference
-//       run-task / 二进制音频帧 / finish-task ↔ OpenAI-realtime 事件互转。
+//     wss://dashscope.aliyuncs.com/api-ws/v1/inference
+//     run-task / 二进制音频帧 / finish-task ↔ OpenAI-realtime 事件互转。
 //
 // 计费：官方按音频时长 0.00033 元/秒。handler 把上行音频秒数写进
 // RealtimeUsage.InputTokenDetails.TextTokens，PostWssConsumeQuota 按
@@ -37,6 +37,6 @@ func isFunAsrRealtime(model string) bool {
 // 默认上行音频参数（DashScope 实时 ASR 缺省 pcm16 / 16k 单声道）。
 // 用于把累计上行字节换算成计费秒数。
 const (
-	defaultSampleRate    = 16000
-	bytesPerSamplePCM16  = 2
+	defaultSampleRate   = 16000
+	bytesPerSamplePCM16 = 2
 )

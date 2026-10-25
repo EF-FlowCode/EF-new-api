@@ -1,5 +1,5 @@
 import type { Session } from '../types'
-import { getVersionText } from './message-utils'
+import { getCurrentVersion, getVersionText } from './message-utils'
 
 function sanitizeFileName(name: string): string {
   const base = (name || 'session').replace(/[\\/:*?"<>|]+/g, '_').trim()
@@ -23,8 +23,12 @@ export function sessionToMarkdown(session: Session): string {
   }
   for (const m of session.messages) {
     const role =
-      m.from === 'user' ? 'User' : m.from === 'assistant' ? 'Assistant' : 'System'
-    const text = getVersionText(m.versions?.[0]?.content ?? '').trim()
+      m.from === 'user'
+        ? 'User'
+        : m.from === 'assistant'
+          ? 'Assistant'
+          : 'System'
+    const text = getVersionText(getCurrentVersion(m).content).trim()
     if (!text) continue
     lines.push(`**${role}**`, '', text, '', '---', '')
   }

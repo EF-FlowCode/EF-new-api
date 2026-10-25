@@ -1,15 +1,18 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/internal/mysqlversion"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -29,71 +32,70 @@ var DB *gorm.DB
 
 var LOG_DB *gorm.DB
 
-func createRootAccountIfNeed() error {
-	var user User
-	//if user.Status != common.UserStatusEnabled {
-	if err := DB.First(&user).Error; err != nil {
-		common.SysLog("no user exists, create a root user for you: username is root, password is 123456")
-		hashedPassword, err := common.Password2Hash("123456")
-		if err != nil {
-			return err
-		}
-		rootUser := User{
-			Username:    "root",
-			Password:    hashedPassword,
-			Role:        common.RoleRootUser,
-			Status:      common.UserStatusEnabled,
-			DisplayName: "Root User",
-			AccessToken: nil,
-			Quota:       100000000,
-			CreatedTime: common.GetTimestamp(),
-		}
-		DB.Create(&rootUser)
-	}
-	return nil
-}
-
 func CheckSetup() {
 	setup := GetSetup()
 	if setup == nil {
-		// No setup record exists, check if we have a root user
 		if RootUserExists() {
-			common.SysLog("system is not initialized, but root user exists")
-			// Create setup record
-			newSetup := Setup{
-				Version:       common.Version,
-				InitializedAt: time.Now().Unix(),
-			}
-			err := DB.Create(&newSetup).Error
-			if err != nil {
-				common.SysLog("failed to create setup record: " + err.Error())
-			}
-			constant.Setup = true
+			common.SysLog("system setup is incomplete: root user exists without a setup record")
 		} else {
 			common.SysLog("system is not initialized and no root user exists")
-			constant.Setup = false
 		}
+		constant.SetSetupComplete(false)
 	} else {
 		// Setup record exists, system is initialized
 		common.SysLog("system is already initialized at: " + time.Unix(setup.InitializedAt, 0).String())
-		constant.Setup = true
+		constant.SetSetupComplete(true)
 	}
+}
+
+// ensureMySQLParseTime requires DATETIME columns to scan into time.Time; the
+// models store passkey, 2FA and OAuth timestamps that way.
+func ensureMySQLParseTime(dsn string) (string, error) {
+	query := ""
+	if _, after, ok := strings.Cut(dsn, "?"); ok {
+		query = after
+	}
+	for param := range strings.SplitSeq(query, "&") {
+		name, value, _ := strings.Cut(param, "=")
+		if !strings.EqualFold(name, "parseTime") {
+			continue
+		}
+		if enabled, err := strconv.ParseBool(value); err != nil || !enabled {
+			return "", fmt.Errorf("parseTime must be true, got %q", value)
+		}
+		return dsn, nil
+	}
+	if strings.Contains(dsn, "?") {
+		return dsn + "&parseTime=true", nil
+	}
+	return dsn + "?parseTime=true", nil
 }
 
 func openMySQLDB(envName string) (*gorm.DB, error) {
 	dsn := strings.TrimSpace(os.Getenv(envName))
 	if dsn == "" {
-		return nil, fmt.Errorf("%s is required; MySQL 8.0+ is the only supported database", envName)
+		return nil, fmt.Errorf("%s is required; MySQL 8.x is the only supported database", envName)
 	}
-	if !strings.Contains(strings.ToLower(dsn), "parsetime") {
-		if strings.Contains(dsn, "?") {
-			dsn += "&parseTime=true"
-		} else {
-			dsn += "?parseTime=true"
-		}
+	dsn, err := ensureMySQLParseTime(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", envName, err)
 	}
-	common.SysLog("using MySQL as database")
-	return gorm.Open(mysql.Open(dsn), newGormConfig(true))
+	db, err := gorm.Open(mysql.Open(dsn), newGormConfig(true))
+	if err != nil {
+		return nil, err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err = mysqlversion.Require8Server(ctx, sqlDB); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("%s must target MySQL 8.x: %w", envName, err)
+	}
+	common.SysLog("using MySQL 8 database")
+	return db, nil
 }
 
 func InitDB() (err error) {
@@ -114,12 +116,7 @@ func InitDB() (err error) {
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
-		if !common.IsMasterNode {
-			return nil
-		}
-		common.SysLog("database migration started")
-		err = migrateDB()
-		return err
+		return nil
 	} else {
 		common.FatalLog(err)
 	}
@@ -148,31 +145,47 @@ func InitLogDB() (err error) {
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
-		if !common.IsMasterNode {
-			return nil
-		}
-		common.SysLog("database migration started")
-		err = migrateLOGDB()
-		return err
+		return nil
 	} else {
 		common.FatalLog(err)
 	}
 	return err
 }
 
-func migrateDB() error {
-	// Migrate model_limits column from varchar to text for existing tables
-	if err := migrateTokenModelLimitsToText(); err != nil {
+// MigrateDatabases mutates schemas only after InitDB and InitLogDB have both
+// opened and validated their configured MySQL 8 servers.
+func MigrateDatabases() error {
+	if DB == nil || LOG_DB == nil {
+		return fmt.Errorf("database connections must be initialized before migration")
+	}
+	if !common.IsMasterNode || common.DeploymentRole == "worker" {
+		return nil
+	}
+
+	common.SysLog("database migration started")
+	if err := migrateDB(LOG_DB == DB); err != nil {
 		return err
 	}
-	// Drop the legacy (subject_type, subject_id) unique index on
-	// risk_subject_snapshot before AutoMigrate creates the v2 unique index
-	// that includes the group column. Idempotent on MySQL 8.
-	if err := dropLegacyRiskSubjectUniqueIndex(); err != nil {
+	if LOG_DB != DB {
+		return migrateLOGDB()
+	}
+	return nil
+}
+
+func migrateDB(includeLogModel bool) error {
+	if err := migrateChannelGroupToLongText(); err != nil {
+		return err
+	}
+	// Expand model_limits without ever narrowing an existing text-family column.
+	if err := migrateTokenModelLimitsToLongText(); err != nil {
+		return err
+	}
+	// Preserve the legacy uniqueness constraint until its replacement exists.
+	if err := migrateRiskSubjectUniqueIndex(); err != nil {
 		return err
 	}
 
-	err := DB.AutoMigrate(
+	models := []any{
 		&Channel{},
 		&Token{},
 		&User{},
@@ -182,11 +195,19 @@ func migrateDB() error {
 		&InvitationCode{},
 		&InvitationCodeUsage{},
 		&Ability{},
-		&Log{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
 		&Task{},
+		&TaskPlugin{},
+		&TaskPluginControl{},
+		&TaskPluginShadowBinding{},
+		&TaskPluginSourceSnapshot{},
+		&TaskPluginTaskReference{},
+		&TaskPluginProductionBinding{},
+		&TaskPluginSubmission{},
+		&TaskPluginReview{},
+		&KnowledgeFile{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},
@@ -198,6 +219,9 @@ func migrateDB() error {
 		&TicketMessage{},
 		&TicketInvoice{},
 		&TicketRefund{},
+		&UsageRefundBatch{},
+		&UsageRefundReceipt{},
+		&UsageRefundNotice{},
 		&TicketAttachment{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
@@ -211,98 +235,107 @@ func migrateDB() error {
 		&GroupMonitoringStat{},
 		&MonitoringHistory{},
 		&PerfMetric{},
-	)
-	if err != nil {
+		&UserAccessToken{},
+	}
+	if includeLogModel {
+		models = append(models, &Log{}, &UsageRefundLogDelivery{}, &AuditLog{})
+	}
+	if err := DB.AutoMigrate(models...); err != nil {
 		return err
 	}
-	return nil
+	return ensureTaskPluginControl(DB)
 }
 
-func migrateDBFast() error {
-
-	var wg sync.WaitGroup
-
-	migrations := []struct {
-		model interface{}
-		name  string
-	}{
-		{&Channel{}, "Channel"},
-		{&Token{}, "Token"},
-		{&User{}, "User"},
-		{&PasskeyCredential{}, "PasskeyCredential"},
-		{&Option{}, "Option"},
-		{&Redemption{}, "Redemption"},
-		{&InvitationCode{}, "InvitationCode"},
-		{&InvitationCodeUsage{}, "InvitationCodeUsage"},
-		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
-		{&Midjourney{}, "Midjourney"},
-		{&TopUp{}, "TopUp"},
-		{&QuotaData{}, "QuotaData"},
-		{&Task{}, "Task"},
-		{&Model{}, "Model"},
-		{&Vendor{}, "Vendor"},
-		{&PrefillGroup{}, "PrefillGroup"},
-		{&Setup{}, "Setup"},
-		{&TwoFA{}, "TwoFA"},
-		{&TwoFABackupCode{}, "TwoFABackupCode"},
-		{&Checkin{}, "Checkin"},
-		{&Ticket{}, "Ticket"},
-		{&TicketMessage{}, "TicketMessage"},
-		{&TicketInvoice{}, "TicketInvoice"},
-		{&TicketRefund{}, "TicketRefund"},
-		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
-		{&UserOAuthBinding{}, "UserOAuthBinding"},
-		{&RiskRule{}, "RiskRule"},
-		{&RiskSubjectSnapshot{}, "RiskSubjectSnapshot"},
-		{&RiskIncident{}, "RiskIncident"},
-		{&PerfMetric{}, "PerfMetric"},
-	}
-	// 动态计算migration数量，确保errChan缓冲区足够大
-	errChan := make(chan error, len(migrations))
-
-	for _, m := range migrations {
-		wg.Add(1)
-		go func(model interface{}, name string) {
-			defer wg.Done()
-			if err := DB.AutoMigrate(model); err != nil {
-				errChan <- fmt.Errorf("failed to migrate %s: %v", name, err)
-			}
-		}(m.model, m.name)
+// migrateChannelGroupToLongText expands the comma-separated channel group list
+// without allowing the following AutoMigrate pass to narrow an existing value.
+func migrateChannelGroupToLongText() error {
+	const (
+		tableName  = "channels"
+		columnName = "group"
+	)
+	if !DB.Migrator().HasTable(tableName) || !DB.Migrator().HasColumn(&Channel{}, columnName) {
+		return nil
 	}
 
-	// Wait for all migrations to complete
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
+	var columnType string
+	result := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+		WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+		tableName, columnName).Scan(&columnType)
+	if result.Error != nil {
+		return fmt.Errorf("inspect %s.%s type: %w", tableName, columnName, result.Error)
 	}
-	common.SysLog("database migrated")
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("inspect %s.%s type: expected one metadata row, got %d", tableName, columnName, result.RowsAffected)
+	}
+	needsMigration, err := longTextColumnMigrationRequired(columnType)
+	if err != nil {
+		return fmt.Errorf("inspect %s.%s type: %w", tableName, columnName, err)
+	}
+	if !needsMigration {
+		return nil
+	}
+
+	if err := DB.Exec("ALTER TABLE `channels` MODIFY COLUMN `group` LONGTEXT NULL").Error; err != nil {
+		return fmt.Errorf("migrate %s.%s to longtext: %w", tableName, columnName, err)
+	}
+	common.SysLog("Successfully migrated channels.group to longtext")
 	return nil
 }
 
 func migrateLOGDB() error {
 	var err error
-	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
+	if err = LOG_DB.AutoMigrate(&Log{}, &UsageRefundLogDelivery{}, &AuditLog{}); err != nil {
 		return err
 	}
 	return nil
 }
 
-// dropLegacyRiskSubjectUniqueIndex removes the v1 unique index
-// idx_risk_subject_unique on risk_subject_snapshot (subject_type, subject_id)
-// so AutoMigrate can install the v2 index that also includes the group column.
-// Idempotent: every branch checks for existence first.
-func dropLegacyRiskSubjectUniqueIndex() error {
-	tableName := "risk_subject_snapshot"
-	legacyIndexName := "idx_risk_subject_unique"
+// migrateRiskSubjectUniqueIndex installs and verifies the v2 unique index
+// before removing the stricter legacy index. MySQL DDL auto-commits, so this
+// order avoids a window with no database uniqueness constraint.
+func migrateRiskSubjectUniqueIndex() error {
+	const (
+		legacyIndexName = "idx_risk_subject_unique"
+		newIndexName    = "idx_risk_subject_unique_v2"
+	)
+	statement := &gorm.Statement{DB: DB}
+	if err := statement.Parse(&RiskSubjectSnapshot{}); err != nil {
+		return fmt.Errorf("resolve risk subject table: %w", err)
+	}
+	tableName := statement.Schema.Table
 	if !DB.Migrator().HasTable(tableName) {
 		return nil
 	}
+	if !DB.Migrator().HasColumn(&RiskSubjectSnapshot{}, "Group") {
+		if err := DB.Migrator().AddColumn(&RiskSubjectSnapshot{}, "Group"); err != nil {
+			return fmt.Errorf("add risk subject group column: %w", err)
+		}
+	}
+
+	columns, err := mysqlIndexColumns(tableName, newIndexName)
+	if err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		if err := DB.Migrator().CreateIndex(&RiskSubjectSnapshot{}, newIndexName); err != nil {
+			return fmt.Errorf("create risk subject v2 unique index: %w", err)
+		}
+		columns, err = mysqlIndexColumns(tableName, newIndexName)
+		if err != nil {
+			return err
+		}
+	}
+	if strings.Join(columns, ",") != "subject_type,subject_id,group" {
+		return fmt.Errorf("risk subject v2 unique index has unexpected columns: %v", columns)
+	}
+	isUnique, err := mysqlIndexIsUnique(tableName, newIndexName)
+	if err != nil {
+		return err
+	}
+	if !isUnique {
+		return fmt.Errorf("risk subject v2 index is not unique")
+	}
+
 	var count int
 	if err := DB.Raw(`SELECT COUNT(*) FROM information_schema.statistics
 			WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
@@ -317,9 +350,38 @@ func dropLegacyRiskSubjectUniqueIndex() error {
 	return nil
 }
 
-// migrateTokenModelLimitsToText migrates model_limits column from varchar(1024) to text
-// This is safe to run multiple times - it checks the column type first
-func migrateTokenModelLimitsToText() error {
+func mysqlIndexColumns(tableName string, indexName string) ([]string, error) {
+	var joined string
+	if err := DB.Raw(`SELECT COALESCE(GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ','), '')
+		FROM information_schema.statistics
+		WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+		tableName, indexName).Scan(&joined).Error; err != nil {
+		return nil, fmt.Errorf("inspect index %s on %s: %w", indexName, tableName, err)
+	}
+	if joined == "" {
+		return nil, nil
+	}
+	return strings.Split(joined, ","), nil
+}
+
+func mysqlIndexIsUnique(tableName string, indexName string) (bool, error) {
+	var nonUnique int
+	result := DB.Raw(`SELECT non_unique
+		FROM information_schema.statistics
+		WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+		ORDER BY seq_in_index LIMIT 1`, tableName, indexName).Scan(&nonUnique)
+	if result.Error != nil {
+		return false, fmt.Errorf("inspect uniqueness of index %s on %s: %w", indexName, tableName, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return false, nil
+	}
+	return nonUnique == 0, nil
+}
+
+// migrateTokenModelLimitsToLongText expands model_limits monotonically and is
+// safe to run repeatedly.
+func migrateTokenModelLimitsToLongText() error {
 	tableName := "tokens"
 	columnName := "model_limits"
 
@@ -332,19 +394,41 @@ func migrateTokenModelLimitsToText() error {
 	}
 
 	var columnType string
-	if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+	result := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-		tableName, columnName).Scan(&columnType).Error; err != nil {
-		common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-	} else if strings.EqualFold(columnType, "text") {
+		tableName, columnName).Scan(&columnType)
+	if result.Error != nil {
+		return fmt.Errorf("inspect %s.%s type: %w", tableName, columnName, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("inspect %s.%s type: expected one metadata row, got %d", tableName, columnName, result.RowsAffected)
+	}
+	needsMigration, err := longTextColumnMigrationRequired(columnType)
+	if err != nil {
+		return fmt.Errorf("inspect %s.%s type: %w", tableName, columnName, err)
+	}
+	if !needsMigration {
 		return nil
 	}
 
-	if err := DB.Exec(fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` text", tableName, columnName)).Error; err != nil {
-		return fmt.Errorf("failed to migrate %s.%s to text: %w", tableName, columnName, err)
+	if err := DB.Exec(fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` LONGTEXT", tableName, columnName)).Error; err != nil {
+		return fmt.Errorf("failed to migrate %s.%s to longtext: %w", tableName, columnName, err)
 	}
-	common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to text", tableName, columnName))
+	common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to longtext", tableName, columnName))
 	return nil
+}
+
+func longTextColumnMigrationRequired(columnType string) (bool, error) {
+	normalized := strings.ToLower(strings.TrimSpace(columnType))
+	switch {
+	case normalized == "longtext":
+		return false, nil
+	case normalized == "tinytext", normalized == "text", normalized == "mediumtext",
+		strings.HasPrefix(normalized, "varchar("), strings.HasPrefix(normalized, "char("):
+		return true, nil
+	default:
+		return false, fmt.Errorf("unexpected source column type %q", columnType)
+	}
 }
 
 func closeDB(db *gorm.DB) error {

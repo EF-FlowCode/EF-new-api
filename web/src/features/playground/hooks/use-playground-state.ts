@@ -144,8 +144,7 @@ export function usePlaygroundState() {
     (updater: Message[] | ((prev: Message[]) => Message[])) => {
       setStore((prev) => {
         const cur =
-          prev.sessions.find((s) => s.id === prev.activeId) ??
-          prev.sessions[0]
+          prev.sessions.find((s) => s.id === prev.activeId) ?? prev.sessions[0]
         if (!cur) return prev
         const prevMsgs = cur.messages
         const newMsgs =
@@ -208,8 +207,7 @@ export function usePlaygroundState() {
       setStore((prev) => {
         let sessions = prev.sessions.filter((s) => s.id !== id)
         if (sessions.length === 0) sessions = [createSessionLib([])]
-        const activeId =
-          prev.activeId === id ? sessions[0].id : prev.activeId
+        const activeId = prev.activeId === id ? sessions[0].id : prev.activeId
         const next: SessionStore = { sessions, activeId }
         persistNow(next)
         return next
@@ -238,8 +236,7 @@ export function usePlaygroundState() {
     (text: string) => {
       setStore((prev) => {
         const cur =
-          prev.sessions.find((s) => s.id === prev.activeId) ??
-          prev.sessions[0]
+          prev.sessions.find((s) => s.id === prev.activeId) ?? prev.sessions[0]
         if (!cur) return prev
         const sessions = prev.sessions.map((s) =>
           s.id === cur.id

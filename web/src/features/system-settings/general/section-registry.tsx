@@ -64,7 +64,8 @@ const GENERAL_SECTIONS = [
           QuotaPerUnit: settings.QuotaPerUnit,
           USDExchangeRate: settings.USDExchangeRate,
           DisplayInCurrencyEnabled: settings.DisplayInCurrencyEnabled,
-          DisplayTokenStatEnabled: settings.DisplayTokenStatEnabled,
+          PricingGroupEndpointOverrides: settings.PricingGroupEndpointOverrides,
+          ModelContextWindows: settings.ModelContextWindows,
           general_setting: {
             quota_display_type: quotaDisplayType,
             custom_currency_symbol:

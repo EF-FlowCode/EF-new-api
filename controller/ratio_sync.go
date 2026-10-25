@@ -16,13 +16,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/logger"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/billing_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/setting/billing_setting"
+	"eflow.local/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -52,7 +52,7 @@ func nearlyEqual(a, b float64) bool {
 	return b-a < floatEpsilon
 }
 
-func valuesEqual(a, b interface{}) bool {
+func valuesEqual(a, b any) bool {
 	af, aok := a.(float64)
 	bf, bok := b.(float64)
 	if aok && bok {
@@ -67,6 +67,7 @@ var pricingSyncFields = []string{
 	"cache_ratio",
 	"create_cache_ratio",
 	"image_ratio",
+	"batch_input_ratio",
 	"audio_ratio",
 	"audio_completion_ratio",
 	"model_price",
@@ -96,7 +97,11 @@ func applyRatioSyncAuth(req *http.Request, channelBaseURL string, settings dto.C
 	if token == "" && settings.RatioSyncUserID == 0 {
 		return nil
 	}
-	if token == "" || settings.RatioSyncUserID <= 0 {
+	// Scoped access tokens (nap_) identify their owner, so New-Api-User is
+	// optional for them; legacy system access tokens still need the user id.
+	bareToken := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(token, "Bearer "), "bearer "))
+	scoped := strings.HasPrefix(bareToken, "nap_")
+	if token == "" || settings.RatioSyncUserID < 0 || (settings.RatioSyncUserID == 0 && !scoped) {
 		return fmt.Errorf("价格同步鉴权配置不完整")
 	}
 	if strings.ContainsAny(token, "\r\n") {
@@ -115,7 +120,9 @@ func applyRatioSyncAuth(req *http.Request, channelBaseURL string, settings dto.C
 		token = "Bearer " + token
 	}
 	req.Header.Set("Authorization", token)
-	req.Header.Set("New-Api-User", strconv.Itoa(settings.RatioSyncUserID))
+	if settings.RatioSyncUserID > 0 {
+		req.Header.Set("New-Api-User", strconv.Itoa(settings.RatioSyncUserID))
+	}
 	return nil
 }
 
@@ -159,12 +166,28 @@ func normalizeSyncValue(field string, value any) any {
 	return value
 }
 
-func getLocalPricingSyncData() map[string]any {
-	data := billing_setting.GetPricingSyncData(map[string]any(ratio_setting.GetExposedData()))
-	data["image_ratio"] = ratio_setting.GetImageRatioCopy()
-	data["audio_ratio"] = ratio_setting.GetAudioRatioCopy()
-	data["audio_completion_ratio"] = ratio_setting.GetAudioCompletionRatioCopy()
+func normalizeExpressionBillingSyncData(data map[string]any) map[string]any {
+	modes := valueMap(data[billing_setting.BillingModeField])
+	expressions := valueMap(data[billing_setting.BillingExprField])
+	if len(modes) == 0 || len(expressions) == 0 {
+		return data
+	}
+
+	normalizedModes := make(map[string]any, len(modes))
+	for modelName, rawMode := range modes {
+		normalizedModes[modelName] = rawMode
+		mode, modeOK := rawMode.(string)
+		expression, expressionOK := expressions[modelName].(string)
+		if modeOK && expressionOK {
+			normalizedModes[modelName] = billing_setting.NormalizeExpressionBillingMode(mode, expression)
+		}
+	}
+	data[billing_setting.BillingModeField] = normalizedModes
 	return data
+}
+
+func getLocalPricingSyncData() map[string]any {
+	return billing_setting.GetPricingSyncData(map[string]any(ratio_setting.GetExposedData()))
 }
 
 func FetchUpstreamRatios(c *gin.Context) {
@@ -227,7 +250,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{MaxIdleConns: 100, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: 1 * time.Second, ResponseHeaderTimeout: 10 * time.Second}
 	if common.TLSInsecureSkipVerify {
-		transport.TLSClientConfig = common.InsecureTLSConfig
+		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
 	}
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, _, err := net.SplitHostPort(addr)
@@ -320,7 +343,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 			// 简单重试：最多 3 次，指数退避
 			var resp *http.Response
 			var lastErr error
-			for attempt := 0; attempt < 3; attempt++ {
+			for attempt := range 3 {
 				resp, lastErr = client.Do(httpReq)
 				if lastErr == nil {
 					break
@@ -409,7 +432,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 					}
 				}
 				if isType1 {
-					ch <- upstreamResult{Name: uniqueName, Data: type1Data}
+					ch <- upstreamResult{Name: uniqueName, Data: normalizeExpressionBillingSyncData(type1Data)}
 					return
 				}
 			}
@@ -424,6 +447,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				CacheRatio           *float64 `json:"cache_ratio"`
 				CreateCacheRatio     *float64 `json:"create_cache_ratio"`
 				ImageRatio           *float64 `json:"image_ratio"`
+				BatchInputRatio      *float64 `json:"batch_input_ratio"`
 				AudioRatio           *float64 `json:"audio_ratio"`
 				AudioCompletionRatio *float64 `json:"audio_completion_ratio"`
 				BillingMode          string   `json:"billing_mode"`
@@ -440,6 +464,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 			cacheRatioMap := make(map[string]float64)
 			createCacheRatioMap := make(map[string]float64)
 			imageRatioMap := make(map[string]float64)
+			batchInputRatioMap := make(map[string]float64)
 			audioRatioMap := make(map[string]float64)
 			audioCompletionRatioMap := make(map[string]float64)
 			modelPriceMap := make(map[string]float64)
@@ -450,8 +475,8 @@ func FetchUpstreamRatios(c *gin.Context) {
 				if item.ModelName == "" {
 					continue
 				}
-				if item.BillingMode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(item.BillingExpr) != "" {
-					billingModeMap[item.ModelName] = billing_setting.BillingModeTieredExpr
+				if billing_setting.IsExpressionBillingMode(item.BillingMode) && strings.TrimSpace(item.BillingExpr) != "" {
+					billingModeMap[item.ModelName] = billing_setting.NormalizeExpressionBillingMode(item.BillingMode, item.BillingExpr)
 					billingExprMap[item.ModelName] = item.BillingExpr
 				}
 				if item.QuotaType == 1 {
@@ -469,6 +494,9 @@ func FetchUpstreamRatios(c *gin.Context) {
 				}
 				if item.ImageRatio != nil {
 					imageRatioMap[item.ModelName] = *item.ImageRatio
+				}
+				if item.BatchInputRatio != nil {
+					batchInputRatioMap[item.ModelName] = *item.BatchInputRatio
 				}
 				if item.AudioRatio != nil {
 					audioRatioMap[item.ModelName] = *item.AudioRatio
@@ -503,6 +531,9 @@ func FetchUpstreamRatios(c *gin.Context) {
 			}
 			if len(imageRatioMap) > 0 {
 				converted["image_ratio"] = valueMap(imageRatioMap)
+			}
+			if len(batchInputRatioMap) > 0 {
+				converted["batch_input_ratio"] = valueMap(batchInputRatioMap)
 			}
 			if len(audioRatioMap) > 0 {
 				converted["audio_ratio"] = valueMap(audioRatioMap)
@@ -629,18 +660,18 @@ func buildDifferences(localData map[string]any, successfulChannels []struct {
 
 	for modelName := range allModels {
 		for _, ratioType := range pricingSyncFields {
-			var localValue interface{} = nil
+			var localValue any = nil
 			if val, exists := valueMap(localData[ratioType])[modelName]; exists {
 				localValue = normalizeSyncValue(ratioType, val)
 			}
 
-			upstreamValues := make(map[string]interface{})
+			upstreamValues := make(map[string]any)
 			confidenceValues := make(map[string]bool)
 			hasUpstreamValue := false
 			hasDifference := false
 
 			for _, channel := range successfulChannels {
-				var upstreamValue interface{} = nil
+				var upstreamValue any = nil
 
 				if val, exists := valueMap(channel.data[ratioType])[modelName]; exists {
 					upstreamValue = normalizeSyncValue(ratioType, val)

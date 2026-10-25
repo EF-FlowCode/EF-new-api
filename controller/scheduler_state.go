@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service/multi_key_scheduler"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/service/multi_key_scheduler"
 	"github.com/gin-gonic/gin"
 )
 

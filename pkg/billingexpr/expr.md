@@ -16,7 +16,7 @@ The expression is the billing contract between the administrator and the system.
 
 4. **Upstream-agnostic** — The expression doesn't need to know whether the upstream API is OpenAI-format (prompt_tokens includes cache) or Claude-format (input_tokens excludes cache). The system normalizes token counts before evaluation based on the upstream response format.
 
-5. **Version-aware** — Expressions carry a version tag (`v1:`, default when omitted). The version controls the compile environment, token normalization, and quota conversion formula, enabling future evolution without breaking existing expressions.
+5. **Version-aware** — New expressions carry `v2:` (amounts); omitted tags and `v1:` retain legacy units. The version controls the compile environment, token normalization, and quota conversion formula, enabling future evolution without breaking existing expressions.
 
 ---
 
@@ -130,7 +130,7 @@ Frontend Editor → Storage → Pre-consume → Settlement → Log Display
 
 ### 1. Frontend Editor
 
-**File**: `web/src/pages/Setting/Ratio/components/TieredPricingEditor.jsx`
+**File**: `web/src/features/system-settings/models/tiered-pricing-editor.tsx`
 
 Two editing modes:
 - **Visual mode**: Fill in prices per variable, conditions per tier. Generates expression via `generateExprFromVisualConfig()`.
@@ -160,7 +160,11 @@ When a request arrives and the model uses `tiered_expr` billing:
 2. Builds `RequestInput` (headers + body) for `param()` / `header()` functions
 3. Runs expression with estimated tokens: `RunExprWithRequest(expr, {P, C}, requestInput)`
 4. Converts output to quota: `rawCost / 1,000,000 * QuotaPerUnit`
-5. Creates `BillingSnapshot` (frozen state for settlement) and stores on `RelayInfo`
+5. Creates `BillingSnapshot` and stores it on `RelayInfo`. Expression and request
+   state stay frozen for settlement; an auto-group retry refreshes the selected
+   group's multiplier before the next attempt. A free initial group creates a
+   billing session only if a retry selects a paid group. More expensive groups
+   raise the reservation before sending; cheaper groups are refunded at settle.
 
 ### 4. Settlement (Actual Billing)
 
@@ -174,7 +178,8 @@ After the upstream response returns with actual token usage:
    - For Claude-format APIs (input_tokens is text-only): no adjustment needed
 
 2. `TryTieredSettle(relayInfo, params)`:
-   - Uses the frozen `BillingSnapshot` from pre-consume
+   - Uses the captured `BillingSnapshot`, with the final selected group's
+     multiplier refreshed before settlement
    - Re-runs the expression with actual token counts
    - Converts via `quotaConversion()` (version-dispatched)
    - Returns actual quota
@@ -185,7 +190,31 @@ After the upstream response returns with actual token usage:
 
 Backend: `InjectTieredBillingInfo()` adds `billing_mode`, `expr_b64` (base64 expression), and `matched_tier` to the log's `other` JSON. When image token details are available, new logs also write explicit `image_input` and `image_output` fields. Legacy logs may contain input image tokens in the old `image_output` field; the frontend treats it as input only when `image_input` is absent.
 
-Frontend: Detects `billing_mode === "tiered_expr"`, decodes `expr_b64`, parses tiers via shared `parseTiersFromExpr()`, and renders pricing breakdown.
+Frontend: Detects `billing_mode === "tiered_expr"`, decodes `expr_b64`, parses tiers via shared `parseTiersFromExpr()`, and renders pricing breakdown. The log formula also expands token normalization before price substitution. For example, when cache reads are separately priced, it shows `p = Input Tokens 7,276 - Cache Read 896 = 6,380` so the normalized `p` value can be reconciled with the raw token summary.
+
+### 6. Public Pricing Display
+
+**Files**: `web/src/features/pricing/lib/dynamic-price.ts`, `web/src/features/pricing/components/model-card.tsx`, `web/src/features/pricing/components/dynamic-pricing-breakdown.tsx`
+
+`getDynamicPricingSummary()` retains every parsed tier and builds the union of price fields across tiers. Public model cards preview up to two tiers and four price fields, using a dash when a tier does not define a field. The model detail breakdown continues to show every tier and every parsed price field.
+
+Time-only request multipliers are also reflected on public model cards. The card shows the current multiplier, normalized hour windows, timezone, and current effective prices while retaining the base price as secondary context. The frontend refreshes the current multiplier once per minute. Arbitrary expressions are never evaluated in the browser; only structured request-rule factors recognized by `tryParseRequestRuleExpr()` are used.
+
+#### Time range semantics
+
+Time ranges use a half-open interval. A range within the same day uses `&&`, while a range crossing midnight uses `||`:
+
+```text
+# 09:00 <= hour < 12:00
+hour("Asia/Shanghai") >= 9 && hour("Asia/Shanghai") < 12
+
+# 21:00 <= hour or hour < 06:00
+hour("Asia/Shanghai") >= 21 || hour("Asia/Shanghai") < 6
+```
+
+Equal bounds produce an always-false, zero-length range. Values must be integers in the domain of the selected function (`hour` 0-23, `minute` 0-59, `weekday` 0-6, `month` 1-12, `day` 1-31).
+
+The parser retains the stored `&&` or `||` operator so downstream consumers do not infer different semantics from the bounds. Same-day ranges stored with `||` are tautologies, while cross-midnight bounds stored with `&&` are always false. The editor detects and warns about both non-canonical combinations but does not rewrite them automatically, because the stored expression is a billing contract. Public pricing omits the time summary for such expressions rather than displaying normalized semantics that differ from actual billing. An administrator must review and save the intended range explicitly.
 
 ---
 
@@ -215,17 +244,30 @@ This ensures that heavy cache usage doesn't cause the tier condition to incorrec
 
 ### Quota Conversion
 
-Expression coefficients are $/1M tokens. Conversion to internal quota:
+New expressions use `v2:` and return the base USD amount before group pricing. Conversion to internal quota:
 
 ```
-quota = exprOutput / 1,000,000 * QuotaPerUnit * groupRatio
+quota = exprOutput * QuotaPerUnit * groupRatio
 ```
 
 This matches the per-call billing pattern: `quota = modelPrice * QuotaPerUnit * groupRatio`.
 
 ### Expression Versioning
 
-Expressions can carry a version prefix: `v1:tier(...)`. No prefix = v1.
+New stored expressions use `v2:`, including Token and Task billing. For example,
+`v2:tier("tokens", p * 2 / 1000000)` returns USD 0.002 for 1000 input tokens;
+`v2:tier("video", param("seconds") * 0.01)` returns USD 0.05 for five seconds.
+Prices entered per million tokens keep that UI unit; generated expressions perform the division explicitly.
+
+No prefix and `v1:` remain legacy import / frozen-snapshot formats. Their output
+is divided by 1000000 at the quota boundary. `AmountExpression` migrates the whole
+legacy body to `v2:(BODY\n) / 1000000`; conditions, inner rounding and constants
+are preserved. The newline terminates trailing line comments. New persisted
+`ModelPricing` documents use version 2; old snapshots retain their original text
+and version. This is an amount-unit change, not a currency or exchange-rate change.
+
+Earlier unversioned examples in this document describe legacy coefficient bodies;
+apply the whole-result conversion when using them as new rules.
 
 Version controls:
 - Compile environment (available variables and functions)
@@ -238,14 +280,25 @@ This enables future evolution without breaking existing expressions.
 
 ## File Map
 
+### 插件提交用量
+
+`v2:u("seconds") * 0.01` 读取宿主注入的 `RequestInput.Usage`，返回分组前 USD 金额。`UsageSchema` 必须来自实际固定生产绑定的 `UsageForModel`。它与读取客户 JSON 的 `param()` 不同；普通 Token 入口禁止使用 `u()`。
+
+编译前遍历未优化 AST，只允许 `u("字面量字段")`，禁止函数引用、动态 key 和 `$env` 间接函数访问；`$env.p` 等已有静态非用量变量访问保持可用。保存和运行前按模型 schema 进行类型检查，覆盖未执行分支；运行前校验所有 facts，并要求表达式引用的每个字段存在。未知字段、非法枚举、类型或数值均返回错误，不将缺失事实默认为 0。
+
+任务表达式是固定总价；宿主只乘 quota 换算与分组倍率，不重复应用 provider 时长/分辨率系数。任务持久化表达式与 facts 快照，幂等重放沿用原任务。完成阶段用量不自动触发表达式重算。配置保存、暂停及多渠道冲突合同见 `docs/guides/model-pricing.md`。
+
+### 实现入口
+
 | Layer | Files |
 |-------|-------|
-| Expression engine | `pkg/billingexpr/compile.go`, `run.go`, `settle.go`, `round.go`, `types.go` |
-| Storage | `setting/billing_setting/tiered_billing.go` |
+| Expression engine | `pkg/billingexpr/compile.go`, `run.go`, `settle.go`, `round.go`, `types.go`, `amount.go`, `usage.go` |
+| Storage and usage validation | `model/model_pricing_config.go`, `model/pricing_usage.go`, `setting/billing_setting/tiered_billing.go` |
 | Pre-consume | `relay/helper/price.go`, `relay/helper/billing_expr_request.go` |
 | Settlement | `service/tiered_settle.go`, `service/quota.go` |
 | Log injection | `service/log_info_generate.go` |
-| Frontend editor | `web/src/pages/Setting/Ratio/components/TieredPricingEditor.jsx` |
+| Frontend editor | `web/src/features/system-settings/models/tiered-pricing-editor.tsx` |
+| Public pricing display | `web/src/features/pricing/lib/dynamic-price.ts`, `web/src/features/pricing/components/model-card.tsx`, `web/src/features/pricing/components/dynamic-pricing-breakdown.tsx` |
 | Frontend display | `web/src/helpers/render.jsx`, `web/src/helpers/utils.jsx` |
 | Model detail | `web/src/components/table/model-pricing/modal/components/DynamicPricingBreakdown.jsx` |
 | Log display | `web/src/hooks/usage-logs/useUsageLogsData.jsx`, `web/src/components/table/usage-logs/UsageLogsColumnDefs.jsx` |

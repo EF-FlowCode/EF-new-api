@@ -1,4 +1,8 @@
 export { DataTablePagination } from './pagination'
+export { ServerPagination } from './server-pagination'
+export { useLatestRequest } from './latest-request'
+export { useServerPagination } from './use-server-pagination'
+export type { ServerPaginationController } from './use-server-pagination'
 export { DataTableColumnHeader } from './column-header'
 export { DataTableFacetedFilter } from './faceted-filter'
 export { DataTableViewOptions } from './view-options'

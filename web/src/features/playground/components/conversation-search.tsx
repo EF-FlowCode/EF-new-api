@@ -1,13 +1,9 @@
 import { useMemo, useState } from 'react'
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  ChevronUpIcon,
-} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { getVersionText } from '../lib'
+import { getCurrentVersion, getVersionText } from '../lib'
 import type { Message as MessageType } from '../types'
 
 interface ConversationSearchProps {
@@ -28,7 +24,7 @@ export function ConversationSearch({ messages }: ConversationSearchProps) {
     if (!q) return [] as string[]
     return messages
       .filter((m) =>
-        getVersionText(m.versions?.[0]?.content ?? '')
+        getVersionText(getCurrentVersion(m).content)
           .toLowerCase()
           .includes(q)
       )

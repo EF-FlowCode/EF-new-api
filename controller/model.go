@@ -6,21 +6,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/relay/channel/ai360"
-	"github.com/QuantumNous/new-api/relay/channel/lingyiwanwu"
-	"github.com/QuantumNous/new-api/relay/channel/minimax"
-	"github.com/QuantumNous/new-api/relay/channel/moonshot"
-	taskhh "github.com/QuantumNous/new-api/relay/channel/task/ali_happyhorse"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/plugins"
+	"eflow.local/new-api/relay"
+	"eflow.local/new-api/relay/channel/ai360"
+	"eflow.local/new-api/relay/channel/lingyiwanwu"
+	"eflow.local/new-api/relay/channel/minimax"
+	"eflow.local/new-api/relay/channel/moonshot"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -33,7 +33,7 @@ var channelId2Models map[int][]string
 
 func init() {
 	// https://platform.openai.com/docs/models/model-endpoint-compatibility
-	for i := 0; i < constant.APITypeDummy; i++ {
+	for i := range constant.APITypeDummy {
 		if i == constant.APITypeAIProxyLibrary {
 			continue
 		}
@@ -81,12 +81,12 @@ func init() {
 			OwnedBy: minimax.ChannelName,
 		})
 	}
-	for _, modelName := range taskhh.ModelList {
+	for _, modelName := range plugins.FactoryModels("happyhorse") {
 		openAIModels = append(openAIModels, dto.OpenAIModels{
 			Id:      modelName,
 			Object:  "model",
 			Created: 1626777600,
-			OwnedBy: taskhh.ChannelName,
+			OwnedBy: "ali_happyhorse",
 		})
 	}
 	for modelName, _ := range constant.MidjourneyModel2Action {
@@ -102,7 +102,12 @@ func init() {
 		openAIModelsMap[aiModel.Id] = aiModel
 	}
 	channelId2Models = make(map[int][]string)
-	for i := 1; i <= constant.ChannelTypeDummy; i++ {
+	channelTypes := make([]int, 0, constant.ChannelTypeDummy+len(constant.EflowChannelTypes))
+	for i := 1; i < constant.ChannelTypeDummy; i++ {
+		channelTypes = append(channelTypes, i)
+	}
+	channelTypes = append(channelTypes, constant.EflowChannelTypes...)
+	for _, i := range channelTypes {
 		apiType, success := common.ChannelType2APIType(i)
 		if !success || apiType == constant.APITypeAIProxyLibrary {
 			continue
@@ -115,7 +120,7 @@ func init() {
 		channelId2Models[i] = adaptor.GetModelList()
 	}
 	// task-only channels — not covered by ChannelType2APIType
-	channelId2Models[constant.ChannelTypeAliHappyhorse] = taskhh.ModelList
+	channelId2Models[constant.ChannelTypeAliHappyhorse] = plugins.FactoryModels("happyhorse")
 	openAIModels = lo.UniqBy(openAIModels, func(m dto.OpenAIModels) string {
 		return m.Id
 	})
@@ -220,7 +225,7 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 }
 
 func ListModels(c *gin.Context, modelType int) {
-	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
+	acceptUnsetRatioModel := operation_setting.GetSiteModeSettings().SelfUseModeEnabled
 	if !acceptUnsetRatioModel {
 		userId := c.GetInt("id")
 		if userId > 0 {
@@ -302,11 +307,17 @@ func ListModels(c *gin.Context, modelType int) {
 				Type:        "model",
 			}
 		}
+		firstID := ""
+		lastID := ""
+		if len(useranthropicModels) > 0 {
+			firstID = useranthropicModels[0].ID
+			lastID = useranthropicModels[len(useranthropicModels)-1].ID
+		}
 		c.JSON(200, gin.H{
 			"data":     useranthropicModels,
-			"first_id": useranthropicModels[0].ID,
+			"first_id": firstID,
 			"has_more": false,
-			"last_id":  useranthropicModels[len(useranthropicModels)-1].ID,
+			"last_id":  lastID,
 		})
 	case constant.ChannelTypeGemini:
 		userGeminiModels := make([]dto.GeminiModel, len(userOpenAiModels))
@@ -343,10 +354,16 @@ func DashboardListModels(c *gin.Context) {
 	})
 }
 
+// EnabledListModels lists models of enabled channels; ?include_disabled=true
+// also lists models that only disabled channels offer (the unset-price view).
 func EnabledListModels(c *gin.Context) {
+	models := model.GetEnabledModels()
+	if c.Query("include_disabled") == "true" {
+		models = model.GetConfiguredModels()
+	}
 	c.JSON(200, gin.H{
 		"success": true,
-		"data":    model.GetEnabledModels(),
+		"data":    models,
 	})
 }
 

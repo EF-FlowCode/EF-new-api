@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 

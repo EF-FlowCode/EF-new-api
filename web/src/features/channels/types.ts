@@ -73,10 +73,13 @@ export interface ChannelSettings {
 }
 
 export interface ChannelOtherSettings {
+  supported_endpoint_types?: string[]
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
+  vertex_project_id?: string
   openrouter_enterprise?: boolean
   aws_key_type?: 'ak_sk' | 'api_key'
+  aws_api_type?: 'invoke_model' | 'mantle'
   allow_service_tier?: boolean
   disable_store?: boolean
   allow_safety_identifier?: boolean
@@ -91,6 +94,15 @@ export interface ChannelOtherSettings {
   upstream_model_update_last_detected_models?: string[]
   ratio_sync_access_token?: string
   ratio_sync_user_id?: number
+  advanced_custom?: {
+    advanced_routes: Array<{
+      incoming_path: string
+      upstream_path: string
+      converter?: string
+      models?: string[]
+      auth?: { type?: string; name?: string; value?: string }
+    }>
+  }
 }
 
 // ============================================================================
@@ -106,6 +118,7 @@ export interface GetChannelsResponse {
     page: number
     page_size: number
     type_counts?: Record<string, number>
+    address_counts?: Record<string, number>
   }
 }
 
@@ -116,6 +129,7 @@ export interface SearchChannelsResponse {
     items: Channel[]
     total: number
     type_counts?: Record<string, number>
+    address_counts?: Record<string, number>
   }
 }
 
@@ -139,6 +153,7 @@ export interface ChannelBalanceResponse {
   success: boolean
   message?: string
   balance?: number
+  raw_response?: string
   currency?: string
 }
 
@@ -151,7 +166,11 @@ export interface FetchModelsResponse {
 export interface FetchModelsPreviewParams {
   base_url: string
   type: number
-  key: string
+  key?: string
+  channel_id?: number
+  advanced_custom?: string
+  header_override?: string
+  proxy?: string
 }
 
 export interface CopyChannelResponse {
@@ -210,6 +229,7 @@ export interface GetChannelsParams {
   status?: string // 'enabled', 'disabled', or empty for all
   type?: number
   group?: string
+  address?: string // 'ip' | 'domain'，空为不过滤
   id_sort?: boolean
   tag_mode?: boolean
   // 后端 model.NewChannelSortOptions 接受的列：id/name/priority/balance/response_time/test_time
@@ -223,6 +243,7 @@ export interface SearchChannelsParams {
   model?: string
   status?: string
   type?: number
+  address?: string
   id_sort?: boolean
   tag_mode?: boolean
   p?: number
@@ -273,6 +294,7 @@ export interface TagOperationParams {
   model_mapping?: string
   models?: string
   groups?: string
+  base_url?: string
 }
 
 // ============================================================================

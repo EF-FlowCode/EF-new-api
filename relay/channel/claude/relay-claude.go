@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	relaydto "eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/setting/model_setting"
+	"eflow.local/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -38,6 +38,9 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+	// GotUpstreamEvent 表示上游已交付至少一个有效事件（message_start / content_block_* / message_delta）；
+	// 为 false 时说明上游一个 token 都没给，不应再用本地估算补 usage。
+	GotUpstreamEvent bool
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -225,6 +228,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	} else {
 		return false
 	}
+	claudeInfo.GotUpstreamEvent = true
 	if oaiResponse != nil {
 		oaiResponse.Id = claudeInfo.ResponseId
 		oaiResponse.Created = claudeInfo.Created
@@ -243,11 +247,20 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
+	if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
+		info.ObserveResponseModel(claudeResponse.Message.Model)
+	}
 	if claudeResponse.StopReason != "" {
 		maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	}
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
+	}
+	// message_delta carries the cumulative server tool usage; overwrite rather
+	// than add so the final value is billed once (non-stream sets the same key).
+	if claudeResponse.Type == "message_delta" && claudeResponse.Usage != nil &&
+		claudeResponse.Usage.ServerToolUse != nil && claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
+		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
 	}
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
@@ -285,24 +298,40 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	return nil
 }
 
+// claudeStreamUsageMissing 判断流式结束时哪些 usage 是上游没给、需要本地估算的。
+// Claude 的 input_tokens 不含缓存读写，全缓存命中时它就是 0，只有连同缓存读写都为 0
+// 才算输入缺失；输出为 0 只有在确实流出了内容时才算缺失，在任何输出前拒答
+// （如 refusal）保留上游的 0，不打本地计数标记。
+func claudeStreamUsageMissing(claudeInfo *ClaudeResponseInfo) (missingInput, missingOutput bool) {
+	missingInput = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage).PromptTokens == 0
+	missingOutput = claudeInfo.Usage.CompletionTokens == 0 && claudeInfo.ResponseText.Len() > 0
+	return missingInput, missingOutput
+}
+
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
-	if claudeInfo.Usage.PromptTokens == 0 {
-		//上游出错
-	}
-	if claudeInfo.Usage.CompletionTokens == 0 || !claudeInfo.Done {
+	if !claudeInfo.GotUpstreamEvent {
+		// 上游没交付任何事件（首字前客户端断开 / 上游无响应）：不按本地估算收费，
+		// 返回零 usage，由结算层按 0 结算并退回预扣。本地估算对含 base64 的
+		// tool_result 会严重虚高，且无法区分缓存命中。
+		claudeInfo.Usage = &dto.Usage{}
+		common.SetContextKey(c, constant.ContextKeyBillingAnomaly, constant.BillingAnomalyNoUpstreamUsage)
+	} else if missingInputUsage, missingOutputUsage := claudeStreamUsageMissing(claudeInfo); missingInputUsage || missingOutputUsage || !claudeInfo.Done {
 		if common.DebugEnabled {
 			common.SysLog("claude response usage is not complete, maybe upstream error")
 		}
 		// 只补缺失字段，不整份覆盖——保留 message_start 已拿到的 cache 字段
 		fallback := service.ResponseText2Usage(c, claudeInfo.ResponseText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
-		if claudeInfo.Usage.CompletionTokens == 0 ||
+		anomaly := constant.BillingAnomalyOutputEstimated
+		if missingOutputUsage ||
 			(!claudeInfo.Done && fallback.CompletionTokens > claudeInfo.Usage.CompletionTokens) {
 			claudeInfo.Usage.CompletionTokens = fallback.CompletionTokens
 		}
-		if claudeInfo.Usage.PromptTokens == 0 {
+		if missingInputUsage {
 			claudeInfo.Usage.PromptTokens = fallback.PromptTokens
+			anomaly = constant.BillingAnomalyInputEstimated
 		}
 		claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
+		common.SetContextKey(c, constant.ContextKeyBillingAnomaly, anomaly)
 	}
 	if claudeInfo.Usage != nil {
 		claudeInfo.Usage.UsageSemantic = "anthropic"
@@ -381,6 +410,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeError := claudeResponse.GetClaudeError(); claudeError != nil && claudeError.Type != "" {
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
+	info.ObserveResponseModel(claudeResponse.Model)
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}

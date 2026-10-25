@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid'
+import { useAuthStore } from '@/stores/auth-store'
 import { STORAGE_KEYS, DEFAULT_SESSION_TITLE } from '../constants'
 import type {
   PlaygroundConfig,
@@ -9,12 +10,51 @@ import type {
 } from '../types'
 import { sanitizeMessagesOnLoad, getVersionText } from './message-utils'
 
+// ---------------------------------------------------------------------------
+// 按账号隔离：同一浏览器切换账号后，下一个用户不能看到上一个用户的对话、
+// 配置与提示词预设。所有 Playground 数据都写到 `<key>:<userId>` 下。
+// ---------------------------------------------------------------------------
+
+type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS]
+
+/**
+ * 旧版本写在固定键下的数据没有归属，不能分给下一个登录的账号，直接删除
+ * （已有的 Playground 历史因此会被清空一次）。
+ */
+function removeLegacySharedData(): void {
+  for (const legacyKey of Object.values(STORAGE_KEYS)) {
+    localStorage.removeItem(legacyKey)
+  }
+}
+
+/** 当前登录账号的存储键；未登录返回 null，调用方既不读也不写。 */
+function userStorageKey(baseKey: StorageKey): string | null {
+  removeLegacySharedData()
+  const userId = useAuthStore.getState().auth.user?.id
+  return userId == null ? null : `${baseKey}:${userId}`
+}
+
+function readItem(baseKey: StorageKey): string | null {
+  const key = userStorageKey(baseKey)
+  return key ? localStorage.getItem(key) : null
+}
+
+function writeItem(baseKey: StorageKey, value: string): void {
+  const key = userStorageKey(baseKey)
+  if (key) localStorage.setItem(key, value)
+}
+
+function removeItem(baseKey: StorageKey): void {
+  const key = userStorageKey(baseKey)
+  if (key) localStorage.removeItem(key)
+}
+
 /**
  * Load playground config from localStorage
  */
 export function loadConfig(): Partial<PlaygroundConfig> {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.CONFIG)
+    const saved = readItem(STORAGE_KEYS.CONFIG)
     if (saved) {
       return JSON.parse(saved)
     }
@@ -30,7 +70,7 @@ export function loadConfig(): Partial<PlaygroundConfig> {
  */
 export function saveConfig(config: Partial<PlaygroundConfig>): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(config))
+    writeItem(STORAGE_KEYS.CONFIG, JSON.stringify(config))
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save config:', error)
@@ -42,7 +82,7 @@ export function saveConfig(config: Partial<PlaygroundConfig>): void {
  */
 export function loadParameterEnabled(): Partial<ParameterEnabled> {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.PARAMETER_ENABLED)
+    const saved = readItem(STORAGE_KEYS.PARAMETER_ENABLED)
     if (saved) {
       return JSON.parse(saved)
     }
@@ -60,10 +100,7 @@ export function saveParameterEnabled(
   parameterEnabled: Partial<ParameterEnabled>
 ): void {
   try {
-    localStorage.setItem(
-      STORAGE_KEYS.PARAMETER_ENABLED,
-      JSON.stringify(parameterEnabled)
-    )
+    writeItem(STORAGE_KEYS.PARAMETER_ENABLED, JSON.stringify(parameterEnabled))
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save parameter enabled:', error)
@@ -85,12 +122,12 @@ function isValidStoredMessage(value: unknown): value is Message {
 
 export function loadMessages(): Message[] | null {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.MESSAGES)
+    const saved = readItem(STORAGE_KEYS.MESSAGES)
     if (saved) {
       const parsed: unknown = JSON.parse(saved)
       // Legacy / corrupted shapes: drop instead of crashing the page.
       if (!Array.isArray(parsed)) {
-        localStorage.removeItem(STORAGE_KEYS.MESSAGES)
+        removeItem(STORAGE_KEYS.MESSAGES)
         return null
       }
       const filtered = parsed.filter(isValidStoredMessage) as Message[]
@@ -106,7 +143,7 @@ export function loadMessages(): Message[] | null {
     console.error('Failed to load messages:', error)
     // Bad JSON: clear the slot so the next load isn't doomed to repeat.
     try {
-      localStorage.removeItem(STORAGE_KEYS.MESSAGES)
+      removeItem(STORAGE_KEYS.MESSAGES)
     } catch {
       /* empty */
     }
@@ -119,7 +156,7 @@ export function loadMessages(): Message[] | null {
  */
 export function saveMessages(messages: Message[]): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages))
+    writeItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages))
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save messages:', error)
@@ -169,16 +206,20 @@ function isValidSession(v: unknown): v is Session {
  */
 export function loadSessions(): { sessions: Session[]; activeId: string } {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.SESSIONS)
+    const saved = readItem(STORAGE_KEYS.SESSIONS)
     if (saved) {
       const parsed: unknown = JSON.parse(saved)
       if (Array.isArray(parsed)) {
         const sessions = (parsed.filter(isValidSession) as Session[]).map(
-          (s) => ({ ...s, messages: sanitizeMessagesOnLoad(s.messages) })
+          (s) => ({
+            ...s,
+            messages: sanitizeMessagesOnLoad(
+              s.messages.filter(isValidStoredMessage)
+            ),
+          })
         )
         if (sessions.length > 0) {
-          const savedActive =
-            localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION) || ''
+          const savedActive = readItem(STORAGE_KEYS.ACTIVE_SESSION) || ''
           const activeId = sessions.some((s) => s.id === savedActive)
             ? savedActive
             : sessions[0].id
@@ -189,6 +230,9 @@ export function loadSessions(): { sessions: Session[]; activeId: string } {
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to load sessions:', error)
+    // 解析失败时不回写：保留原始存储，避免用一个空会话覆盖全部历史。
+    const fallback = createSession([])
+    return { sessions: [fallback], activeId: fallback.id }
   }
   // 迁移旧单会话 / 全新用户
   const legacy = loadMessages()
@@ -200,8 +244,8 @@ export function loadSessions(): { sessions: Session[]; activeId: string } {
 
 export function saveSessions(sessions: Session[], activeId: string): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(sessions))
-    localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION, activeId)
+    writeItem(STORAGE_KEYS.SESSIONS, JSON.stringify(sessions))
+    writeItem(STORAGE_KEYS.ACTIVE_SESSION, activeId)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save sessions:', error)
@@ -214,7 +258,7 @@ export function saveSessions(sessions: Session[], activeId: string): void {
 
 export function loadSystemPresets(): SystemPreset[] {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.SYSTEM_PRESETS)
+    const saved = readItem(STORAGE_KEYS.SYSTEM_PRESETS)
     if (saved) {
       const parsed: unknown = JSON.parse(saved)
       if (Array.isArray(parsed)) {
@@ -237,10 +281,7 @@ export function loadSystemPresets(): SystemPreset[] {
 
 export function saveSystemPresets(presets: SystemPreset[]): void {
   try {
-    localStorage.setItem(
-      STORAGE_KEYS.SYSTEM_PRESETS,
-      JSON.stringify(presets)
-    )
+    writeItem(STORAGE_KEYS.SYSTEM_PRESETS, JSON.stringify(presets))
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save system presets:', error)
@@ -248,15 +289,15 @@ export function saveSystemPresets(presets: SystemPreset[]): void {
 }
 
 /**
- * Clear all playground data
+ * Clear the signed-in user's playground data
  */
 export function clearPlaygroundData(): void {
   try {
-    localStorage.removeItem(STORAGE_KEYS.CONFIG)
-    localStorage.removeItem(STORAGE_KEYS.PARAMETER_ENABLED)
-    localStorage.removeItem(STORAGE_KEYS.MESSAGES)
-    localStorage.removeItem(STORAGE_KEYS.SESSIONS)
-    localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION)
+    removeItem(STORAGE_KEYS.CONFIG)
+    removeItem(STORAGE_KEYS.PARAMETER_ENABLED)
+    removeItem(STORAGE_KEYS.MESSAGES)
+    removeItem(STORAGE_KEYS.SESSIONS)
+    removeItem(STORAGE_KEYS.ACTIVE_SESSION)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear playground data:', error)

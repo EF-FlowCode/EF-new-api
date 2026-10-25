@@ -1,41 +1,47 @@
 package model
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"strings"
 
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/setting/billing_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/pkg/knowledge"
+	"eflow.local/new-api/setting/billing_setting"
+	"eflow.local/new-api/setting/ratio_setting"
+	"eflow.local/new-api/types"
 )
 
 type Pricing struct {
-	ModelName              string                  `json:"model_name"`
-	Description            string                  `json:"description,omitempty"`
-	Icon                   string                  `json:"icon,omitempty"`
-	Tags                   string                  `json:"tags,omitempty"`
-	VendorID               int                     `json:"vendor_id,omitempty"`
-	QuotaType              int                     `json:"quota_type"`
-	ModelRatio             float64                 `json:"model_ratio"`
-	ModelPrice             float64                 `json:"model_price"`
-	OwnerBy                string                  `json:"owner_by"`
-	CompletionRatio        float64                 `json:"completion_ratio"`
-	CacheRatio             *float64                `json:"cache_ratio,omitempty"`
-	CreateCacheRatio       *float64                `json:"create_cache_ratio,omitempty"`
-	ImageRatio             *float64                `json:"image_ratio,omitempty"`
-	AudioRatio             *float64                `json:"audio_ratio,omitempty"`
-	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
-	EnableGroup            []string                `json:"enable_groups"`
-	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
-	BillingMode            string                  `json:"billing_mode,omitempty"`
-	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	TaskPricing            map[string][]billing_setting.TaskBillingRule `json:"task_pricing,omitempty"`
+	Knowledge              *KnowledgePricing                            `json:"knowledge,omitempty"`
+	ModelName              string                                       `json:"model_name"`
+	Description            string                                       `json:"description,omitempty"`
+	Icon                   string                                       `json:"icon,omitempty"`
+	Tags                   string                                       `json:"tags,omitempty"`
+	VendorID               int                                          `json:"vendor_id,omitempty"`
+	QuotaType              int                                          `json:"quota_type"`
+	ModelRatio             float64                                      `json:"model_ratio"`
+	ModelPrice             float64                                      `json:"model_price"`
+	OwnerBy                string                                       `json:"owner_by"`
+	CompletionRatio        float64                                      `json:"completion_ratio"`
+	CacheRatio             *float64                                     `json:"cache_ratio,omitempty"`
+	CreateCacheRatio       *float64                                     `json:"create_cache_ratio,omitempty"`
+	ImageRatio             *float64                                     `json:"image_ratio,omitempty"`
+	AudioRatio             *float64                                     `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio   *float64                                     `json:"audio_completion_ratio,omitempty"`
+	EnableGroup            []string                                     `json:"enable_groups"`
+	SupportedEndpointTypes []constant.EndpointType                      `json:"supported_endpoint_types"`
+	BillingMode            string                                       `json:"billing_mode,omitempty"`
+	BillingExpr            string                                       `json:"billing_expr,omitempty"`
+	BillingUsage           *BillingUsageInfo                            `json:"billing_usage,omitempty"`
+	DimensionalPricing     *billing_setting.DimensionalPricing          `json:"dimensional_pricing,omitempty"`
+	ContextWindow          int64                                        `json:"context_window,omitempty"`
+	PricingVersion         string                                       `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -43,6 +49,16 @@ type PricingVendor struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Icon        string `json:"icon,omitempty"`
+}
+
+func attachDimensionalPricing(pricing *Pricing, modelName string) bool {
+	dimensionalPricing, ok := billing_setting.GetDimensionalPricing(modelName)
+	if !ok {
+		return false
+	}
+	pricing.BillingMode = billing_setting.BillingModeDimensional
+	pricing.DimensionalPricing = &dimensionalPricing
+	return true
 }
 
 var (
@@ -105,6 +121,36 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 		return endpoints
 	}
 	return make([]constant.EndpointType, 0)
+}
+
+// getPricingEndpointTypesForAbility honors per-route endpoint capabilities for
+// Advanced Custom channels while preserving the legacy Custom defaults for
+// management-only or unconfigured channels.
+func getPricingEndpointTypesForAbility(ability AbilityWithChannel, channelCache map[int]*Channel) []constant.EndpointType {
+	if !constant.SupportsAdvancedCustomRoutes(ability.ChannelType) {
+		return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
+	}
+	channel := channelCache[ability.ChannelId]
+	if channel == nil {
+		if cached, err := CacheGetChannel(ability.ChannelId); err == nil {
+			channel = cached
+		} else if loaded, loadErr := GetChannelById(ability.ChannelId, false); loadErr == nil {
+			channel = loaded
+		}
+		channelCache[ability.ChannelId] = channel
+	}
+	if channel != nil {
+		config := channel.GetOtherSettings().AdvancedCustom
+		if config != nil && config.HasRelayRoutes() {
+			endpoints := config.SupportedEndpointTypesForModel(ability.Model)
+			converted := make([]constant.EndpointType, 0, len(endpoints))
+			for _, endpoint := range endpoints {
+				converted = append(converted, constant.EndpointType(string(endpoint)))
+			}
+			return converted
+		}
+	}
+	return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
 }
 
 func updatePricing() {
@@ -189,7 +235,6 @@ func updatePricing() {
 	}
 
 	modelGroupsMap := make(map[string]*types.Set[string])
-
 	for _, ability := range enableAbilities {
 		groups, ok := modelGroupsMap[ability.Model]
 		if !ok {
@@ -201,11 +246,23 @@ func updatePricing() {
 
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
+	pricingChannelCache := make(map[int]*Channel)
+	batchGroups := make(map[string][]string)
 
 	// 先根据已有能力填充原生端点
 	for _, ability := range enableAbilities {
+		if knowledge.SupportsAliBatch(ability.Model) {
+			channel, found := pricingChannelCache[ability.ChannelId]
+			if !found {
+				channel, _ = GetChannelById(ability.ChannelId, false)
+				pricingChannelCache[ability.ChannelId] = channel
+			}
+			if ChannelSupportsKnowledgeBatch(channel, ability.Model) && !common.StringsContains(batchGroups[ability.Model], ability.Group) {
+				batchGroups[ability.Model] = append(batchGroups[ability.Model], ability.Group)
+			}
+		}
 		endpoints := modelSupportEndpointsStr[ability.Model]
-		channelTypes := common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
+		channelTypes := getPricingEndpointTypesForAbility(ability, pricingChannelCache)
 		for _, channelType := range channelTypes {
 			if !common.StringsContains(endpoints, string(channelType)) {
 				endpoints = append(endpoints, string(channelType))
@@ -219,12 +276,12 @@ func updatePricing() {
 		if strings.TrimSpace(meta.Endpoints) == "" {
 			continue
 		}
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
+		var raw map[string]any
+		if err := common.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
 			endpoints := make([]string, 0, len(raw))
 			for k, v := range raw {
 				switch v.(type) {
-				case string, map[string]interface{}:
+				case string, map[string]any:
 					if !common.StringsContains(endpoints, k) {
 						endpoints = append(endpoints, k)
 					}
@@ -263,13 +320,13 @@ func updatePricing() {
 		if strings.TrimSpace(meta.Endpoints) == "" {
 			continue
 		}
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
+		var raw map[string]any
+		if err := common.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
 			for k, v := range raw {
 				switch val := v.(type) {
 				case string:
 					supportedEndpointMap[k] = common.EndpointInfo{Path: val, Method: "POST"}
-				case map[string]interface{}:
+				case map[string]any:
 					ep := common.EndpointInfo{Method: "POST"}
 					if p, ok := val["path"].(string); ok {
 						ep.Path = p
@@ -286,11 +343,21 @@ func updatePricing() {
 	}
 
 	pricingMap = make([]Pricing, 0)
+	usageInfos, _ := GetBillingUsageInfo(context.Background(), DB)
 	for model, groups := range modelGroupsMap {
 		pricing := Pricing{
+			Knowledge:              knowledgePricing(model),
 			ModelName:              model,
 			EnableGroup:            groups.Items(),
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
+			ContextWindow:          GetModelContextWindow(model),
+		}
+		if usage, ok := usageInfos[model]; ok {
+			pricing.BillingUsage = &usage
+			pricing.TaskPricing = taskPricingForUsage(model, usage)
+		}
+		if pricing.Knowledge != nil && len(batchGroups[model]) > 0 {
+			pricing.Knowledge.BatchGroups = batchGroups[model]
 		}
 
 		// 补充模型元数据（描述、标签、供应商、状态）
@@ -309,9 +376,12 @@ func updatePricing() {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
 		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
-			pricing.ModelRatio = modelRatio
-			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+			// An unconfigured ratio would report the 37.5 fallback; expression
+			// models are described by billing_expr, so leave the ratios unset.
+			if modelRatio, configured, _ := ratio_setting.GetModelRatio(model); configured || !billing_setting.IsExpressionBillingMode(billing_setting.GetBillingMode(model)) {
+				pricing.ModelRatio = modelRatio
+				pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+			}
 			pricing.QuotaType = 0
 		}
 		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
@@ -331,16 +401,31 @@ func updatePricing() {
 			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == billing_setting.BillingModeTieredExpr {
-			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
-				pricing.BillingMode = billingMode
-				pricing.BillingExpr = expr
+		billingMode, billingExpr, hasBillingExpr := billing_setting.GetBillingRule(model)
+		if pricing.Knowledge != nil && pricing.Knowledge.Prices != nil {
+			// Knowledge models charge input dimensions only. Keep the ordinary
+			// model response shape while making the zero output price explicit.
+			pricing.QuotaType = 0
+			pricing.ModelPrice = 0
+			pricing.CompletionRatio = 0
+			pricing.CacheRatio = nil
+			pricing.CreateCacheRatio = nil
+			pricing.AudioRatio = nil
+			pricing.AudioCompletionRatio = nil
+		}
+		if billing_setting.IsExpressionBillingMode(billingMode) {
+			if hasBillingExpr && strings.TrimSpace(billingExpr) != "" {
+				pricing.BillingMode = billing_setting.NormalizeExpressionBillingMode(billingMode, billingExpr)
+				pricing.BillingExpr = billingExpr
 			}
 		} else if billingMode == billing_setting.BillingModeAudioSeconds {
 			// eflow: 纯展示标记透传给前端；不带 expr → 结算不进 tiered_expr
 			// （relay/helper/price.go 均只判 tiered_expr），仍按 ModelRatio
 			// 结算（秒当 token），零计费影响。
 			pricing.BillingMode = billingMode
+		} else if attachDimensionalPricing(&pricing, model) {
+			// eflow: 仅透传结构化展示元数据。实际任务计费仍由 adapter 的
+			// EstimateBilling 写入时长与分辨率倍率，避免改变结算路径。
 		}
 		pricingMap = append(pricingMap, pricing)
 	}
@@ -366,4 +451,29 @@ func updatePricing() {
 // GetSupportedEndpointMap 返回全局端点到路径的映射
 func GetSupportedEndpointMap() map[string]common.EndpointInfo {
 	return supportedEndpointMap
+}
+
+// PublicPricing strips plugin internals that only the Root pricing editor
+// needs: source identity (plugin/version/source_hash/upstream model) and the
+// per-plugin task rules with mapped upstream models and expressions. Usage
+// status/schema/examples stay for display. The cached entry is not mutated.
+func PublicPricing(pricing Pricing) Pricing {
+	pricing.TaskPricing = nil
+	if pricing.BillingUsage != nil {
+		usage := publicBillingUsage(*pricing.BillingUsage)
+		pricing.BillingUsage = &usage
+	}
+	return pricing
+}
+
+func publicBillingUsage(info BillingUsageInfo) BillingUsageInfo {
+	info.Sources = nil
+	if info.Plugins != nil {
+		plugins := make(map[string]BillingUsageInfo, len(info.Plugins))
+		for key, plugin := range info.Plugins {
+			plugins[key] = publicBillingUsage(plugin)
+		}
+		info.Plugins = plugins
+	}
+	return info
 }

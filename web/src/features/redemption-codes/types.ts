@@ -32,6 +32,7 @@ export interface ApiResponse<T = unknown> {
 export interface GetRedemptionsParams {
   p?: number
   page_size?: number
+  status?: string
   // 后端 model.NewRedemptionSortOptions 白名单：
   // id / name / quota / created_time / used_user_id
   sort_by?: string
@@ -51,6 +52,7 @@ export interface GetRedemptionsResponse {
 
 export interface SearchRedemptionsParams {
   keyword?: string
+  status?: string
   p?: number
   page_size?: number
   sort_by?: string

@@ -1,7 +1,7 @@
 package ratio_setting
 
 import (
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/types"
 )
 
 var defaultCacheRatio = map[string]float64{

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import {
@@ -7,22 +7,22 @@ import {
 } from '@/lib/secure-verification'
 import { checkVerificationMethods, verify } from '../api'
 import type {
+  ProtectedCall,
   SecureVerificationState,
   StartVerificationOptions,
   UseSecureVerificationOptions,
   VerificationMethod,
   VerificationMethods,
+  VerificationOperation,
 } from '../types'
 
-type ApiCall = (() => Promise<unknown>) | null
-
 interface InternalState extends SecureVerificationState {
-  apiCall: ApiCall
+  apiCall: ProtectedCall | null
+  operation: VerificationOperation | null
 }
 
 const defaultMethods: VerificationMethods = {
-  has2FA: false,
-  hasPasskey: false,
+  options: [],
   passkeySupported: false,
 }
 
@@ -33,26 +33,44 @@ const initialState: InternalState = {
   title: undefined,
   description: undefined,
   apiCall: null,
+  operation: null,
 }
 
+/** Methods the dialog can offer right now (allowed, available, supported). */
+export function usableMethods(methods: VerificationMethods) {
+  return methods.options
+    .filter((option) => option.available)
+    .filter((option) => option.method !== 'passkey' || methods.passkeySupported)
+    .map((option) => option.method)
+}
+
+/**
+ * Drives the step-up dialog: fetches the methods allowed for one operation,
+ * obtains a single-use proof and then runs the protected call with it.
+ */
 export function useSecureVerification(
   options: UseSecureVerificationOptions = {}
 ) {
-  const { onSuccess, onError, successMessage, autoReset = true } = options
+  const {
+    onSuccess,
+    onError,
+    onCancel,
+    successMessage,
+    autoReset = true,
+  } = options
 
   const [methods, setMethods] = useState<VerificationMethods>(defaultMethods)
   const [state, setState] = useState<InternalState>(initialState)
   const [open, setOpen] = useState(false)
 
-  const fetchVerificationMethods = useCallback(async () => {
-    const result = await checkVerificationMethods()
-    setMethods(result)
-    return result
-  }, [])
-
-  useEffect(() => {
-    fetchVerificationMethods()
-  }, [fetchVerificationMethods])
+  const fetchVerificationMethods = useCallback(
+    async (operation: VerificationOperation) => {
+      const result = await checkVerificationMethods(operation)
+      setMethods(result)
+      return result
+    },
+    []
+  )
 
   const reset = useCallback(() => {
     setState(initialState)
@@ -60,43 +78,30 @@ export function useSecureVerification(
   }, [])
 
   const startVerification = useCallback(
-    async (
-      apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
-    ) => {
-      const { preferredMethod, title, description } = config
-      const availableMethods = await fetchVerificationMethods()
+    async (apiCall: ProtectedCall, config: StartVerificationOptions) => {
+      const { operation, preferredMethod, title, description } = config
+      const availableMethods = await fetchVerificationMethods(operation)
+      const usable = usableMethods(availableMethods)
 
-      if (!availableMethods.has2FA && !availableMethods.hasPasskey) {
-        toast.error(
-          i18next.t(
-            'Please enable Two-factor Authentication or Passkey before proceeding'
-          )
-        )
-        onError?.(
-          new Error(
-            'No verification methods available. Enable 2FA or Passkey to continue.'
-          )
-        )
+      if (availableMethods.error) {
+        toast.error(i18next.t(availableMethods.error))
+        onError?.(new Error(availableMethods.error))
         return false
       }
 
-      let defaultMethod: VerificationMethod | null = preferredMethod ?? null
-      if (!defaultMethod) {
-        if (availableMethods.hasPasskey && availableMethods.passkeySupported) {
-          defaultMethod = 'passkey'
-        } else if (availableMethods.has2FA) {
-          defaultMethod = '2fa'
-        }
-      }
+      const defaultMethod: VerificationMethod | null =
+        preferredMethod && usable.includes(preferredMethod)
+          ? preferredMethod
+          : (usable[0] ?? null)
 
-      setState((prev) => ({
-        ...prev,
+      setState({
+        ...initialState,
         apiCall,
+        operation,
         method: defaultMethod,
         title,
         description,
-      }))
+      })
       setOpen(true)
       return true
     },
@@ -105,7 +110,7 @@ export function useSecureVerification(
 
   const executeVerification = useCallback(
     async (method?: VerificationMethod, code?: string) => {
-      if (!state.apiCall) {
+      if (!state.apiCall || !state.operation) {
         toast.error(i18next.t('Verification is not configured properly'))
         return
       }
@@ -119,8 +124,12 @@ export function useSecureVerification(
       setState((prev) => ({ ...prev, loading: true }))
 
       try {
-        await verify(actualMethod, code ?? state.code)
-        const result = await state.apiCall()
+        const proof = await verify(
+          actualMethod,
+          state.operation,
+          code ?? state.code
+        )
+        const result = await state.apiCall(proof)
 
         if (successMessage) {
           toast.success(successMessage)
@@ -136,7 +145,7 @@ export function useSecureVerification(
       } catch (error) {
         const message =
           error instanceof Error
-            ? error.message
+            ? i18next.t(error.message)
             : i18next.t('Verification failed')
         toast.error(message)
         onError?.(error)
@@ -158,19 +167,21 @@ export function useSecureVerification(
 
   const cancel = useCallback(() => {
     reset()
-  }, [reset])
+    onCancel?.()
+  }, [reset, onCancel])
 
+  /**
+   * Run the call without a proof first and open the dialog only when the
+   * server asks for verification (for actions that need it conditionally).
+   */
   const withVerification = useCallback(
-    async (
-      apiCall: () => Promise<unknown>,
-      config: StartVerificationOptions = {}
-    ) => {
+    async (apiCall: ProtectedCall, config: StartVerificationOptions) => {
       try {
         return await apiCall()
       } catch (error) {
         if (isVerificationRequiredError(error)) {
           const info = extractVerificationInfo(error)
-          toast.info(info.message)
+          toast.info(i18next.t(info.message))
           await startVerification(apiCall, config)
           return null
         }
@@ -180,24 +191,33 @@ export function useSecureVerification(
     [startVerification]
   )
 
-  const canUseMethod = useCallback(
-    (method: VerificationMethod) => {
-      if (method === '2fa') return methods.has2FA
-      if (method === 'passkey') {
-        return methods.hasPasskey && methods.passkeySupported
-      }
-      return false
-    },
-    [methods]
+  // Ready-made props for <SecureVerificationDialog />. Verification errors are
+  // already surfaced via toast inside executeVerification.
+  const dialogProps = useMemo(
+    () => ({
+      open,
+      onOpenChange: (next: boolean) => {
+        if (next) setOpen(true)
+        else cancel()
+      },
+      methods,
+      state,
+      onVerify: async (method: VerificationMethod, code?: string) => {
+        try {
+          await executeVerification(method, code)
+        } catch {
+          // surfaced via toast
+        }
+      },
+      onCancel: cancel,
+      onCodeChange: setCode,
+      onMethodChange: switchMethod,
+    }),
+    [open, methods, state, executeVerification, cancel, setCode, switchMethod]
   )
 
-  const recommendedMethod = useMemo<VerificationMethod | null>(() => {
-    if (methods.hasPasskey && methods.passkeySupported) return 'passkey'
-    if (methods.has2FA) return '2fa'
-    return null
-  }, [methods])
-
   return {
+    dialogProps,
     open,
     setOpen,
     methods,
@@ -210,9 +230,6 @@ export function useSecureVerification(
     switchMethod,
     withVerification,
     fetchVerificationMethods,
-    canUseMethod,
-    recommendedMethod,
-    hasAnyMethod: methods.has2FA || methods.hasPasskey,
     isLoading: state.loading,
     currentMethod: state.method,
     code: state.code,

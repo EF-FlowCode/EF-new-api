@@ -56,7 +56,7 @@ func (r *ModerationKeyRing) NextKey() (key string, idx int, ok bool) {
 		return "", -1, false
 	}
 	now := r.now().Unix()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		i := (r.cursor + i) % n
 		if r.cooldown[i] <= now {
 			r.cursor = (i + 1) % n

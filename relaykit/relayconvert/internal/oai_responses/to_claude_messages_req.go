@@ -2,14 +2,15 @@ package oairesponses
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"context"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
-	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	relaymedia "eflow.local/new-api/relaykit/relayconvert/internal/media"
+	sharedclaude "eflow.local/new-api/relaykit/relayconvert/internal/shared/claude"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -116,6 +117,12 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		}
 	}
 
+	claudeRequest.Messages = omitTrailingAssistantText(claudeRequest.Messages,
+		func(message dto.ClaudeMessage) bool { return message.Role == "user" },
+		func(message dto.ClaudeMessage) bool {
+			return message.Role == "assistant" && !slices.ContainsFunc(claudeMessageContentParts(message.Content), func(part dto.ClaudeMediaMessage) bool { return part.Type == "tool_use" })
+		})
+
 	if len(systemMessages) > 0 {
 		claudeRequest.System = systemMessages
 	}
@@ -134,30 +141,10 @@ func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest)
 		tools = append(tools, &dto.Tool{
 			Name:        function.Name,
 			Description: function.Description,
-			InputSchema: responsesFunctionParametersToClaudeInputSchema(function.Parameters),
+			InputSchema: sharedclaude.FunctionParametersToInputSchema(function.Parameters),
 		})
 	}
 	return tools
-}
-
-func responsesFunctionParametersToClaudeInputSchema(parameters any) map[string]interface{} {
-	if params, ok := parameters.(map[string]any); ok {
-		schema := make(map[string]interface{}, len(params))
-		for key, value := range params {
-			schema[key] = value
-		}
-		if schema["type"] == nil {
-			schema["type"] = "object"
-		}
-		if schema["properties"] == nil {
-			schema["properties"] = map[string]interface{}{}
-		}
-		return schema
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
-	}
 }
 
 func applyResponsesReasoningToClaude(req *dto.OpenAIResponsesRequest, claudeRequest *dto.ClaudeRequest) {

@@ -1,5 +1,3 @@
-import { API_KEY_STATUS } from '@/features/keys/constants'
-
 export type ChatLinkType = 'web' | 'custom-protocol' | 'fluent'
 
 export type ChatPreset = {
@@ -20,11 +18,6 @@ export type ResolveChatUrlParams = {
   template: string
   apiKey?: string
   serverAddress: string
-}
-
-export type ActiveApiKey = {
-  key: string
-  status: number
 }
 
 const HTTP_REGEX = /^https?:\/\//i
@@ -116,6 +109,16 @@ function replaceToken(source: string, token: string, value: string) {
   return source.split(token).join(value)
 }
 
+export function chatLinkRequiresApiKey(url: string): boolean {
+  return [
+    '{key}',
+    '{cherryConfig}',
+    '{aionuiConfig}',
+    '{deepchatConfig}',
+    '{aqbotConfig}',
+  ].some((token) => url.includes(token))
+}
+
 export function resolveChatUrl({
   template,
   apiKey,
@@ -125,6 +128,16 @@ export function resolveChatUrl({
   const safeServerAddress = serverAddress || ''
 
   const safeApiKey = apiKey || ''
+
+  if (url.includes('{aqbotConfig}')) {
+    const query = [
+      `name=${encodeURIComponent('New API')}`,
+      `baseurl=${encodeURIComponent(safeServerAddress)}`,
+      `apikey=${encodeURIComponent(safeApiKey)}`,
+      'type=openai',
+    ].join('&')
+    return replaceToken(url, '{aqbotConfig}', query)
+  }
 
   if (url.includes('{cherryConfig}')) {
     const payload = {
@@ -146,21 +159,26 @@ export function resolveChatUrl({
     return replaceToken(url, '{aionuiConfig}', encoded)
   }
 
+  // DeepChat provider/install v1: base64 JSON; `id` selects its built-in
+  // "new-api" provider (see ThinkInAIXYZ/deepchat src/shared/providerDeeplink.ts).
+  if (url.includes('{deepchatConfig}')) {
+    const payload = {
+      id: 'new-api',
+      baseUrl: safeServerAddress,
+      apiKey: safeApiKey,
+    }
+    const encoded = encodeURIComponent(toBase64(JSON.stringify(payload)))
+    return replaceToken(url, '{deepchatConfig}', encoded)
+  }
+
   if (safeServerAddress) {
     const encodedAddress = encodeURIComponent(safeServerAddress)
     url = replaceToken(url, '{address}', encodedAddress)
   }
 
   if (safeApiKey) {
-    url = replaceToken(url, '{key}', safeApiKey)
+    url = replaceToken(url, '{key}', encodeURIComponent(safeApiKey))
   }
 
   return url
-}
-
-export function getFirstActiveKey(
-  keys: ActiveApiKey[] | undefined
-): ActiveApiKey | undefined {
-  if (!Array.isArray(keys)) return undefined
-  return keys.find((item) => item.status === API_KEY_STATUS.ENABLED)
 }

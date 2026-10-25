@@ -1,7 +1,14 @@
+import z from 'zod'
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
 import { InvitationCodes } from '@/features/invitation-codes'
+
+const invitationCodesSearchSchema = z.object({
+  page: z.number().int().positive().optional().catch(1),
+  pageSize: z.number().int().positive().optional().catch(10),
+  filter: z.string().optional().catch(''),
+})
 
 export const Route = createFileRoute('/_authenticated/invitation-codes/')({
   beforeLoad: () => {
@@ -10,5 +17,6 @@ export const Route = createFileRoute('/_authenticated/invitation-codes/')({
       throw redirect({ to: '/403' })
     }
   },
+  validateSearch: invitationCodesSearchSchema,
   component: InvitationCodes,
 })

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -24,10 +24,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { createRule, updateRule } from '../api'
-import {
-  metricOptionsForScope,
-  RISK_OP_OPTIONS,
-} from '../lib/shared-utils'
+import { metricOptionsForScope, RISK_OP_OPTIONS } from '../lib/shared-utils'
 import type { RiskCondition, RiskRule } from '../types'
 
 const EMPTY_RULE: RiskRule = {
@@ -130,14 +127,7 @@ export function RiskRuleDialog({
     }
     setSubmitting(true)
     try {
-      // Backend stores conditions / groups as JSON-encoded strings; serialize
-      // before sending. The form holds them as real arrays so the UI can map
-      // over them, then we re-encode here on submit.
-      const payload = {
-        ...form,
-        conditions: JSON.stringify(form.conditions),
-        groups: JSON.stringify(form.groups),
-      } as unknown as Partial<RiskRule>
+      const payload = form
       if (isEdit) {
         await updateRule(form.id, payload)
         toast.success(t('Rule updated'))
@@ -210,7 +200,6 @@ export function RiskRuleDialog({
                 <SelectContent>
                   <SelectItem value='token'>{t('Token')}</SelectItem>
                   <SelectItem value='user'>{t('User')}</SelectItem>
-                  <SelectItem value='ip'>{t('IP')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -235,7 +224,9 @@ export function RiskRuleDialog({
               <Label>{t('Action')}</Label>
               <Select
                 value={form.action}
-                onValueChange={(v) => update({ action: v as RiskRule['action'] })}
+                onValueChange={(v) =>
+                  update({ action: v as RiskRule['action'] })
+                }
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -276,7 +267,7 @@ export function RiskRuleDialog({
                 key={i}
                 className='bg-muted/40 flex flex-wrap items-end gap-2 rounded-lg border p-2'
               >
-                <div className='flex-1 min-w-[150px]'>
+                <div className='min-w-[150px] flex-1'>
                   <Label className='text-muted-foreground text-xs'>
                     {t('Metric')}
                   </Label>
@@ -456,9 +447,7 @@ export function RiskRuleDialog({
                 </Label>
                 <Input
                   value={form.response_message}
-                  onChange={(e) =>
-                    update({ response_message: e.target.value })
-                  }
+                  onChange={(e) => update({ response_message: e.target.value })}
                 />
               </div>
             </div>

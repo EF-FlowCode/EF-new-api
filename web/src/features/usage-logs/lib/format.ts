@@ -5,6 +5,7 @@ import {
   parseTiersFromExpr,
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
+import { getTimePricingSummary } from '@/features/pricing/lib/time-pricing'
 import type { UsageLog } from '../data/schema'
 import type { LogOtherData } from '../types'
 
@@ -39,8 +40,8 @@ const PARAM_OVERRIDE_ACTION_MAP: Record<string, string> = {
  * Get localized label for a param override action
  */
 export function getParamOverrideActionLabel(
-    action: string,
-    t: (key: string) => string
+  action: string,
+  t: (key: string) => string
 ): string {
   const key = PARAM_OVERRIDE_ACTION_MAP[action.toLowerCase()]
   return key ? t(key) : action
@@ -50,7 +51,7 @@ export function getParamOverrideActionLabel(
  * Parse a param override audit line into action and content
  */
 export function parseAuditLine(
-    line: string
+  line: string
 ): { action: string; content: string } | null {
   if (typeof line !== 'string') return null
   const firstSpace = line.indexOf(' ')
@@ -67,9 +68,9 @@ export function parseAuditLine(
 export function isViolationFeeLog(other: LogOtherData | null): boolean {
   if (!other) return false
   return (
-      other.violation_fee === true ||
-      Boolean(other.violation_fee_code) ||
-      Boolean(other.violation_fee_marker)
+    other.violation_fee === true ||
+    Boolean(other.violation_fee_code) ||
+    Boolean(other.violation_fee_marker)
   )
 }
 
@@ -88,10 +89,34 @@ export function parseLogOther(other: string): LogOtherData | null {
 }
 
 /**
+ * Map the provider's reasoning effort to the status badge palette.
+ * Unknown and explicitly disabled values stay neutral instead of implying a
+ * successful/default effort level.
+ */
+export function getReasoningEffortVariant(
+  effort: string | undefined
+): StatusBadgeProps['variant'] {
+  switch (effort?.trim().toLowerCase()) {
+    case 'max':
+    case 'xhigh':
+    case 'high':
+      return 'orange'
+    case 'medium':
+      return 'yellow'
+    case 'low':
+    case 'minimal':
+      return 'green'
+    case 'none':
+    default:
+      return 'grey'
+  }
+}
+
+/**
  * Get time color based on duration (in seconds)
  */
 export function getTimeColor(
-    seconds: number
+  seconds: number
 ): 'success' | 'warning' | 'danger' {
   if (seconds < 10) return 'success'
   if (seconds < 30) return 'warning'
@@ -102,7 +127,7 @@ export function getTimeColor(
  * Get first-response-token color based on latency (in seconds)
  */
 export function getFirstResponseTimeColor(
-    seconds: number
+  seconds: number
 ): 'success' | 'warning' | 'danger' {
   if (seconds < 5) return 'success'
   if (seconds < 10) return 'warning'
@@ -113,7 +138,7 @@ export function getFirstResponseTimeColor(
  * Get throughput color based on generated tokens per second
  */
 export function getThroughputColor(
-    tokensPerSecond: number
+  tokensPerSecond: number
 ): 'success' | 'warning' | 'danger' {
   if (tokensPerSecond >= 30) return 'success'
   if (tokensPerSecond >= 15) return 'warning'
@@ -124,8 +149,8 @@ export function getThroughputColor(
  * Get response color using throughput only when enough output tokens exist.
  */
 export function getResponseTimeColor(
-    seconds: number,
-    completionTokens: number
+  seconds: number,
+  completionTokens: number
 ): 'success' | 'warning' | 'danger' {
   if (completionTokens < 100 || seconds <= 0) return getTimeColor(seconds)
   return getThroughputColor(completionTokens / seconds)
@@ -138,18 +163,20 @@ export function formatModelName(log: UsageLog): {
   name: string
   isMapped: boolean
   actualModel?: string
+  responseModel?: LogOtherData['response_model']
 } {
   const other = parseLogOther(log.other)
   const isMapped = !!(
-      other?.is_model_mapped &&
-      other?.upstream_model_name &&
-      other.upstream_model_name !== ''
+    other?.is_model_mapped &&
+    other?.upstream_model_name &&
+    other.upstream_model_name !== ''
   )
 
   return {
     name: log.model_name,
     isMapped,
     actualModel: isMapped ? other.upstream_model_name : undefined,
+    responseModel: other?.response_model,
   }
 }
 
@@ -161,9 +188,9 @@ export function decodeBillingExprB64(exprB64: string | undefined): string {
   if (!exprB64) return ''
   try {
     const binaryString =
-        typeof window !== 'undefined'
-            ? window.atob(exprB64)
-            : Buffer.from(exprB64, 'base64').toString('binary')
+      typeof window !== 'undefined'
+        ? window.atob(exprB64)
+        : Buffer.from(exprB64, 'base64').toString('binary')
     const bytes = new Uint8Array(binaryString.length)
 
     for (let i = 0; i < binaryString.length; i++) {
@@ -175,9 +202,9 @@ export function decodeBillingExprB64(exprB64: string | undefined): string {
     }
 
     return decodeURIComponent(
-        Array.prototype.map
-            .call(bytes, (byte: number) => '%' + byte.toString(16).padStart(2, '0'))
-            .join('')
+      Array.prototype.map
+        .call(bytes, (byte: number) => '%' + byte.toString(16).padStart(2, '0'))
+        .join('')
     )
   } catch {
     return ''
@@ -190,8 +217,8 @@ export function decodeBillingExprB64(exprB64: string | undefined): string {
  * that would display guessed unit prices.
  */
 export function resolveMatchedTier(
-    tiers: ParsedTier[],
-    matchedLabel: string | undefined
+  tiers: ParsedTier[],
+  matchedLabel: string | undefined
 ): ParsedTier | null {
   if (tiers.length === 0) return null
   if (!matchedLabel) return null
@@ -201,6 +228,21 @@ export function resolveMatchedTier(
     return l1 === l2 && l1 !== ''
   })
   return found || null
+}
+
+/**
+ * eflow: 按上游 fc08b76f0 —— 表达式解析不出该档单价时（表达式缺失、无法解码、
+ * 记录的档位不在当前表达式里），保留日志记录的计费分档名，不猜价格；没有
+ * 记录分档时显示中性的「特殊计费表达式」。分档名与正常路径一样走 i18n，
+ * 自定义名字命中不到翻译时原样显示。
+ */
+export function getUnresolvedTierText(
+  other: Pick<LogOtherData, 'matched_tier'> | null | undefined,
+  t: (key: string, opts?: Record<string, unknown>) => string
+): string {
+  const tier = other?.matched_tier?.trim()
+  if (tier) return t(tier, { defaultValue: tier })
+  return t('Special billing expression')
 }
 
 /**
@@ -220,21 +262,26 @@ export interface TieredBillingSummary {
  * not exercise the cache path.
  */
 export function hasAnyCacheTokens(
-    other: LogOtherData | null | undefined
+  other: LogOtherData | null | undefined
 ): boolean {
   if (!other) return false
   return (
-      (other.cache_tokens || 0) > 0 ||
-      (other.cache_creation_tokens || 0) > 0 ||
-      (other.cache_creation_tokens_5m || 0) > 0 ||
-      (other.cache_creation_tokens_1h || 0) > 0
+    (other.cache_tokens || 0) > 0 ||
+    (other.cache_creation_tokens || 0) > 0 ||
+    (other.cache_creation_tokens_5m || 0) > 0 ||
+    (other.cache_creation_tokens_1h || 0) > 0
   )
 }
 
 export function getTieredBillingSummary(
-    other: LogOtherData | null
+  other: LogOtherData | null
 ): TieredBillingSummary | null {
-  if (!other || other.billing_mode !== 'tiered_expr') return null
+  if (
+    !other ||
+    (other.billing_mode !== 'tiered_expr' &&
+      other.billing_mode !== 'flat_price')
+  )
+    return null
   const exprStr = decodeBillingExprB64(other.expr_b64)
   if (!exprStr) return null
   const tiers = parseTiersFromExpr(exprStr)
@@ -267,16 +314,16 @@ export function getTieredBillingSummary(
  * @param unit - Unit of the timestamps ('seconds' or 'milliseconds')
  */
 export function formatDuration(
-    submitTime?: number,
-    finishTime?: number,
-    unit: 'seconds' | 'milliseconds' = 'milliseconds'
+  submitTime?: number,
+  finishTime?: number,
+  unit: 'seconds' | 'milliseconds' = 'milliseconds'
 ): { durationSec: number; variant: StatusBadgeProps['variant'] } | null {
   if (!submitTime || !finishTime) return null
 
   const durationSec =
-      unit === 'milliseconds'
-          ? (finishTime - submitTime) / 1000
-          : finishTime - submitTime
+    unit === 'milliseconds'
+      ? (finishTime - submitTime) / 1000
+      : finishTime - submitTime
 
   return { durationSec, variant: durationSec > 60 ? 'red' : 'green' }
 }
@@ -307,9 +354,28 @@ export interface BillingFormulaTerm {
   productUSD: number
 }
 
+export interface BillingTokenDeduction {
+  varName: string
+  tokens: number
+}
+
+export interface BillingTokenNormalization {
+  varName: 'p' | 'c'
+  rawTokens: number
+  deductions: BillingTokenDeduction[]
+  normalizedTokens: number
+}
+
 export interface BillingFormula {
   terms: BillingFormulaTerm[]
+  tokenNormalizations: BillingTokenNormalization[]
   subtotalUSD: number
+  /**
+   * Time-of-day request-rule multiplier active at log.created_at (e.g. 2x
+   * during 8:00~22:00). null when the expression has no time rule or the
+   * multiplier is 1.
+   */
+  timeMultiplier: number | null
   groupRatio: number | null
   groupRatioIsUserExclusive: boolean
   totalUSD: number
@@ -356,7 +422,10 @@ function extractTokensByVar(
   log: UsageLog,
   other: LogOtherData,
   pricesByVar: Record<string, number>
-): Record<string, number> {
+): {
+  tokensByVar: Record<string, number>
+  tokenNormalizations: BillingTokenNormalization[]
+} {
   const isClaude = other.claude === true
   const cacheRead = other.cache_tokens || 0
   const cache5m =
@@ -366,33 +435,66 @@ function extractTokensByVar(
   const audioOut = other.audio_output || 0
   const imageTokens = getImageTokenDetails(other)
   const isSeparatelyPriced = (key: string) => (pricesByVar[key] ?? 0) > 0
+  const promptDeductions: BillingTokenDeduction[] = []
+  const completionDeductions: BillingTokenDeduction[] = []
 
   let p = log.prompt_tokens
   let c = log.completion_tokens
   if (!isClaude) {
     // GPT-style totals include cache + media; subtract whatever is
     // separately priced in the formula below.
-    if (isSeparatelyPriced('cr')) p -= cacheRead
-    if (isSeparatelyPriced('cc')) p -= cache5m
-    if (isSeparatelyPriced('cc1h')) p -= cache1h
-    if (isSeparatelyPriced('img')) p -= imageTokens.input
-    if (isSeparatelyPriced('ai')) p -= audioIn
-    if (isSeparatelyPriced('img_o')) c -= imageTokens.output
-    if (isSeparatelyPriced('ao')) c -= audioOut
+    const deductPrompt = (varName: string, tokens: number) => {
+      if (!isSeparatelyPriced(varName) || tokens <= 0) return
+      p -= tokens
+      promptDeductions.push({ varName, tokens })
+    }
+    const deductCompletion = (varName: string, tokens: number) => {
+      if (!isSeparatelyPriced(varName) || tokens <= 0) return
+      c -= tokens
+      completionDeductions.push({ varName, tokens })
+    }
+    deductPrompt('cr', cacheRead)
+    deductPrompt('cc', cache5m)
+    deductPrompt('cc1h', cache1h)
+    deductPrompt('img', imageTokens.input)
+    deductPrompt('ai', audioIn)
+    deductCompletion('img_o', imageTokens.output)
+    deductCompletion('ao', audioOut)
     p = Math.max(0, p)
     c = Math.max(0, c)
   }
 
+  const tokenNormalizations: BillingTokenNormalization[] = []
+  if (promptDeductions.length > 0) {
+    tokenNormalizations.push({
+      varName: 'p',
+      rawTokens: log.prompt_tokens,
+      deductions: promptDeductions,
+      normalizedTokens: p,
+    })
+  }
+  if (completionDeductions.length > 0) {
+    tokenNormalizations.push({
+      varName: 'c',
+      rawTokens: log.completion_tokens,
+      deductions: completionDeductions,
+      normalizedTokens: c,
+    })
+  }
+
   return {
-    p,
-    c,
-    cr: cacheRead,
-    cc: cache5m,
-    cc1h: cache1h,
-    img: imageTokens.input,
-    img_o: imageTokens.output,
-    ai: audioIn,
-    ao: audioOut,
+    tokensByVar: {
+      p,
+      c,
+      cr: cacheRead,
+      cc: cache5m,
+      cc1h: cache1h,
+      img: imageTokens.input,
+      img_o: imageTokens.output,
+      ai: audioIn,
+      ao: audioOut,
+    },
+    tokenNormalizations,
   }
 }
 
@@ -405,9 +507,10 @@ function extractTokensByVar(
  * uses to render the `$X/M` rows.
  */
 function extractPricesByVar(other: LogOtherData): Record<string, number> {
-  const isTieredExpr = other.billing_mode === 'tiered_expr'
+  const isExpressionBilling =
+    other.billing_mode === 'tiered_expr' || other.billing_mode === 'flat_price'
 
-  if (isTieredExpr) {
+  if (isExpressionBilling) {
     const summary = getTieredBillingSummary(other)
     if (!summary) return {}
     // priceEntries is keyed by ParsedTier.field name (inputPrice,
@@ -483,20 +586,18 @@ export function buildBillingFormula(
   other: LogOtherData
 ): BillingFormula | null {
   const billingMode = other.billing_mode
-  const isTieredExpr = billingMode === 'tiered_expr'
+  const isExpressionBilling =
+    billingMode === 'tiered_expr' || billingMode === 'flat_price'
 
   // Skip non-additive billing modes: per-call / audio_seconds /
   // duration_seconds all bypass the (Σ tokens × price) shape.
-  if (
-    billingMode === 'audio_seconds' ||
-    billingMode === 'duration_seconds'
-  ) {
+  if (billingMode === 'audio_seconds' || billingMode === 'duration_seconds') {
     return null
   }
-  if (!isTieredExpr && (other.model_price ?? 0) > 0) {
+  if (!isExpressionBilling && (other.model_price ?? 0) > 0) {
     return null
   }
-  if (!isTieredExpr && other.model_ratio == null) {
+  if (!isExpressionBilling && other.model_ratio == null) {
     return null
   }
 
@@ -504,7 +605,11 @@ export function buildBillingFormula(
 
   if (Object.keys(pricesByVar).length === 0) return null
 
-  const tokensByVar = extractTokensByVar(log, other, pricesByVar)
+  const { tokensByVar, tokenNormalizations } = extractTokensByVar(
+    log,
+    other,
+    pricesByVar
+  )
 
   const labelByVar: Record<string, string> = {}
   for (const v of BILLING_PRICING_VARS) {
@@ -538,7 +643,19 @@ export function buildBillingFormula(
   const effectiveGR = isUserExclusive ? userGR : other.group_ratio
   const groupRatio =
     effectiveGR != null && Number.isFinite(effectiveGR) ? effectiveGR : null
-  const totalUSD = subtotalUSD * (groupRatio ?? 1)
+  // The backend applies time-based request rules inside the expression, so
+  // re-evaluate them at the log's creation time to match the charged quota.
+  let timeMultiplier: number | null = null
+  if (isExpressionBilling && log.created_at > 0) {
+    const multiplier = getTimePricingSummary(
+      decodeBillingExprB64(other.expr_b64),
+      new Date(log.created_at * 1000)
+    )?.currentMultiplier
+    if (multiplier != null && Number.isFinite(multiplier) && multiplier !== 1) {
+      timeMultiplier = multiplier
+    }
+  }
+  const totalUSD = subtotalUSD * (timeMultiplier ?? 1) * (groupRatio ?? 1)
 
   // Cache hit rate: cr / (p + cr + cc), excludes cc1h per user spec.
   // Keep the historical cache-hit denominator independent of which rows are
@@ -560,11 +677,14 @@ export function buildBillingFormula(
             audioInputTokens
         )
   const cacheDenom = pTokens + crTokens + ccTokens
-  const cacheHitRate = cacheDenom > 0 && crTokens > 0 ? crTokens / cacheDenom : null
+  const cacheHitRate =
+    cacheDenom > 0 && crTokens > 0 ? crTokens / cacheDenom : null
 
   return {
     terms,
+    tokenNormalizations,
     subtotalUSD,
+    timeMultiplier,
     groupRatio,
     groupRatioIsUserExclusive: isUserExclusive,
     totalUSD,

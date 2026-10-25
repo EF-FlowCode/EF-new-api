@@ -20,6 +20,18 @@ type BodyStorage interface {
 	Size() int64
 	// IsDisk 是否是磁盘存储
 	IsDisk() bool
+	// NewReader returns an independent reader positioned at the start of the
+	// stored payload. The returned reader owns only its cursor and can be
+	// closed without releasing the storage itself.
+	NewReader() (io.ReadCloser, error)
+}
+
+// ReplayableBody is an outbound body that can be replayed by net/http after a
+// transport-level retry (for example, an HTTP/2 stream reset).
+type ReplayableBody interface {
+	io.Reader
+	Size() int64
+	NewReader() (io.ReadCloser, error)
 }
 
 // ErrStorageClosed 存储已关闭错误
@@ -80,6 +92,15 @@ func (m *memoryStorage) Bytes() ([]byte, error) {
 	return m.data, nil
 }
 
+func (m *memoryStorage) NewReader() (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if atomic.LoadInt32(&m.closed) == 1 {
+		return nil, ErrStorageClosed
+	}
+	return io.NopCloser(bytes.NewReader(m.data)), nil
+}
+
 func (m *memoryStorage) Size() int64 {
 	return m.size
 }
@@ -108,14 +129,14 @@ func newDiskStorage(data []byte, cachePath string) (*diskStorage, error) {
 	n, err := file.Write(data)
 	if err != nil {
 		file.Close()
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return nil, fmt.Errorf("failed to write to temp file: %w", err)
 	}
 
 	// 重置文件指针
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		file.Close()
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return nil, fmt.Errorf("failed to seek temp file: %w", err)
 	}
 
@@ -140,20 +161,20 @@ func newDiskStorageFromReader(reader io.Reader, maxBytes int64, cachePath string
 	written, err := io.Copy(file, io.LimitReader(reader, maxBytes+1))
 	if err != nil {
 		file.Close()
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return nil, fmt.Errorf("failed to write to temp file: %w", err)
 	}
 
 	if written > maxBytes {
 		file.Close()
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return nil, ErrRequestBodyTooLarge
 	}
 
 	// 重置文件指针
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		file.Close()
-		os.Remove(filePath)
+		RemoveDiskCacheFile(filePath)
 		return nil, fmt.Errorf("failed to seek temp file: %w", err)
 	}
 
@@ -189,7 +210,7 @@ func (d *diskStorage) Close() error {
 	defer d.mu.Unlock()
 	if atomic.CompareAndSwapInt32(&d.closed, 0, 1) {
 		d.file.Close()
-		os.Remove(d.filePath)
+		RemoveDiskCacheFile(d.filePath)
 		DecrementDiskFiles(d.size)
 	}
 	return nil
@@ -227,6 +248,19 @@ func (d *diskStorage) Bytes() ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+func (d *diskStorage) NewReader() (io.ReadCloser, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if atomic.LoadInt32(&d.closed) == 1 {
+		return nil, ErrStorageClosed
+	}
+	file, err := os.Open(d.filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open body cache file for replay: %w", err)
+	}
+	return file, nil
 }
 
 func (d *diskStorage) Size() int64 {
@@ -300,6 +334,29 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 		IncrementDiskCacheHits()
 	}
 	return storage, nil
+}
+
+type replayableBodyReader struct {
+	storage BodyStorage
+}
+
+func (r replayableBodyReader) Read(p []byte) (int, error) {
+	return r.storage.Read(p)
+}
+
+func (r replayableBodyReader) Size() int64 {
+	return r.storage.Size()
+}
+
+func (r replayableBodyReader) NewReader() (io.ReadCloser, error) {
+	return r.storage.NewReader()
+}
+
+// NewReplayableBodyReader exposes replay metadata without exposing the
+// storage's lifecycle to net/http. The caller remains responsible for closing
+// the BodyStorage itself.
+func NewReplayableBodyReader(storage BodyStorage) ReplayableBody {
+	return replayableBodyReader{storage: storage}
 }
 
 // ReaderOnly wraps an io.Reader to hide io.Closer, preventing http.NewRequest

@@ -2,8 +2,8 @@
 // 为兼容历史 import 路径，本文件 re-export 工具：但这样还是会触发 lint。
 // 所以新代码请直接 import { ... } from './shared-utils'。
 import { useTranslation } from 'react-i18next'
-import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 
 export function StatusBadge({
   status,
@@ -67,7 +67,9 @@ export function DecisionBadge({
           {t('Observe')}
         </Badge>
       )
-    default:
+    case 'flag':
+      return <Badge variant='secondary'>{t('Flag')}</Badge>
+    case 'allow':
       return (
         <Badge
           variant='outline'
@@ -76,6 +78,8 @@ export function DecisionBadge({
           {t('Allow')}
         </Badge>
       )
+    default:
+      return <Badge variant='outline'>{decision || '—'}</Badge>
   }
 }
 

@@ -76,6 +76,7 @@ export interface ChannelAffinityInfo {
 
 export interface LogOtherData {
   admin_info?: {
+    reject_reason?: string
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
@@ -116,6 +117,13 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
+  // 诊断用：上游声明的响应模型。是否不一致不存标志位，由 isResponseModelMismatch
+  // 按名称现算，历史日志也按当前规则判断。
+  response_model?: {
+    requested_model: string
+    upstream_model: string
+    returned_model: string
+  }
   audio_ratio?: number
   audio_completion_ratio?: number
   frt?: number
@@ -125,6 +133,8 @@ export interface LogOtherData {
   billing_mode?: string
   expr_b64?: string
   matched_tier?: string
+  input_tokens?: number
+  input_price?: number
   // eflow: 按时长计费的实际计费秒数。视频任务(billing_mode=
   // duration_seconds)由后端写入；ASR(billing_mode=audio_seconds)秒数即
   // prompt_tokens(秒当 token)，不写本字段。
@@ -166,6 +176,8 @@ export interface LogOtherData {
   // Reject / intercept reason (admin)
   reject_reason?: string
   // Task-related fields (for refund logs, type=6)
+  usage_refund_batch_id?: string
+  refund_count?: number
   is_task?: boolean
   task_id?: string
   reason?: string
@@ -227,6 +239,7 @@ export interface TaskLog {
   data?: string // JSON string
   fail_reason?: string
   status: string // NOT_START, SUBMITTED, IN_PROGRESS, SUCCESS, FAILURE, QUEUED, UNKNOWN
+  channel_status?: 'disabled' // terminal result served after its channel was disabled
   other?: string
   created_at?: number
   updated_at?: number
@@ -327,22 +340,4 @@ export interface FetchLogsConfig {
   columnFilters: Array<{ id: string; value: unknown }>
   sortBy?: string
   sortOrder?: 'asc' | 'desc'
-}
-
-// ============================================================================
-// User Info Types
-// ============================================================================
-
-export interface UserInfo {
-  id: number
-  username: string
-  display_name?: string
-  quota: number
-  used_quota: number
-  request_count: number
-  group?: string
-  aff_code?: string
-  aff_count?: number
-  aff_quota?: number
-  remark?: string
 }

@@ -11,6 +11,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 import { deleteUser } from '../api'
 import { ERROR_MESSAGES } from '../constants'
 import { getUserActionMessage } from '../lib'
@@ -20,13 +25,14 @@ export function UsersDeleteDialog() {
   const { t } = useTranslation()
   const { open, setOpen, currentRow, triggerRefresh } = useUsers()
   const [isDeleting, setIsDeleting] = useState(false)
+  const verification = useSecureVerification()
 
   const handleDelete = async () => {
     if (!currentRow) return
+    const target = currentRow
 
-    setIsDeleting(true)
-    try {
-      const result = await deleteUser(currentRow.id)
+    const submit = async (proof?: SecurityProof) => {
+      const result = await deleteUser(target.id, proof?.proof_token)
       if (result.success) {
         toast.success(t(getUserActionMessage('delete')))
         setOpen(null)
@@ -34,6 +40,19 @@ export function UsersDeleteDialog() {
       } else {
         toast.error(result.message || t(ERROR_MESSAGES.DELETE_FAILED))
       }
+    }
+
+    setIsDeleting(true)
+    try {
+      await verification.startVerification(submit, {
+        operation: {
+          scope: 'admin.user.delete',
+          context: { user_id: target.id },
+        },
+        description: t('Confirm your identity before deleting {{username}}.', {
+          username: target.username,
+        }),
+      })
     } catch (_error) {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
@@ -68,6 +87,7 @@ export function UsersDeleteDialog() {
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
+      <SecureVerificationDialog {...verification.dialogProps} />
     </AlertDialog>
   )
 }

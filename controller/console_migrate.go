@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,7 +29,7 @@ func MigrateConsoleSetting(c *gin.Context) {
 
 	// 处理 APIInfo
 	if v := valMap["ApiInfo"]; v != "" {
-		var arr []map[string]interface{}
+		var arr []map[string]any
 		if err := json.Unmarshal([]byte(v), &arr); err == nil {
 			if len(arr) > 50 {
 				arr = arr[:50]
@@ -46,9 +46,9 @@ func MigrateConsoleSetting(c *gin.Context) {
 	}
 	// FAQ 转换
 	if v := valMap["FAQ"]; v != "" {
-		var arr []map[string]interface{}
+		var arr []map[string]any
 		if err := json.Unmarshal([]byte(v), &arr); err == nil {
-			out := []map[string]interface{}{}
+			out := []map[string]any{}
 			for _, item := range arr {
 				q, _ := item["question"].(string)
 				if q == "" {
@@ -59,7 +59,7 @@ func MigrateConsoleSetting(c *gin.Context) {
 					a, _ = item["content"].(string)
 				}
 				if q != "" && a != "" {
-					out = append(out, map[string]interface{}{"question": q, "answer": a})
+					out = append(out, map[string]any{"question": q, "answer": a})
 				}
 			}
 			if len(out) > 50 {
@@ -75,7 +75,7 @@ func MigrateConsoleSetting(c *gin.Context) {
 	slug := valMap["UptimeKumaSlug"]
 	if url != "" && slug != "" {
 		// 仅当同时存在 URL 与 Slug 时才进行迁移
-		groups := []map[string]interface{}{
+		groups := []map[string]any{
 			{
 				"id":           1,
 				"categoryName": "old",

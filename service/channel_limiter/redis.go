@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
 	"github.com/go-redis/redis/v8"
 )
 
@@ -19,14 +19,10 @@ var redisAcquireScript string
 //go:embed lua/release.lua
 var redisReleaseScript string
 
-//go:embed lua/peek.lua
-var redisPeekScript string
-
 type redisBackend struct {
 	client     *redis.Client
 	acquireSHA string
 	releaseSHA string
-	peekSHA    string
 }
 
 func newRedisBackend() (*redisBackend, error) {
@@ -44,20 +40,25 @@ func newRedisBackend() (*redisBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load release script: %w", err)
 	}
-	pSHA, err := common.RDB.ScriptLoad(ctx, redisPeekScript).Result()
-	if err != nil {
-		return nil, fmt.Errorf("load peek script: %w", err)
-	}
 	return &redisBackend{
 		client:     common.RDB,
 		acquireSHA: aSHA,
 		releaseSHA: rSHA,
-		peekSHA:    pSHA,
 	}, nil
 }
 
 func (b *redisBackend) keys(channelID int) (rpmKey, concKey string) {
 	return fmt.Sprintf("chnlrl:rpm:%d", channelID), fmt.Sprintf("chnlrl:conc:%d", channelID)
+}
+
+// concurrencyTTLSeconds must outlive the longest in-flight request: a shorter
+// expiry (it used to be 60s) resets the counter while long streams still hold
+// their slots, so the concurrency cap stops working until they finish.
+func concurrencyTTLSeconds() int {
+	if common.RelayTimeout > 0 {
+		return common.RelayTimeout + 60
+	}
+	return 3600
 }
 
 func uniqueToken() string {
@@ -68,7 +69,7 @@ func (b *redisBackend) Acquire(ctx context.Context, channelID int, cfg *dto.Chan
 	rpmKey, concKey := b.keys(channelID)
 	res, err := b.client.EvalSha(ctx, b.acquireSHA,
 		[]string{rpmKey, concKey},
-		cfg.RPM, rpmWindowSeconds, cfg.Concurrency, uniqueToken(),
+		cfg.RPM, rpmWindowSeconds, cfg.Concurrency, uniqueToken(), concurrencyTTLSeconds(),
 	).StringSlice()
 	if err != nil {
 		// Redis 故障时 fail-open，避免限流模块拖垮整个网关
@@ -84,7 +85,7 @@ func (b *redisBackend) Acquire(ctx context.Context, channelID int, cfg *dto.Chan
 				}
 				rctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
-				if _, e := b.client.EvalSha(rctx, b.releaseSHA, []string{concKey}).Result(); e != nil {
+				if _, e := b.client.EvalSha(rctx, b.releaseSHA, []string{concKey}, concurrencyTTLSeconds()).Result(); e != nil {
 					common.SysError(fmt.Sprintf("channel_limiter: redis release failed channel=%d err=%v", channelID, e))
 				}
 			},
@@ -95,23 +96,4 @@ func (b *redisBackend) Acquire(ctx context.Context, channelID int, cfg *dto.Chan
 		reason = res[1]
 	}
 	return nil, Decision{Allowed: false, Reason: reason}
-}
-
-func (b *redisBackend) Peek(ctx context.Context, channelID int, cfg *dto.ChannelRateLimit) Decision {
-	rpmKey, concKey := b.keys(channelID)
-	res, err := b.client.EvalSha(ctx, b.peekSHA,
-		[]string{rpmKey, concKey},
-		cfg.RPM, rpmWindowSeconds, cfg.Concurrency,
-	).StringSlice()
-	if err != nil {
-		return Decision{Allowed: true}
-	}
-	if len(res) > 0 && res[0] == "1" {
-		return Decision{Allowed: true}
-	}
-	reason := ReasonRPMExceeded
-	if len(res) > 1 {
-		reason = res[1]
-	}
-	return Decision{Allowed: false, Reason: reason}
 }

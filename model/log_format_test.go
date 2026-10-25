@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 )
 
 func TestFormatUserLogsPreservesStreamStatus(t *testing.T) {

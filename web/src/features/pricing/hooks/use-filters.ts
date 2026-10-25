@@ -10,7 +10,7 @@ import {
   type ViewMode,
 } from '../constants'
 import { filterAndSortModels, extractAllTags } from '../lib/filters'
-import type { PricingModel, TokenUnit } from '../types'
+import type { PricingEndpointOverride, PricingModel, TokenUnit } from '../types'
 
 type FilterState = {
   search?: string
@@ -32,7 +32,10 @@ function normalizeViewMode(value: unknown): ViewMode {
   return VIEW_MODES.CARD
 }
 
-export function useFilters(models: PricingModel[]) {
+export function useFilters(
+  models: PricingModel[],
+  groupEndpointOverrides?: Record<string, PricingEndpointOverride>
+) {
   const search = useSearch({ from: '/_authenticated/pricing/' })
   const [filterState, setFilterState] = useState<FilterState>(() => ({
     search: search.search,
@@ -59,20 +62,17 @@ export function useFilters(models: PricingModel[]) {
   const viewMode = normalizeViewMode(filterState.view)
   const showRechargePrice = filterState.rechargePrice === true
 
-  const updateFilters = useCallback(
-    (updates: Record<string, unknown>) => {
-      setFilterState((prev) => {
-        const next: Record<string, unknown> = { ...prev, ...updates }
-        for (const key of Object.keys(next)) {
-          if (next[key] === undefined || next[key] === null) {
-            delete next[key]
-          }
+  const updateFilters = useCallback((updates: Record<string, unknown>) => {
+    setFilterState((prev) => {
+      const next: Record<string, unknown> = { ...prev, ...updates }
+      for (const key of Object.keys(next)) {
+        if (next[key] === undefined || next[key] === null) {
+          delete next[key]
         }
-        return next as FilterState
-      })
-    },
-    []
-  )
+      }
+      return next as FilterState
+    })
+  }, [])
 
   const setSearchInput = useCallback(
     (v: string) => updateFilters({ search: v || undefined }),
@@ -138,6 +138,7 @@ export function useFilters(models: PricingModel[]) {
       endpointType: endpointTypeFilter,
       tag: tagFilter,
       sortBy,
+      groupEndpointOverrides,
     })
   }, [
     models,
@@ -148,6 +149,7 @@ export function useFilters(models: PricingModel[]) {
     endpointTypeFilter,
     tagFilter,
     sortBy,
+    groupEndpointOverrides,
   ])
 
   const hasActiveFilters = useMemo(

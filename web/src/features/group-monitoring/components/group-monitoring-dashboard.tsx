@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   ChevronDown,
@@ -35,6 +35,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   fetchGroupHistory,
   fetchGroups,
+  fetchMonitoringModels,
   refreshAdminMonitoring,
   updateGroupMonitoringSettings,
 } from '../api'
@@ -121,6 +122,18 @@ export function GroupMonitoringDashboard() {
   })
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [manageOpen, setManageOpen] = useState(false)
+  const modelMetrics = useQuery({
+    queryKey: [
+      'monitoring-models',
+      admin,
+      groups.map((group) => group.group_name).sort(),
+    ],
+    queryFn: ({ signal }) => fetchMonitoringModels(admin, signal),
+    enabled: groups.length > 0,
+    staleTime: POLL_INTERVAL_MS,
+    refetchInterval: POLL_INTERVAL_MS,
+    retry: 1,
+  })
 
   const loadGroups = useCallback(
     async (includeHistory: boolean) => {
@@ -220,8 +233,9 @@ export function GroupMonitoringDashboard() {
       }
       await loadGroups(true)
       setCountdown(POLL_INTERVAL_MS)
-    } catch {
-      toast.error(t('Refresh failed'))
+      await modelMetrics.refetch()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t('Refresh failed'))
     } finally {
       setRefreshing(false)
     }
@@ -295,8 +309,8 @@ export function GroupMonitoringDashboard() {
   ).padStart(2, '0')}`
 
   return (
-    <div className='px-4 pb-12 sm:px-8 lg:px-10'>
-      <div className='mx-auto w-full max-w-[1440px]'>
+    <div className='monitoring-dashboard px-4 pb-12 sm:px-8 lg:px-10'>
+      <div className='mx-auto w-full max-w-[1920px]'>
         {/* Title bar */}
         <div className='flex flex-wrap items-center justify-between gap-4 py-6 sm:py-8'>
           <div className='flex flex-wrap items-baseline gap-x-4 gap-y-2'>
@@ -401,9 +415,14 @@ export function GroupMonitoringDashboard() {
           </div>
         </div>
 
-        {/* Cards grid */}
+        <p className='text-muted-foreground mb-4 text-xs'>
+          {t(
+            'Model metrics reflect requests in the last 24 hours and use a different basis from group availability. Gray means no samples.'
+          )}
+        </p>
+        {/* Group rows */}
         {loading ? (
-          <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 2xl:grid-cols-4'>
+          <div className='flex flex-col gap-3'>
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <div key={i} className='bg-card rounded-2xl border p-5'>
                 <Skeleton className='mb-4 h-5 w-1/2' />
@@ -456,11 +475,15 @@ export function GroupMonitoringDashboard() {
                     </span>
                   </button>
                   {isOpen && (
-                    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 2xl:grid-cols-4'>
+                    <div className='flex flex-col gap-3'>
                       {section.items.map((g) => (
                         <GroupStatusCard
                           key={g.group_name}
                           group={g}
+                          models={modelMetrics.data?.groups[g.group_name]}
+                          window={modelMetrics.data}
+                          loading={modelMetrics.isPending}
+                          error={modelMetrics.isError}
                           onClick={admin ? handleCardClick : undefined}
                         />
                       ))}
@@ -471,11 +494,15 @@ export function GroupMonitoringDashboard() {
             })}
           </div>
         ) : (
-          <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 2xl:grid-cols-4'>
+          <div className='flex flex-col gap-3'>
             {visible.map((g) => (
               <GroupStatusCard
                 key={g.group_name}
                 group={g}
+                models={modelMetrics.data?.groups[g.group_name]}
+                window={modelMetrics.data}
+                loading={modelMetrics.isPending}
+                error={modelMetrics.isError}
                 onClick={admin ? handleCardClick : undefined}
               />
             ))}

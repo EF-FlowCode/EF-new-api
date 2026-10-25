@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
-import { api } from '@/lib/api'
+import { toast } from 'sonner'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 
 // ----------------------------------------------------------------------------
 // Types
@@ -80,13 +80,14 @@ async function fetchConfig(): Promise<TicketAttachmentConfig> {
       accept: DEFAULT_EXTS.map((e) => `.${e}`).join(','),
     }
     try {
-      const res = await api.get('/api/status')
+      const res = await api.get('/api/status', CALLER_HANDLED_REQUEST_CONFIG)
       const data = res.data?.data || {}
       const enabled =
         data.ticket_attachment_enabled === undefined
           ? true
           : Boolean(data.ticket_attachment_enabled)
-      const maxSize = Number(data.ticket_attachment_max_size) || DEFAULT_MAX_SIZE
+      const maxSize =
+        Number(data.ticket_attachment_max_size) || DEFAULT_MAX_SIZE
       const maxCount =
         Number(data.ticket_attachment_max_count) || DEFAULT_MAX_COUNT
       const extsRaw =
@@ -221,6 +222,7 @@ export function useTicketAttachments(): UseTicketAttachmentsResult {
           form.append('file', file)
           try {
             const res = await api.post('/api/ticket/attachment', form, {
+              ...CALLER_HANDLED_REQUEST_CONFIG,
               headers: { 'Content-Type': 'multipart/form-data' },
             })
             if (!res.data?.success) {
@@ -246,7 +248,10 @@ export function useTicketAttachments(): UseTicketAttachmentsResult {
       const target = attachments.find((a) => a.id === numericId)
       if (target?.id) {
         try {
-          await api.delete(`/api/ticket/attachment/${target.id}`)
+          await api.delete(
+            `/api/ticket/attachment/${target.id}`,
+            CALLER_HANDLED_REQUEST_CONFIG
+          )
         } catch {
           /* ignore — backend cleanup task will reap orphans */
         }
@@ -265,7 +270,10 @@ export function useTicketAttachments(): UseTicketAttachmentsResult {
     setAttachments([])
     for (const id of ids) {
       try {
-        await api.delete(`/api/ticket/attachment/${id}`)
+        await api.delete(
+          `/api/ticket/attachment/${id}`,
+          CALLER_HANDLED_REQUEST_CONFIG
+        )
       } catch {
         /* ignore */
       }

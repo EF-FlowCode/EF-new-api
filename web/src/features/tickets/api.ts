@@ -1,4 +1,10 @@
-import { api } from '@/lib/api'
+import { isAxiosError } from 'axios'
+import {
+  api,
+  CALLER_HANDLED_REQUEST_CONFIG,
+  type ApiResult,
+  unwrapApiResult,
+} from '@/lib/api'
 import type {
   CreateInvoiceTicketPayload,
   CreateRefundTicketPayload,
@@ -11,12 +17,6 @@ import type {
   TicketStatus,
   UpdateRefundStatusPayload,
 } from './types'
-
-type ApiResponse<T> = {
-  success: boolean
-  message?: string
-  data: T
-}
 
 /** 可排序列，与后端 resolveTicketOrder 白名单一一对应。 */
 export type TicketSortField =
@@ -34,6 +34,7 @@ export type TicketListParams = {
   admin?: boolean
   orderBy?: TicketSortField
   order?: 'asc' | 'desc'
+  companyName?: string
 }
 
 function buildQuery(params: TicketListParams): string {
@@ -44,6 +45,9 @@ function buildQuery(params: TicketListParams): string {
     search.set('status', String(params.status))
   }
   if (params.type) search.set('type', params.type)
+  if (params.admin && params.companyName?.trim()) {
+    search.set('company_name', params.companyName.trim())
+  }
   if (params.orderBy) {
     search.set('order_by', params.orderBy)
     search.set('order', params.order === 'asc' ? 'asc' : 'desc')
@@ -52,16 +56,65 @@ function buildQuery(params: TicketListParams): string {
 }
 
 export async function fetchTickets(
-  params: TicketListParams
+  params: TicketListParams,
+  signal?: AbortSignal
 ): Promise<TicketListResponse> {
   const base = params.admin ? '/api/ticket/admin' : '/api/ticket/self'
-  const res = await api.get<ApiResponse<TicketListResponse>>(
-    `${base}?${buildQuery(params)}`
+  const res = await api.get<ApiResult<TicketListResponse>>(
+    `${base}?${buildQuery(params)}`,
+    { ...CALLER_HANDLED_REQUEST_CONFIG, signal }
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to load tickets')
+  return unwrapApiResult(res.data, 'Failed to load tickets')
+}
+
+const INVOICE_WORKBOOK_TYPE =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+async function invoiceExportError(data: unknown): Promise<string> {
+  if (data instanceof Blob && data.type.includes('json')) {
+    try {
+      const body = JSON.parse(await data.text()) as { message?: unknown }
+      if (typeof body.message === 'string' && body.message) return body.message
+    } catch {
+      /* use the translated fallback */
+    }
   }
-  return res.data.data
+  return 'Failed to export invoices'
+}
+
+export async function exportTicketInvoices(
+  ids: number[]
+): Promise<{ blob: Blob; filename: string }> {
+  let response
+  try {
+    response = await api.post<Blob>(
+      '/api/ticket/admin/invoice-export',
+      { ids },
+      {
+        ...CALLER_HANDLED_REQUEST_CONFIG,
+        responseType: 'blob',
+      }
+    )
+  } catch (error) {
+    if (isAxiosError(error) && error.response?.data instanceof Blob) {
+      throw new Error(await invoiceExportError(error.response.data), {
+        cause: error,
+      })
+    }
+    throw error
+  }
+  if (
+    !(response.data instanceof Blob) ||
+    response.data.size === 0 ||
+    !String(response.headers['content-type']).startsWith(INVOICE_WORKBOOK_TYPE)
+  ) {
+    throw new Error(await invoiceExportError(response.data))
+  }
+  const disposition = String(response.headers['content-disposition'] || '')
+  const filename =
+    /filename="(invoice-requests-[0-9-]+\.xlsx)"/.exec(disposition)?.[1] ||
+    'invoice-requests.xlsx'
+  return { blob: response.data, filename }
 }
 
 export async function fetchTicketDetail(
@@ -71,11 +124,11 @@ export async function fetchTicketDetail(
   const path = admin
     ? `/api/ticket/admin/${ticketId}`
     : `/api/ticket/self/${ticketId}`
-  const res = await api.get<ApiResponse<TicketDetail>>(path)
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to load ticket')
-  }
-  return res.data.data
+  const res = await api.get<ApiResult<TicketDetail>>(
+    path,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  return unwrapApiResult(res.data, 'Failed to load ticket')
 }
 
 export async function postTicketReply(
@@ -87,13 +140,15 @@ export async function postTicketReply(
   const path = admin
     ? `/api/ticket/admin/${ticketId}/message`
     : `/api/ticket/self/${ticketId}/message`
-  const res = await api.post<ApiResponse<unknown>>(path, {
-    content,
-    attachment_ids: attachmentIds,
-  })
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to send reply')
-  }
+  const res = await api.post<ApiResult<unknown>>(
+    path,
+    {
+      content,
+      attachment_ids: attachmentIds,
+    },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  unwrapApiResult(res.data, 'Failed to send reply')
   return true
 }
 
@@ -105,11 +160,17 @@ export async function closeTicket(
     ? `/api/ticket/admin/${ticketId}/status`
     : `/api/ticket/self/${ticketId}/close`
   const res = admin
-    ? await api.put<ApiResponse<unknown>>(path, { status: 4 })
-    : await api.put<ApiResponse<unknown>>(path)
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to close ticket')
-  }
+    ? await api.put<ApiResult<unknown>>(
+        path,
+        { status: 4 },
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
+    : await api.put<ApiResult<unknown>>(
+        path,
+        undefined,
+        CALLER_HANDLED_REQUEST_CONFIG
+      )
+  unwrapApiResult(res.data, 'Failed to close ticket')
   return true
 }
 
@@ -117,13 +178,12 @@ export async function adminUpdateTicketStatus(
   ticketId: number,
   status: TicketStatus
 ): Promise<boolean> {
-  const res = await api.put<ApiResponse<unknown>>(
+  const res = await api.put<ApiResult<unknown>>(
     `/api/ticket/admin/${ticketId}/status`,
-    { status }
+    { status },
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to update ticket status')
-  }
+  unwrapApiResult(res.data, 'Failed to update ticket status')
   return true
 }
 
@@ -140,24 +200,23 @@ export async function batchAdminUpdateTicketStatus(
   ids: number[],
   status: TicketStatus
 ): Promise<BatchUpdateStatusResult> {
-  const res = await api.put<ApiResponse<BatchUpdateStatusResult>>(
+  const res = await api.put<ApiResult<BatchUpdateStatusResult>>(
     '/api/ticket/admin/batch-status',
-    { ids, status }
+    { ids, status },
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to update ticket status')
-  }
-  return res.data.data
+  return unwrapApiResult(res.data, 'Failed to update ticket status')
 }
 
 export async function createTicket(
   payload: CreateTicketPayload
 ): Promise<Ticket | null> {
-  const res = await api.post<ApiResponse<Ticket>>('/api/ticket/', payload)
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to create ticket')
-  }
-  return res.data.data ?? null
+  const res = await api.post<ApiResult<{ ticket?: Ticket } | null>>(
+    '/api/ticket/',
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  return unwrapApiResult(res.data, 'Failed to create ticket')?.ticket ?? null
 }
 
 // ----------------------------------------------------------------------------
@@ -167,27 +226,26 @@ export async function createTicket(
 export async function createRefundTicket(
   payload: CreateRefundTicketPayload
 ): Promise<Ticket | null> {
-  const res = await api.post<ApiResponse<Ticket>>(
+  const res = await api.post<ApiResult<{ ticket?: Ticket } | null>>(
     '/api/ticket/refund/',
-    payload
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to create refund ticket')
-  }
-  return res.data.data ?? null
+  return (
+    unwrapApiResult(res.data, 'Failed to create refund ticket')?.ticket ?? null
+  )
 }
 
 export async function updateRefundStatus(
   ticketId: number,
   payload: UpdateRefundStatusPayload
 ): Promise<boolean> {
-  const res = await api.put<ApiResponse<unknown>>(
+  const res = await api.put<ApiResult<unknown>>(
     `/api/ticket/admin/${ticketId}/refund/status`,
-    payload
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to update refund status')
-  }
+  unwrapApiResult(res.data, 'Failed to update refund status')
   return true
 }
 
@@ -198,53 +256,50 @@ export async function updateRefundStatus(
 export async function fetchEligibleInvoiceOrders(): Promise<
   EligibleTopUpOrder[]
 > {
-  const res = await api.get<ApiResponse<EligibleTopUpOrder[] | null>>(
-    '/api/ticket/invoice/eligible_orders'
+  const res = await api.get<ApiResult<EligibleTopUpOrder[] | null>>(
+    '/api/ticket/invoice/eligible_orders',
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(
-      res.data.message || 'Failed to load orders eligible for invoice'
-    )
-  }
-  return res.data.data ?? []
+  return (
+    unwrapApiResult(res.data, 'Failed to load orders eligible for invoice') ??
+    []
+  )
 }
 
 export async function createInvoiceTicket(
   payload: CreateInvoiceTicketPayload
 ): Promise<Ticket | null> {
-  const res = await api.post<ApiResponse<Ticket>>(
+  const res = await api.post<ApiResult<{ ticket?: Ticket } | null>>(
     '/api/ticket/invoice/',
-    payload
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to create invoice ticket')
-  }
-  return res.data.data ?? null
+  return (
+    unwrapApiResult(res.data, 'Failed to create invoice ticket')?.ticket ?? null
+  )
 }
 
 export async function updateInvoiceStatus(
   ticketId: number,
   status: InvoiceStatus
 ): Promise<boolean> {
-  const res = await api.put<ApiResponse<unknown>>(
+  const res = await api.put<ApiResult<unknown>>(
     `/api/ticket/admin/${ticketId}/invoice/status`,
-    { invoice_status: status }
+    { invoice_status: status },
+    CALLER_HANDLED_REQUEST_CONFIG
   )
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Failed to update invoice status')
-  }
+  unwrapApiResult(res.data, 'Failed to update invoice status')
   return true
 }
 
-export async function fetchUserQuota(
-  userId: number
-): Promise<number | null> {
+export async function fetchUserQuota(userId: number): Promise<number | null> {
   try {
-    const res = await api.get<ApiResponse<{ quota: number }>>(
-      `/api/user/${userId}`
+    const res = await api.get<ApiResult<{ quota: number } | null>>(
+      `/api/user/${userId}`,
+      CALLER_HANDLED_REQUEST_CONFIG
     )
-    if (!res.data.success) return null
-    return Number(res.data.data?.quota ?? 0)
+    const data = unwrapApiResult(res.data, 'Failed to load user quota')
+    return data ? Number(data.quota ?? 0) : null
   } catch {
     return null
   }

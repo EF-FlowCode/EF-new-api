@@ -1,12 +1,9 @@
 import { useEffect, useRef } from 'react'
-import { useTranslation } from 'react-i18next'
-import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
 import { File as FileIcon } from 'lucide-react'
-import {
-  formatTicketTimestamp,
-  resolveRoleBadge,
-} from '../lib/ticket-utils'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { formatTicketTimestamp, resolveRoleBadge } from '../lib/ticket-utils'
 import type { TicketAttachment, TicketMessage } from '../types'
 
 const humanSize = (bytes: number | undefined): string => {
@@ -96,7 +93,10 @@ function MessageItem({
             <span className='text-sm font-semibold'>
               {message.username || t('Unknown user')}
             </span>
-            <Badge variant='outline' className={cn('font-normal', badge.className)}>
+            <Badge
+              variant='outline'
+              className={cn('font-normal', badge.className)}
+            >
               {t(badge.labelKey)}
             </Badge>
           </div>
@@ -106,7 +106,7 @@ function MessageItem({
         </div>
 
         {message.content && (
-          <p className='whitespace-pre-wrap break-words text-sm'>
+          <p className='text-sm break-words whitespace-pre-wrap'>
             {message.content}
           </p>
         )}

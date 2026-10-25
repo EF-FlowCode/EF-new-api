@@ -2,12 +2,13 @@ package controller
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -51,10 +52,10 @@ type modelRankingRankPoint struct {
 }
 
 type modelRankingPayload struct {
-	Range       string                    `json:"range"`
-	Bucket      string                    `json:"bucket"` // "hour" | "day"
-	TotalTokens int64                     `json:"total_tokens"`
-	GeneratedAt int64                     `json:"generated_at"`
+	Range       string `json:"range"`
+	Bucket      string `json:"bucket"` // "hour" | "day"
+	TotalTokens int64  `json:"total_tokens"`
+	GeneratedAt int64  `json:"generated_at"`
 	// eflow: 区间元数据——前端「区间上下文条」据此显示真实起止日期与涨跌对比基准区间。
 	// 都是时间戳(非用量)，不破脱敏。WindowStart=统计区间起点(0=全部时间)；
 	// PrevStart=涨跌对比的上一等长区间起点(0=无对比，即全部时间)。窗口终点=GeneratedAt。
@@ -148,10 +149,7 @@ func buildModelRankingPayload(rangeKey string) (modelRankingPayload, error) {
 	prevTokens := map[string]int64{}
 	var prevStart int64
 	if start > 0 {
-		prevStart = start - (now - start)
-		if prevStart < 0 {
-			prevStart = 0
-		}
+		prevStart = max(start-(now-start), 0)
 		prevRows, perr := model.GetModelRankingData(prevStart, start)
 		if perr == nil {
 			for _, r := range prevRows {
@@ -234,7 +232,7 @@ func buildModelRankSeries(chartStart, now, bucketSeconds int64, listed map[strin
 		}
 		byBucket[b.Bucket] = append(byBucket[b.Bucket], b)
 	}
-	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	slices.Sort(order)
 
 	points := make([]modelRankingRankPoint, 0)
 	for _, ts := range order {

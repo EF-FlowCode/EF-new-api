@@ -3,11 +3,12 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/types"
 )
 
 type ClaudeMetadata struct {
@@ -65,7 +66,7 @@ func (c *ClaudeMediaMessage) GetStringContent() string {
 	case string:
 		return c.Content.(string)
 	case []any:
-		var contentStr string
+		var contentStr strings.Builder
 		for _, contentItem := range c.Content.([]any) {
 			contentMap, ok := contentItem.(map[string]any)
 			if !ok {
@@ -73,11 +74,11 @@ func (c *ClaudeMediaMessage) GetStringContent() string {
 			}
 			if contentMap["type"] == ContentTypeText {
 				if subStr, ok := contentMap["text"].(string); ok {
-					contentStr += subStr
+					contentStr.WriteString(subStr)
 				}
 			}
 		}
-		return contentStr
+		return contentStr.String()
 	}
 
 	return ""
@@ -119,8 +120,9 @@ type ClaudeMessageSource struct {
 }
 
 type ClaudeMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
+	Role         string          `json:"role"`
+	Content      any             `json:"content"`
 }
 
 func (c *ClaudeMessage) IsStringContent() bool {
@@ -139,7 +141,7 @@ func (c *ClaudeMessage) GetStringContent() string {
 	case string:
 		return c.Content.(string)
 	case []any:
-		var contentStr string
+		var contentStr strings.Builder
 		for _, contentItem := range c.Content.([]any) {
 			contentMap, ok := contentItem.(map[string]any)
 			if !ok {
@@ -147,11 +149,11 @@ func (c *ClaudeMessage) GetStringContent() string {
 			}
 			if contentMap["type"] == ContentTypeText {
 				if subStr, ok := contentMap["text"].(string); ok {
-					contentStr += subStr
+					contentStr.WriteString(subStr)
 				}
 			}
 		}
-		return contentStr
+		return contentStr.String()
 	}
 
 	return ""
@@ -170,9 +172,9 @@ func (c *ClaudeMessage) ParseContent() ([]ClaudeMediaMessage, error) {
 }
 
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
-	InputSchema map[string]interface{} `json:"input_schema"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema"`
 }
 
 type InputSchema struct {
@@ -203,6 +205,7 @@ type ClaudeToolChoice struct {
 }
 
 type ClaudeRequest struct {
+	Safeguards   json.RawMessage `json:"safeguards,omitempty"`
 	Model        string          `json:"model"`
 	Prompt       string          `json:"prompt,omitempty"`
 	System       any             `json:"system,omitempty"`
@@ -292,30 +295,7 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 
 		content, _ := message.ParseContent()
 		for _, media := range content {
-			switch media.Type {
-			case "text":
-				texts = append(texts, media.GetText())
-			case "image":
-				if source := media.ToFileSource(); source != nil {
-					fileMeta = append(fileMeta, &types.FileMeta{
-						FileType: types.FileTypeImage,
-						Source:   source,
-					})
-				}
-			case "tool_use":
-				if media.Name != "" {
-					texts = append(texts, media.Name)
-				}
-				if media.Input != nil {
-					b, _ := kitutil.Marshal(media.Input)
-					texts = append(texts, string(b))
-				}
-			case "tool_result":
-				if media.Content != nil {
-					b, _ := kitutil.Marshal(media.Content)
-					texts = append(texts, string(b))
-				}
-			}
+			texts, fileMeta = appendClaudeContentTokenMeta(media, texts, fileMeta)
 		}
 	}
 
@@ -357,6 +337,46 @@ func (c *ClaudeRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	return &tokenCountMeta
 }
 
+// appendClaudeContentTokenMeta 把一个内容块拆成可计数文本与文件。tool_result 的内容逐块递归，
+// 图片/文档走 fileMeta 按固定值计，避免把 base64 数据当文本数（Claude Code 截图会被估成几十万 token）。
+func appendClaudeContentTokenMeta(media ClaudeMediaMessage, texts []string, fileMeta []*types.FileMeta) ([]string, []*types.FileMeta) {
+	switch media.Type {
+	case "text":
+		texts = append(texts, media.GetText())
+	case "image", "document":
+		fileType := types.FileTypeImage
+		if media.Type == "document" {
+			fileType = types.FileTypeFile
+		}
+		if source := media.ToFileSource(); source != nil {
+			fileMeta = append(fileMeta, &types.FileMeta{
+				FileType: fileType,
+				Source:   source,
+			})
+		}
+	case "tool_use":
+		if media.Name != "" {
+			texts = append(texts, media.Name)
+		}
+		if media.Input != nil {
+			b, _ := kitutil.Marshal(media.Input)
+			texts = append(texts, string(b))
+		}
+	case "tool_result":
+		if media.Content == nil {
+			break
+		}
+		if media.IsStringContent() {
+			texts = append(texts, media.GetStringContent())
+			break
+		}
+		for _, sub := range media.ParseMediaContent() {
+			texts, fileMeta = appendClaudeContentTokenMeta(sub, texts, fileMeta)
+		}
+	}
+	return texts, fileMeta
+}
+
 func (c *ClaudeRequest) IsStream(ctx *http.Request) bool {
 	if c.Stream == nil {
 		return false
@@ -368,18 +388,6 @@ func (c *ClaudeRequest) SetModelName(modelName string) {
 	if modelName != "" {
 		c.Model = modelName
 	}
-}
-
-func (c *ClaudeRequest) SearchToolNameByToolCallId(toolCallId string) string {
-	for _, message := range c.Messages {
-		content, _ := message.ParseContent()
-		for _, mediaMessage := range content {
-			if mediaMessage.Id == toolCallId {
-				return mediaMessage.Name
-			}
-		}
-	}
-	return ""
 }
 
 // AddTool 添加工具到请求中
@@ -452,6 +460,50 @@ type Thinking struct {
 	// the visible summary that was default on Opus 4.6; "omitted" (default on
 	// 4.7) suppresses it. Pass-through field from upstream Anthropic API.
 	Display string `json:"display,omitempty"`
+	// BlockBinding carries the client's preserved-thinking controls, such as
+	// {"prefix_mismatch_behavior":"drop_block"} (beta
+	// thinking-binding-controls-2026-08-01). It is forwarded verbatim and
+	// never added by the gateway.
+	BlockBinding json.RawMessage `json:"block_binding,omitempty"`
+
+	// Extra keeps thinking fields this struct does not model yet, so a native
+	// Claude request forwards them instead of silently dropping them. It is
+	// exported so common.DeepCopy copies it; MarshalJSON writes it back.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+func (c *Thinking) UnmarshalJSON(data []byte) error {
+	type thinkingFields Thinking
+	var fields thinkingFields
+	if err := kitutil.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var all map[string]json.RawMessage
+	if err := kitutil.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	for _, known := range []string{"type", "budget_tokens", "display", "block_binding"} {
+		delete(all, known)
+	}
+	*c = Thinking(fields)
+	if len(all) > 0 {
+		c.Extra = all
+	}
+	return nil
+}
+
+func (c Thinking) MarshalJSON() ([]byte, error) {
+	type thinkingFields Thinking
+	data, err := kitutil.Marshal(thinkingFields(c))
+	if err != nil || len(c.Extra) == 0 {
+		return data, err
+	}
+	merged := make(map[string]json.RawMessage, len(c.Extra)+4)
+	maps.Copy(merged, c.Extra)
+	if err := kitutil.Unmarshal(data, &merged); err != nil {
+		return nil, err
+	}
+	return kitutil.Marshal(merged)
 }
 
 func (c *Thinking) GetBudgetTokens() int {
@@ -596,7 +648,7 @@ func (c *ClaudeResponse) GetClaudeError() *types.ClaudeError {
 		return &err
 	case *types.ClaudeError:
 		return err
-	case map[string]interface{}:
+	case map[string]any:
 		// 处理从JSON解析来的map结构
 		claudeErr := &types.ClaudeError{}
 		if errType, ok := err["type"].(string); ok {
@@ -631,7 +683,7 @@ type ClaudeUsage struct {
 	ClaudeCacheCreation5mTokens int                  `json:"claude_cache_creation_5_m_tokens"`
 	ClaudeCacheCreation1hTokens int                  `json:"claude_cache_creation_1_h_tokens"`
 	ServerToolUse               *ClaudeServerToolUse `json:"server_tool_use,omitempty"`
-	BillingUsage                *BillingUsage        `json:"billing_usage,omitempty"`
+	BillingUsage                *BillingUsage        `json:"-"`
 }
 
 type ClaudeCacheCreationUsage struct {

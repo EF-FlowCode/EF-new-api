@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 	"github.com/stretchr/testify/require"
 )
 

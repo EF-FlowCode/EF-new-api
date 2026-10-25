@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import type {
   LoginPayload,
   LoginResponse,
@@ -24,7 +24,49 @@ export async function login(payload: LoginPayload) {
 
 // Two-factor authentication login
 export async function login2fa(payload: TwoFAPayload) {
-  const res = await api.post<Login2FAResponse>('/api/user/login/2fa', payload)
+  const res = await api.post<Login2FAResponse>(
+    '/api/user/login/2fa',
+    payload,
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  return res.data
+}
+
+// Complete a pending login with a TOTP or backup code (flow-bound).
+export async function verifyLogin(flowToken: string, code: string) {
+  const res = await api.post<Login2FAResponse>(
+    '/api/user/login/verify',
+    { flow_token: flowToken, method: '2fa', code },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  return res.data
+}
+
+// Start a Passkey assertion for a pending login.
+export async function beginLoginPasskey(flowToken: string) {
+  const res = await api.post<{
+    success: boolean
+    message?: string
+    data?: { flow_token: string; options: unknown }
+  }>(
+    '/api/user/login/passkey/begin',
+    { flow_token: flowToken },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
+  return res.data
+}
+
+// Finish the Passkey assertion and sign in.
+export async function finishLoginPasskey(
+  flowToken: string,
+  passkeyFlowToken: string,
+  credential: Record<string, unknown>
+) {
+  const res = await api.post<Login2FAResponse>(
+    '/api/user/login/passkey/finish',
+    { flow_token: flowToken, passkey_flow_token: passkeyFlowToken, credential },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 
@@ -52,24 +94,48 @@ export async function sendPasswordResetEmail(
 // OAuth
 // ----------------------------------------------------------------------------
 
-// Start GitHub OAuth flow
-export async function githubOAuthStart(clientId: string, state: string) {
-  const url = `https://github.com/login/oauth/authorize?client_id=${clientId}&state=${state}&scope=user:email`
-  window.open(url)
-}
-
-// Get OAuth state for CSRF protection
-export async function getOAuthState(): Promise<string> {
+// Telegram signs in with OpenID Connect + PKCE: the server keeps the verifier
+// and returns the authorization URL to open.
+export async function getTelegramAuthorizationURL(
+  invitationCode?: string
+): Promise<string> {
   const aff =
     typeof window !== 'undefined' ? (localStorage.getItem('aff') ?? '') : ''
-  const res = await api.get('/api/oauth/state', { params: { aff } })
+  const res = await api.get('/api/oauth/state', {
+    ...CALLER_HANDLED_REQUEST_CONFIG,
+    params: {
+      aff,
+      invitation_code: invitationCode?.trim() || undefined,
+      provider: 'telegram',
+    },
+  })
+  return res.data?.success ? (res.data.authorization_url ?? '') : ''
+}
+
+// Get OAuth state for CSRF protection. The invitation code entered on the
+// sign-up page is stored in the same session for OAuth registration.
+export async function getOAuthState(invitationCode?: string): Promise<string> {
+  const aff =
+    typeof window !== 'undefined' ? (localStorage.getItem('aff') ?? '') : ''
+  const invitation_code = invitationCode?.trim() || undefined
+  const res = await api.get('/api/oauth/state', {
+    ...CALLER_HANDLED_REQUEST_CONFIG,
+    params: { aff, invitation_code },
+  })
   if (res.data?.success) return res.data.data
   return ''
 }
 
 // WeChat login by authorization code
-export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
-  const res = await api.get('/api/oauth/wechat', { params: { code } })
+export async function wechatLoginByCode(
+  code: string,
+  invitationCode?: string
+): Promise<LoginResponse> {
+  const invitation_code = invitationCode?.trim() || undefined
+  const res = await api.get('/api/oauth/wechat', {
+    ...CALLER_HANDLED_REQUEST_CONFIG,
+    params: { code, invitation_code },
+  })
   return res.data
 }
 

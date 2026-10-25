@@ -6,6 +6,7 @@ import { Plus, Edit, Trash2, Save } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import dayjs from '@/lib/dayjs'
+import { formatRelativeTimestamp, toIntlLocale } from '@/lib/relative-time'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -123,7 +124,7 @@ export function AnnouncementsSection({
   enabled,
   data,
 }: AnnouncementsSectionProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const updateOption = useUpdateOption()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [isEnabled, setIsEnabled] = useState(enabled)
@@ -174,7 +175,7 @@ export function AnnouncementsSection({
       setIsEnabled(checked)
       toast.success(t('Setting saved'))
     } catch {
-      toast.error(t('Failed to update setting'))
+      // useUpdateOption owns the error notification.
     }
   }
 
@@ -264,7 +265,7 @@ export function AnnouncementsSection({
       setHasChanges(false)
       toast.success(t('Announcements saved successfully'))
     } catch {
-      toast.error(t('Failed to save announcements'))
+      // useUpdateOption owns the error notification.
     }
   }
 
@@ -286,18 +287,11 @@ export function AnnouncementsSection({
     })
   }, [announcements])
 
-  const getRelativeTime = (date: string) => {
-    const now = new Date()
-    const past = new Date(date)
-    const diffMs = now.getTime() - past.getTime()
-    const diffMins = Math.floor(diffMs / 60000)
-    const diffHours = Math.floor(diffMins / 60)
-    const diffDays = Math.floor(diffHours / 24)
-
-    if (diffMins < 60) return `${diffMins}m ago`
-    if (diffHours < 24) return `${diffHours}h ago`
-    return `${diffDays}d ago`
-  }
+  const getRelativeTime = (date: string) =>
+    formatRelativeTimestamp(
+      new Date(date).getTime(),
+      toIntlLocale(i18n.resolvedLanguage || i18n.language)
+    )
 
   return (
     <SettingsSection

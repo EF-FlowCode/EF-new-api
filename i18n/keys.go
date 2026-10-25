@@ -69,6 +69,8 @@ const (
 	MsgRedemptionFailed            = "redemption.failed"
 	MsgRedemptionNotProvided       = "redemption.not_provided"
 	MsgRedemptionExpireTimeInvalid = "redemption.expire_time_invalid"
+	MsgRedemptionQuotaPositive     = "redemption.quota_positive"
+	MsgRedemptionStatusInvalid     = "redemption.status_invalid"
 )
 
 // Invitation code related messages
@@ -117,6 +119,7 @@ const (
 	MsgUserAlreadyCommon             = "user.already_common"
 	MsgUserAdminCannotPromote        = "user.admin_cannot_promote"
 	MsgUserOriginalPasswordError     = "user.original_password_error"
+	MsgUserCurrentPasswordError      = "user.current_password_error"
 	MsgUserInviteQuotaInsufficient   = "user.invite_quota_insufficient"
 	MsgUserTransferQuotaMinimum      = "user.transfer_quota_minimum"
 	MsgUserTransferSuccess           = "user.transfer_success"
@@ -332,6 +335,8 @@ const (
 	MsgOAuthTokenFailed     = "oauth.token_failed"
 	MsgOAuthUserInfoEmpty   = "oauth.user_info_empty"
 	MsgOAuthTrustLevelLow   = "oauth.trust_level_low"
+	// eflow: 命中按 GitHub 用户名保存的旧绑定，需重新绑定
+	MsgOAuthLegacyBindingRebind = "oauth.legacy_binding_rebind"
 )
 
 // Model layer error messages (for translation in controller)

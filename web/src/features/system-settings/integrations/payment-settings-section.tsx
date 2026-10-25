@@ -40,7 +40,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { JsonCodeEditor } from '@/components/json-code-editor'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 import { safeJsonParseWithValidation } from '../utils/json-parser'
 import { AmountOptionsVisualEditor } from './amount-options-visual-editor'
 import { CreemProductsVisualEditor } from './creem-products-visual-editor'
@@ -155,7 +155,7 @@ export function PaymentSettingsSection({
   complianceTermsVersion,
 }: PaymentSettingsSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
   const initialRef = React.useRef(defaultValues)
   const defaultsSignature = React.useMemo(
     () => JSON.stringify(defaultValues),
@@ -259,11 +259,14 @@ export function PaymentSettingsSection({
       id: 'waffo-pancake' as const,
       name: 'Waffo Pancake',
       initials: 'PC',
-      active: waffoPancakeDefaultValues.WaffoPancakeEnabled,
+      active: Boolean(
+        waffoPancakeDefaultValues.WaffoPancakeMerchantID &&
+        waffoPancakeDefaultValues.WaffoPancakeProductID
+      ),
       description: t(
         'Configure Waffo Pancake hosted checkout integration for USD-priced top-ups'
       ),
-      detail: `${waffoPancakeDefaultValues.WaffoPancakeCurrency || 'USD'} · ${t('Minimum top-up (USD)')}: ${waffoPancakeDefaultValues.WaffoPancakeMinTopUp}`,
+      detail: `USD · ${t('Minimum top-up (USD)')}: ${waffoPancakeDefaultValues.WaffoPancakeMinTopUp}`,
     },
   ]
   const configuredProviderCount = providers.filter(
@@ -342,9 +345,7 @@ export function PaymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await updateOptions.mutateAsync(updates)
   }
 
   const saveEpaySettings = async () => {
@@ -390,9 +391,7 @@ export function PaymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await updateOptions.mutateAsync(updates)
   }
 
   const saveStripeSettings = async () => {
@@ -462,9 +461,7 @@ export function PaymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await updateOptions.mutateAsync(updates)
   }
 
   const saveCreemSettings = async () => {
@@ -517,9 +514,7 @@ export function PaymentSettingsSection({
       return
     }
 
-    for (const update of updates) {
-      await updateOption.mutateAsync(update)
-    }
+    await updateOptions.mutateAsync(updates)
   }
 
   return (
@@ -859,9 +854,9 @@ export function PaymentSettingsSection({
                       e.stopPropagation()
                       saveGeneralSettings()
                     }}
-                    disabled={updateOption.isPending}
+                    disabled={updateOptions.isPending}
                   >
-                    {updateOption.isPending
+                    {updateOptions.isPending
                       ? t('Saving...')
                       : t('Save general settings')}
                   </Button>
@@ -982,9 +977,9 @@ export function PaymentSettingsSection({
                       e.stopPropagation()
                       saveEpaySettings()
                     }}
-                    disabled={updateOption.isPending}
+                    disabled={updateOptions.isPending}
                   >
-                    {updateOption.isPending
+                    {updateOptions.isPending
                       ? t('Saving...')
                       : t('Save Epay settings')}
                   </Button>
@@ -1200,9 +1195,9 @@ export function PaymentSettingsSection({
                       e.stopPropagation()
                       saveStripeSettings()
                     }}
-                    disabled={updateOption.isPending}
+                    disabled={updateOptions.isPending}
                   >
-                    {updateOption.isPending
+                    {updateOptions.isPending
                       ? t('Saving...')
                       : t('Save Stripe settings')}
                   </Button>
@@ -1381,9 +1376,9 @@ export function PaymentSettingsSection({
                       e.stopPropagation()
                       saveCreemSettings()
                     }}
-                    disabled={updateOption.isPending}
+                    disabled={updateOptions.isPending}
                   >
-                    {updateOption.isPending
+                    {updateOptions.isPending
                       ? t('Saving...')
                       : t('Save Creem settings')}
                   </Button>

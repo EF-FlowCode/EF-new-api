@@ -4,7 +4,7 @@ import (
 	"context"
 	"math/rand"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 // headroomBand：把 headroom 距最优 ≤ 此值的候选视为「同等健康」，在这条带内改用
@@ -21,7 +21,7 @@ const headroomBand = 0.10
 //
 // eflow: 原实现是 strict-max(headroom) + 列表序平手，会把流量长期堆在列表第一把 key 上：
 // 该 key 即便正卡在多个 hung 请求(in-flight 高)，其 RPM 计数 60s 后衰减回 0、headroom
-// 复位 1.0，又被重新选中 → 单账号被反复打、卡死率畸高（实测 channel 69 / glm-5.2 的慢
+// 复位 1.0，又被重新选中 → 单账号被反复打、卡死率畸高（实测某渠道的慢
 // 请求 67% 集中在 index 0，而它只占 ~40% 流量）。改成「healthy band 内 least-in-flight，
 // 平手随机」后：正在服务 hung 请求的 key 被自动绕开，低流量(1~N req/min)也能真正铺满
 // 所有 key，单账号被连打的概率从 ~40% 摊到 ~1/N。

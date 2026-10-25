@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
+import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -26,6 +28,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectGroup,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -41,7 +44,11 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { Plus, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  ServerPagination,
+  useLatestRequest,
+  useServerPagination,
+} from '@/components/data-table'
 import {
   debugModeration,
   deleteModerationRule,
@@ -54,6 +61,10 @@ import {
   saveModerationRule,
   updateModerationConfig,
 } from '../api'
+import {
+  parseModerationKeys,
+  parseModerationConditions,
+} from '../lib/config-contract'
 import { DecisionBadge, OverviewCard } from '../lib/shared'
 import { formatRiskTime } from '../lib/shared-utils'
 import type {
@@ -63,18 +74,19 @@ import type {
   ModerationQueueStats,
   ModerationRule,
   Paginated,
-  RiskOverview,
+  ModerationOverview,
 } from '../types'
-import { PaginationFooter } from './distribution-tab'
 
 const PAGE_SIZE = 10
+const route = getRouteApi('/_authenticated/risk-center/')
 
 const EMPTY_RULE: ModerationRule = {
   id: 0,
   name: '',
   enabled: true,
-  category: '',
-  threshold: 0.5,
+  conditions: [],
+  match_mode: 'all',
+  score_weight: 1,
   action: 'observe',
   groups: [],
   description: '',
@@ -83,17 +95,21 @@ const EMPTY_RULE: ModerationRule = {
 
 export function ModerationTab() {
   const { t } = useTranslation()
-  const [overview, setOverview] = useState<RiskOverview>({})
+  const [overview, setOverview] = useState<Partial<ModerationOverview>>({})
   const [queueStats, setQueueStats] = useState<ModerationQueueStats>({})
-  const [config, setConfig] = useState<ModerationConfig>({})
+  const [config, setConfig] = useState<ModerationConfig | null>(null)
+  const [keysText, setKeysText] = useState('[]')
   const [categories, setCategories] = useState<ModerationCategory[]>([])
   const [rules, setRules] = useState<ModerationRule[]>([])
   const [savingConfig, setSavingConfig] = useState(false)
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<ModerationRule>(EMPTY_RULE)
+  const [conditionsText, setConditionsText] = useState('[]')
   const [savingRule, setSavingRule] = useState(false)
-  const [pendingDelete, setPendingDelete] = useState<ModerationRule | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<ModerationRule | null>(
+    null
+  )
 
   const [incidents, setIncidents] = useState<Paginated<ModerationIncident>>({
     items: [],
@@ -103,62 +119,112 @@ export function ModerationTab() {
   })
   const [incidentsLoading, setIncidentsLoading] = useState(false)
 
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const incidentsPagination = useServerPagination({
+    search,
+    navigate,
+    total: incidents.total,
+    pageKey: 'moderationIncidentsPage',
+    pageSizeKey: 'moderationIncidentsPageSize',
+    defaultPageSize: PAGE_SIZE,
+  })
+  const runIncidentsRequest = useLatestRequest()
+
   const [debugText, setDebugText] = useState('')
   const [debugImages, setDebugImages] = useState('')
   const [debugGroup, setDebugGroup] = useState('')
   const [debugRunning, setDebugRunning] = useState(false)
   const [debugResult, setDebugResult] = useState<unknown>(null)
 
+  const configLoading = useRef(false)
   const reload = async () => {
+    if (!config && !configLoading.current) {
+      configLoading.current = true
+      fetchModerationConfig()
+        .then((loaded) => {
+          setConfig(loaded)
+          setKeysText(JSON.stringify(loaded.api_keys, null, 2))
+        })
+        .catch((error: unknown) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load moderation data')
+          )
+        )
+        .finally(() => {
+          configLoading.current = false
+        })
+    }
     try {
-      const [o, q, c, cats, r] = await Promise.all([
+      const [o, q, cats, r] = await Promise.all([
         fetchModerationOverview(),
         fetchModerationQueueStats().catch(() => ({})),
-        fetchModerationConfig(),
         fetchModerationCategories(),
         fetchModerationRules(),
       ])
       setOverview(o)
       setQueueStats(q)
-      setConfig(c)
       setCategories(cats)
       setRules(r)
     } catch (e) {
       toast.error(
-        e instanceof Error
-          ? e.message
-          : t('Failed to load moderation data')
+        e instanceof Error ? e.message : t('Failed to load moderation data')
       )
     }
   }
 
-  const reloadIncidents = async (page = incidents.page) => {
+  const reloadIncidents = async () => {
     setIncidentsLoading(true)
-    try {
-      const res = await fetchModerationIncidents({
-        page,
-        pageSize: PAGE_SIZE,
-      })
-      setIncidents(res)
-    } catch (e) {
-      toast.error(
-        e instanceof Error ? e.message : t('Failed to load incidents')
-      )
-    } finally {
-      setIncidentsLoading(false)
-    }
+    await runIncidentsRequest(
+      (signal) =>
+        fetchModerationIncidents(
+          {
+            page: incidentsPagination.page,
+            pageSize: incidentsPagination.pageSize,
+          },
+          signal
+        ),
+      {
+        onSuccess: setIncidents,
+        onError: (error) =>
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : t('Failed to load incidents')
+          ),
+        onSettled: () => setIncidentsLoading(false),
+      }
+    )
   }
 
   useEffect(() => {
     reload()
-    reloadIncidents(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    reloadIncidents()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incidentsPagination.page, incidentsPagination.pageSize])
+
+  const updateConfig = (patch: Partial<ModerationConfig>) => {
+    setConfig((previous) => (previous ? { ...previous, ...patch } : previous))
+  }
+
   const saveConfig = async () => {
+    if (!config || savingConfig) return
+    let keys: string[]
+    try {
+      keys = parseModerationKeys(keysText)
+    } catch {
+      toast.error(t('Invalid JSON'))
+      return
+    }
     setSavingConfig(true)
     try {
-      await updateModerationConfig(config)
+      await updateModerationConfig({ ...config, api_keys: keys })
       toast.success(t('Moderation config saved'))
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t('Save failed'))
@@ -168,13 +234,16 @@ export function ModerationTab() {
   }
 
   const handleSaveRule = async () => {
-    if (!editingRule.name.trim() || !editingRule.category) {
-      toast.error(t('Name and category are required'))
+    if (!editingRule.name.trim()) {
+      toast.error(t('Please enter a rule name'))
       return
     }
     setSavingRule(true)
     try {
-      await saveModerationRule(editingRule)
+      await saveModerationRule({
+        ...editingRule,
+        conditions: parseModerationConditions(conditionsText),
+      })
       toast.success(t('Rule saved'))
       setEditorOpen(false)
       reload()
@@ -216,28 +285,33 @@ export function ModerationTab() {
     }
   }
 
-  const totalPages = Math.max(1, Math.ceil(incidents.total / PAGE_SIZE))
-
   return (
     <div className='space-y-5'>
-      <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
+      <div className='grid grid-cols-2 gap-3 sm:grid-cols-3'>
+        <OverviewCard title={t('Rules')} value={overview.rule_count ?? '—'} />
         <OverviewCard
-          title={t('Rules')}
-          value={overview.rule_count ?? 0}
-          hint={t('{{n}} enabled', { n: overview.enabled_rule_count ?? 0 })}
+          title={t('Unconfigured rules')}
+          value={overview.unconfigured_rule_count ?? '—'}
+        />
+        <OverviewCard
+          title={t('Flagged (24h)')}
+          value={overview.flagged_24h ?? '—'}
         />
         <OverviewCard
           title={t('In flight')}
-          value={queueStats.in_flight ?? 0}
+          value={
+            queueStats.worker_state?.filter(
+              (worker) => worker.state === 'processing'
+            ).length ?? '—'
+          }
         />
         <OverviewCard
-          title={t('Queued')}
-          value={queueStats.queued ?? 0}
+          title={t('Memory queue')}
+          value={queueStats.queue_depth_memory ?? '—'}
         />
         <OverviewCard
-          title={t('Blocked (24h)')}
-          value={queueStats.blocked_24h ?? 0}
-          hint={t('Processed: {{n}}', { n: queueStats.processed_24h ?? 0 })}
+          title={t('Redis WAL queue')}
+          value={queueStats.queue_depth_redis ?? '—'}
         />
       </div>
 
@@ -249,159 +323,97 @@ export function ModerationTab() {
           <TabsTrigger value='debug'>{t('Debug')}</TabsTrigger>
         </TabsList>
 
-        {/* Config */}
-        <TabsContent value='config' className='space-y-4'>
-          <div className='bg-card space-y-4 rounded-xl border p-4'>
-            <div className='flex items-start justify-between gap-3 rounded-lg border p-3'>
-              <div className='space-y-0.5'>
-                <div className='text-sm font-medium'>{t('Enabled')}</div>
-                <div className='text-muted-foreground text-xs'>
-                  {t('Master switch for content moderation')}
-                </div>
-              </div>
-              <Switch
-                checked={Boolean(config.enabled)}
-                onCheckedChange={(v) => setConfig((p) => ({ ...p, enabled: v }))}
-              />
-            </div>
-            <div className='grid gap-3 sm:grid-cols-2'>
-              <Field label={t('Provider')}>
-                <Input
-                  value={String(config.provider ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({ ...p, provider: e.target.value }))
-                  }
-                  placeholder='openai'
+        <TabsContent value='config' className='flex flex-col gap-4'>
+          {config ? (
+            <div className='flex flex-col gap-4 rounded-xl border p-4'>
+              <Field label={t('Enabled')}>
+                <Switch
+                  checked={config.enabled}
+                  onCheckedChange={(enabled) => updateConfig({ enabled })}
+                  disabled={savingConfig}
                 />
               </Field>
-              <Field label={t('Endpoint')}>
-                <Input
-                  value={String(config.endpoint ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({ ...p, endpoint: e.target.value }))
-                  }
-                  placeholder='https://api.openai.com'
-                />
-              </Field>
-              <Field label={t('Model')}>
-                <Input
-                  value={String(config.model ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({ ...p, model: e.target.value }))
-                  }
-                  placeholder='omni-moderation-latest'
-                />
-              </Field>
-              <Field label={t('Default action')}>
-                <Select
-                  value={String(config.default_action ?? 'observe')}
-                  onValueChange={(v) =>
-                    setConfig((p) => ({
-                      ...p,
-                      default_action: v as 'observe' | 'block',
-                    }))
-                  }
+              <div className='grid gap-3 sm:grid-cols-2'>
+                <Field label={t('Endpoint')}>
+                  <Input
+                    value={config.base_url}
+                    onChange={(e) => updateConfig({ base_url: e.target.value })}
+                    disabled={savingConfig}
+                  />
+                </Field>
+                <Field label={t('Model')}>
+                  <Input
+                    value={config.model}
+                    onChange={(e) => updateConfig({ model: e.target.value })}
+                    disabled={savingConfig}
+                  />
+                </Field>
+                <Field label={t('Mode')}>
+                  <Select
+                    value={config.mode}
+                    onValueChange={(mode) =>
+                      updateConfig({ mode: mode as ModerationConfig['mode'] })
+                    }
+                    disabled={savingConfig}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value='off'>{t('Disabled')}</SelectItem>
+                        <SelectItem value='observe_only'>
+                          {t('Observe')}
+                        </SelectItem>
+                        <SelectItem value='enforce'>
+                          {t('Enforce moderation')}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label={t('Request timeout (ms)')}>
+                  <Input
+                    type='number'
+                    value={config.http_timeout_ms}
+                    onChange={(e) =>
+                      updateConfig({ http_timeout_ms: Number(e.target.value) })
+                    }
+                    disabled={savingConfig}
+                  />
+                </Field>
+                <Field label={t('Max concurrent')}>
+                  <Input
+                    type='number'
+                    value={config.worker_count}
+                    onChange={(e) =>
+                      updateConfig({ worker_count: Number(e.target.value) })
+                    }
+                    disabled={savingConfig}
+                  />
+                </Field>
+                <Field
+                  label={t('Moderation API keys (JSON array)')}
+                  className='sm:col-span-2'
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value='observe'>{t('Observe')}</SelectItem>
-                    <SelectItem value='block'>{t('Block')}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label={t('Request timeout (ms)')}>
-                <Input
-                  type='number'
-                  value={String(config.request_timeout_ms ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      request_timeout_ms: Number(e.target.value) || 0,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Max concurrent')}>
-                <Input
-                  type='number'
-                  value={String(config.max_concurrent ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      max_concurrent: Number(e.target.value) || 0,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Cache TTL (seconds)')}>
-                <Input
-                  type='number'
-                  value={String(config.cache_ttl_seconds ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      cache_ttl_seconds: Number(e.target.value) || 0,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Block status code')}>
-                <Input
-                  type='number'
-                  value={String(config.block_response_status_code ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      block_response_status_code:
-                        Number(e.target.value) || 451,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Block message')} className='sm:col-span-2'>
-                <Input
-                  value={String(config.block_response_message ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      block_response_message: e.target.value,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label={t('Observe message')} className='sm:col-span-2'>
-                <Input
-                  value={String(config.observe_response_message ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({
-                      ...p,
-                      observe_response_message: e.target.value,
-                    }))
-                  }
-                />
-              </Field>
-              <Field
-                label={t('Provider keys (JSON, one per line)')}
-                className='sm:col-span-2'
-              >
-                <Textarea
-                  rows={4}
-                  value={String(config.keys_json ?? '')}
-                  onChange={(e) =>
-                    setConfig((p) => ({ ...p, keys_json: e.target.value }))
-                  }
-                  className='font-mono text-xs'
-                />
-              </Field>
+                  <Textarea
+                    rows={4}
+                    value={keysText}
+                    onChange={(e) => setKeysText(e.target.value)}
+                    className='font-mono text-xs'
+                    disabled={savingConfig}
+                  />
+                </Field>
+              </div>
+              <div className='flex justify-end'>
+                <Button onClick={saveConfig} disabled={savingConfig}>
+                  {t('Save configuration')}
+                </Button>
+              </div>
             </div>
-            <div className='flex justify-end'>
-              <Button onClick={saveConfig} disabled={savingConfig}>
-                {t('Save configuration')}
-              </Button>
-            </div>
-          </div>
+          ) : (
+            <Skeleton className='h-48 w-full' />
+          )}
         </TabsContent>
 
         {/* Rules */}
@@ -418,11 +430,18 @@ export function ModerationTab() {
               <Button
                 size='sm'
                 onClick={() => {
-                  setEditingRule({
+                  const rule = {
                     ...EMPTY_RULE,
-                    category: categories[0]?.name || '',
-                    threshold: categories[0]?.default_threshold ?? 0.5,
-                  })
+                    conditions: [
+                      {
+                        category: categories[0]?.name || '',
+                        op: '>=',
+                        value: 0.5,
+                      },
+                    ],
+                  }
+                  setEditingRule(rule)
+                  setConditionsText(JSON.stringify(rule.conditions, null, 2))
                   setEditorOpen(true)
                 }}
                 disabled={categories.length === 0}
@@ -438,7 +457,7 @@ export function ModerationTab() {
                 <TableRow>
                   <TableHead>{t('Name')}</TableHead>
                   <TableHead>{t('Category')}</TableHead>
-                  <TableHead className='w-24'>{t('Threshold')}</TableHead>
+                  <TableHead className='w-24'>{t('Match mode')}</TableHead>
                   <TableHead className='w-20'>{t('Action')}</TableHead>
                   <TableHead className='w-20'>{t('Enabled')}</TableHead>
                   <TableHead className='w-32'>{t('Operations')}</TableHead>
@@ -466,10 +485,15 @@ export function ModerationTab() {
                         )}
                       </TableCell>
                       <TableCell className='font-mono text-xs'>
-                        {r.category}
+                        {r.conditions
+                          .map(
+                            (condition) =>
+                              `${condition.category} ${condition.op} ${condition.value}`
+                          )
+                          .join('; ')}
                       </TableCell>
                       <TableCell className='font-mono text-xs'>
-                        {r.threshold}
+                        {r.match_mode}
                       </TableCell>
                       <TableCell>
                         <DecisionBadge decision={r.action} />
@@ -483,7 +507,9 @@ export function ModerationTab() {
                               reload()
                             } catch (e) {
                               toast.error(
-                                e instanceof Error ? e.message : t('Save failed')
+                                e instanceof Error
+                                  ? e.message
+                                  : t('Save failed')
                               )
                             }
                           }}
@@ -496,6 +522,9 @@ export function ModerationTab() {
                             variant='ghost'
                             onClick={() => {
                               setEditingRule(r)
+                              setConditionsText(
+                                JSON.stringify(r.conditions, null, 2)
+                              )
                               setEditorOpen(true)
                             }}
                           >
@@ -558,21 +587,21 @@ export function ModerationTab() {
                   incidents.items.map((it) => (
                     <TableRow key={it.id}>
                       <TableCell className='text-muted-foreground text-xs'>
-                        {formatRiskTime(it.created_time)}
+                        {formatRiskTime(it.created_at)}
                       </TableCell>
-                      <TableCell>{it.rule_name || '—'}</TableCell>
+                      <TableCell>{it.primary_rule || '—'}</TableCell>
                       <TableCell className='font-mono text-xs'>
-                        {it.category || '—'}
+                        {it.max_category || '—'}
                       </TableCell>
                       <TableCell className='font-mono text-xs'>
-                        {it.score?.toFixed(3) ?? '—'}
+                        {it.max_score?.toFixed(3) ?? '—'}
                       </TableCell>
                       <TableCell>
                         <DecisionBadge decision={it.decision} />
                       </TableCell>
                       <TableCell>{it.username || '—'}</TableCell>
                       <TableCell className='text-muted-foreground max-w-[260px] truncate text-xs'>
-                        {it.text_excerpt || '—'}
+                        {it.input_summary || '—'}
                       </TableCell>
                     </TableRow>
                   ))
@@ -580,14 +609,10 @@ export function ModerationTab() {
               </TableBody>
             </Table>
           </div>
-          <PaginationFooter
+          <ServerPagination
+            table={incidentsPagination.table}
             total={incidents.total}
-            page={incidents.page}
-            totalPages={totalPages}
-            onPage={(p) => {
-              setIncidents((prev) => ({ ...prev, page: p }))
-              reloadIncidents(p)
-            }}
+            loading={incidentsLoading}
           />
         </TabsContent>
 
@@ -623,7 +648,7 @@ export function ModerationTab() {
             </div>
             {debugResult != null && (
               <div className='bg-muted/40 rounded-md p-3'>
-                <pre className='overflow-x-auto whitespace-pre-wrap text-xs'>
+                <pre className='overflow-x-auto text-xs whitespace-pre-wrap'>
                   {JSON.stringify(debugResult, null, 2)}
                 </pre>
               </div>
@@ -654,37 +679,55 @@ export function ModerationTab() {
                 }
               />
             </Field>
-            <Field label={t('Category')}>
+            <Field label={t('Moderation conditions (JSON array)')}>
+              <Textarea
+                rows={8}
+                value={conditionsText}
+                onChange={(e) => setConditionsText(e.target.value)}
+                className='font-mono text-xs'
+              />
+            </Field>
+            <Field label={t('Groups')}>
+              <Input
+                value={editingRule.groups.join(',')}
+                onChange={(e) =>
+                  setEditingRule((previous) => ({
+                    ...previous,
+                    groups: e.target.value.split(','),
+                  }))
+                }
+              />
+            </Field>
+            <Field label={t('Match mode')}>
               <Select
-                value={editingRule.category}
-                onValueChange={(v) =>
-                  setEditingRule((p) => ({ ...p, category: v }))
+                value={editingRule.match_mode}
+                onValueChange={(mode) =>
+                  setEditingRule((previous) => ({
+                    ...previous,
+                    match_mode: mode as 'all' | 'any',
+                  }))
                 }
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories.map((c) => (
-                    <SelectItem key={c.name} value={c.name}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
+                  <SelectGroup>
+                    <SelectItem value='all'>{t('All')}</SelectItem>
+                    <SelectItem value='any'>{t('Any')}</SelectItem>
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </Field>
             <div className='grid gap-3 sm:grid-cols-2'>
-              <Field label={t('Threshold (0–1)')}>
+              <Field label={t('Score weight')}>
                 <Input
                   type='number'
-                  step={0.01}
-                  min={0}
-                  max={1}
-                  value={editingRule.threshold}
+                  value={editingRule.score_weight}
                   onChange={(e) =>
-                    setEditingRule((p) => ({
-                      ...p,
-                      threshold: Number(e.target.value) || 0,
+                    setEditingRule((previous) => ({
+                      ...previous,
+                      score_weight: Number(e.target.value),
                     }))
                   }
                 />
@@ -708,7 +751,7 @@ export function ModerationTab() {
                 onValueChange={(v) =>
                   setEditingRule((p) => ({
                     ...p,
-                    action: v as 'observe' | 'block',
+                    action: v as ModerationRule['action'],
                   }))
                 }
               >
@@ -717,6 +760,7 @@ export function ModerationTab() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value='observe'>{t('Observe')}</SelectItem>
+                  <SelectItem value='flag'>{t('Flag')}</SelectItem>
                   <SelectItem value='block'>{t('Block')}</SelectItem>
                 </SelectContent>
               </Select>

@@ -1,35 +1,54 @@
 package gemini
 
 import (
+	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	"eflow.local/new-api/relaykit/relayconvert/reasoning"
 )
 
-var SupportedMimeTypes = map[string]bool{
-	"application/pdf": true,
-	"audio/mpeg":      true,
-	"audio/mp3":       true,
-	"audio/wav":       true,
-	"image/png":       true,
-	"image/jpeg":      true,
-	"image/jpg":       true,
-	"image/webp":      true,
-	"image/heic":      true,
-	"image/heif":      true,
-	"text/plain":      true,
-	"video/mov":       true,
-	"video/mpeg":      true,
-	"video/mp4":       true,
-	"video/mpg":       true,
-	"video/avi":       true,
-	"video/wmv":       true,
-	"video/mpegps":    true,
-	"video/flv":       true,
+// supportedMimeTypes follows the Blob.mimeType list in the Gemini API
+// reference (https://ai.google.dev/api/generate-content#Blob). Audio and
+// video are listed there as audio/* and video/*; IsSupportedMimeType accepts
+// them by prefix.
+var supportedMimeTypes = map[string]bool{
+	"image/png":                 true,
+	"image/jpeg":                true,
+	"image/jpg":                 true,
+	"image/webp":                true,
+	"image/heic":                true,
+	"image/heif":                true,
+	"image/gif":                 true,
+	"image/avif":                true,
+	"text/plain":                true,
+	"text/html":                 true,
+	"text/css":                  true,
+	"text/javascript":           true,
+	"text/x-typescript":         true,
+	"text/csv":                  true,
+	"text/markdown":             true,
+	"text/x-python":             true,
+	"text/xml":                  true,
+	"text/rtf":                  true,
+	"application/x-javascript":  true,
+	"application/x-typescript":  true,
+	"application/x-python-code": true,
+	"application/json":          true,
+	"application/x-ipynb+json":  true,
+	"application/rtf":           true,
+	"application/pdf":           true,
+}
+
+// IsSupportedMimeType reports whether Gemini accepts inline data of the MIME
+// type.
+func IsSupportedMimeType(mimeType string) bool {
+	mimeType = strings.ToLower(mimeType)
+	return supportedMimeTypes[mimeType] || strings.HasPrefix(mimeType, "audio/") || strings.HasPrefix(mimeType, "video/")
 }
 
 var SafetySettingCategories = []string{
@@ -81,70 +100,132 @@ func AttachFirstTextThoughtSignature(opts *convmeta.Options, parts []dto.GeminiP
 	return false
 }
 
-func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta, oaiRequest ...dto.GeneralOpenAIRequest) {
+func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Meta, oaiRequest ...dto.GeneralOpenAIRequest) error {
 	opts := convmeta.OptionsOf(info)
-	if geminiRequest == nil || info == nil || !opts.Gemini.ThinkingAdapterEnabled {
-		return
+	if geminiRequest == nil {
+		return nil
 	}
 
 	modelName := convmeta.UpstreamModelName(info)
-	isNew25Pro := strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
+	var source reasoning.Intent
+	crossProtocol := len(oaiRequest) > 0
+	if len(oaiRequest) > 0 {
+		if modelName == "" {
+			modelName = oaiRequest[0].Model
+		}
+		var err error
+		source, err = reasoning.FromOpenAIChat(&oaiRequest[0])
+		if err != nil {
+			return err
+		}
+	}
 
-	if strings.Contains(modelName, "-thinking-") {
-		parts := strings.SplitN(modelName, "-thinking-", 2)
-		if len(parts) == 2 && parts[1] != "" {
-			if budgetTokens, err := strconv.Atoi(parts[1]); err == nil {
-				clampedBudget := clampThinkingBudget(modelName, budgetTokens)
-				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					ThinkingBudget:  kitutil.GetPointer(clampedBudget),
-					IncludeThoughts: true,
+	baseModel := modelName
+	suffix := reasoning.IntentFromState(convmeta.ReasoningStateOf(info))
+	preserveSuffix := opts.ShouldPreserveThinkingSuffix(modelName)
+	if info != nil && opts.ShouldPreserveThinkingSuffix(info.GetOriginModelName()) {
+		preserveSuffix = true
+	}
+	if preserveSuffix {
+		suffix = reasoning.Intent{}
+	}
+	// Native Gemini requests already use the target protocol. Without a host
+	// modifier, read portable effort metadata without running the capability
+	// renderer or rewriting provider-native controls.
+	if !crossProtocol && suffix.IsEmpty() {
+		if info != nil {
+			effort := ""
+			if config := geminiRequest.GenerationConfig.ThinkingConfig; config != nil {
+				effort = config.ThinkingLevel
+				// Gemini accepts thinkingLevel case-insensitively; record the
+				// canonical effort so logs match other protocols. Unknown values
+				// stay as sent because this path does not validate.
+				if canonical, err := reasoning.ParseEffort(effort); err == nil {
+					effort = string(canonical)
+				}
+				if effort == "" && config.ThinkingBudget != nil {
+					effort = string(reasoning.EffortFromBudget(*config.ThinkingBudget))
 				}
 			}
+			info.SetReasoningEffort(effort)
 		}
-	} else if strings.HasSuffix(modelName, "-thinking") {
-		unsupportedModels := []string{
-			"gemini-2.5-pro-preview-05-06",
-			"gemini-2.5-pro-preview-03-25",
-		}
-		isUnsupported := false
-		for _, unsupportedModel := range unsupportedModels {
-			if strings.HasPrefix(modelName, unsupportedModel) {
-				isUnsupported = true
-				break
-			}
-		}
-
-		if isUnsupported {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
-			}
-		} else {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
-			}
-			if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
-				budgetTokens := opts.Gemini.ThinkingAdapterBudgetTokensPercentage * float64(*geminiRequest.GenerationConfig.MaxOutputTokens)
-				clampedBudget := clampThinkingBudget(modelName, int(budgetTokens))
-				geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = kitutil.GetPointer(clampedBudget)
-			} else if len(oaiRequest) > 0 {
-				geminiRequest.GenerationConfig.ThinkingConfig.ThinkingBudget = kitutil.GetPointer(clampThinkingBudgetByEffort(modelName, oaiRequest[0].ReasoningEffort))
-			}
-		}
-	} else if strings.HasSuffix(modelName, "-nothinking") {
-		if !isNew25Pro {
-			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				ThinkingBudget: kitutil.GetPointer(0),
-			}
-		}
-	} else if _, level, ok := reasoning.TrimEffortSuffix(modelName); ok && level != "" {
-		geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-			IncludeThoughts: true,
-			ThinkingLevel:   level,
-		}
-		info.SetReasoningEffort(level)
+		return nil
 	}
+	native, err := reasoning.FromGemini(geminiRequest)
+	if err != nil {
+		return err
+	}
+	source = reasoning.ResolveGeminiEnabledDefault(baseModel, source, geminiRequest.GenerationConfig.MaxOutputTokens)
+	if native.HasStrength() && source.HasStrength() {
+		equivalent, compareErr := reasoning.EquivalentGeminiStrength(baseModel, native, source)
+		if compareErr != nil {
+			return compareErr
+		}
+		if !equivalent {
+			nativeEffort := reasoning.EffectiveEffort(native)
+			sourceEffort := reasoning.EffectiveEffort(source)
+			return fmt.Errorf("%w for model %q: Gemini thinking_config effort %q differs from standard effort %q", reasoning.ErrEffortConflict, modelName, nativeEffort, sourceEffort)
+		}
+		// Native Gemini configuration is the lossless representation. Once the
+		// two controls are equivalent, retain only portable visibility metadata
+		// from the standard representation.
+		if native.IncludeThoughts == nil {
+			native.IncludeThoughts = source.IncludeThoughts
+		}
+		source = reasoning.Intent{}
+	}
+	explicit, err := reasoning.MergeExplicit(native, source, modelName)
+	if err != nil {
+		return err
+	}
+	if explicit.HasStrength() && suffix.HasStrength() {
+		equivalent, compareErr := reasoning.EquivalentGeminiStrength(baseModel, explicit, suffix)
+		if compareErr != nil {
+			return compareErr
+		}
+		if equivalent {
+			if explicit.IncludeThoughts == nil {
+				explicit.IncludeThoughts = suffix.IncludeThoughts
+			}
+			suffix = reasoning.Intent{}
+		}
+	}
+	requested, err := reasoning.MergeExplicitAndSuffix(explicit, suffix, modelName)
+	if err != nil {
+		return err
+	}
+	requested = reasoning.ResolveGeminiEnabledDefault(baseModel, requested, geminiRequest.GenerationConfig.MaxOutputTokens)
+
+	if native.HasStrength() && !suffix.HasStrength() {
+		if explicit.IncludeThoughts != nil {
+			geminiRequest.GenerationConfig.ThinkingConfig.IncludeThoughts = explicit.IncludeThoughts
+		}
+		effort, err := reasoning.ValidateGeminiThinkingConfig(baseModel, geminiRequest.GenerationConfig.ThinkingConfig)
+		if err != nil {
+			return err
+		}
+		if info != nil && effort != "" {
+			info.SetReasoningEffort(string(effort))
+		}
+		return nil
+	}
+	if requested.IsEmpty() {
+		return nil
+	}
+	rendered, err := reasoning.RenderGemini(
+		baseModel,
+		requested,
+		geminiRequest.GenerationConfig.MaxOutputTokens,
+		opts.Gemini.ThinkingAdapterBudgetTokensPercentage,
+	)
+	if err != nil {
+		return err
+	}
+	geminiRequest.GenerationConfig.ThinkingConfig = rendered.Config
+	if info != nil && rendered.EffectiveEffort != "" {
+		info.SetReasoningEffort(string(rendered.EffectiveEffort))
+	}
+	return nil
 }
 
 func ParseStopSequences(stop any) []string {
@@ -159,7 +240,7 @@ func ParseStopSequences(stop any) []string {
 		}
 	case []string:
 		return v
-	case []interface{}:
+	case []any:
 		sequences := make([]string, 0, len(v))
 		for _, item := range v {
 			if str, ok := item.(string); ok && str != "" {
@@ -184,9 +265,9 @@ func HasFunctionCallContent(call *dto.FunctionCall) bool {
 		return false
 	case string:
 		return strings.TrimSpace(v) != ""
-	case map[string]interface{}:
+	case map[string]any:
 		return len(v) > 0
-	case []interface{}:
+	case []any:
 		return len(v) > 0
 	default:
 		return true
@@ -194,74 +275,5 @@ func HasFunctionCallContent(call *dto.FunctionCall) bool {
 }
 
 func SupportedMimeTypesList() []string {
-	keys := make([]string, 0, len(SupportedMimeTypes))
-	for key := range SupportedMimeTypes {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func isNew25ProModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-pro") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-05-06") &&
-		!strings.HasPrefix(modelName, "gemini-2.5-pro-preview-03-25")
-}
-
-func is25FlashLiteModel(modelName string) bool {
-	return strings.HasPrefix(modelName, "gemini-2.5-flash-lite")
-}
-
-func clampThinkingBudget(modelName string, budget int) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	if is25FlashLite {
-		if budget < flash25LiteMinBudget {
-			return flash25LiteMinBudget
-		}
-		if budget > flash25LiteMaxBudget {
-			return flash25LiteMaxBudget
-		}
-	} else if isNew25Pro {
-		if budget < pro25MinBudget {
-			return pro25MinBudget
-		}
-		if budget > pro25MaxBudget {
-			return pro25MaxBudget
-		}
-	} else {
-		if budget < 0 {
-			return 0
-		}
-		if budget > flash25MaxBudget {
-			return flash25MaxBudget
-		}
-	}
-	return budget
-}
-
-func clampThinkingBudgetByEffort(modelName string, effort string) int {
-	isNew25Pro := isNew25ProModel(modelName)
-	is25FlashLite := is25FlashLiteModel(modelName)
-
-	maxBudget := 0
-	if is25FlashLite {
-		maxBudget = flash25LiteMaxBudget
-	}
-	if isNew25Pro {
-		maxBudget = pro25MaxBudget
-	} else {
-		maxBudget = flash25MaxBudget
-	}
-	switch effort {
-	case "high":
-		maxBudget = maxBudget * 80 / 100
-	case "medium":
-		maxBudget = maxBudget * 50 / 100
-	case "low":
-		maxBudget = maxBudget * 20 / 100
-	case "minimal":
-		maxBudget = maxBudget * 5 / 100
-	}
-	return clampThinkingBudget(modelName, maxBudget)
+	return append(slices.Sorted(maps.Keys(supportedMimeTypes)), "audio/*", "video/*")
 }

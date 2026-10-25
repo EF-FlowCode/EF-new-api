@@ -13,16 +13,6 @@ import (
 
 var StartTime = time.Now().Unix() // unit: second
 var Version = "v0.0.0"            // this hard coding will be replaced automatically when building, no need to manually change
-var SystemName = "New API"
-var Footer = ""
-var Logo = ""
-var TopUpLink = ""
-
-// GroupMonitoringURL is the embed target for the public-facing
-// /group-monitoring page. Empty hides the top-nav link entirely.
-// Set to e.g. https://status-new.e-flowcode.cc/, or to an internal
-// docker-network URL like http://status:3000/ when reverse-proxying.
-var GroupMonitoringURL = ""
 
 // LegacyConsolePath rewrites known legacy /console/* paths to the current
 // frontend routes. Unknown paths and query strings are preserved.
@@ -38,23 +28,12 @@ func LegacyConsolePath(suffix string) string {
 	return suffix
 }
 
-// var ChatLink = ""
-// var ChatLink2 = ""
-var QuotaPerUnit = 500 * 1000.0 // $0.002 / 1K tokens
-// 保留旧变量以兼容历史逻辑，实际展示由 general_setting.quota_display_type 控制
-var DisplayInCurrencyEnabled = true
-var DisplayTokenStatEnabled = true
-var DrawingEnabled = true
-var TaskEnabled = true
-var DataExportEnabled = true
-var DataExportInterval = 5         // unit: minute
-var DataExportDefaultTime = "hour" // unit: minute
-var DefaultCollapseSidebar = false // default value of collapse sidebar
-
 // Any options with "Secret", "Token" in its key won't be return by GetOptions
 
 var SessionSecret = uuid.New().String()
 var CryptoSecret = uuid.New().String()
+var SessionCookieSecure = false
+var SessionCookieTrustedURLs []string
 
 var OptionMap map[string]string
 var OptionMapRWMutex sync.RWMutex
@@ -62,103 +41,11 @@ var OptionMapRWMutex sync.RWMutex
 var ItemsPerPage = 10
 var MaxRecentItems = 1000
 
-var PasswordLoginEnabled = true
-var PasswordRegisterEnabled = true
-var EmailVerificationEnabled = false
-var GitHubOAuthEnabled = false
-var LinuxDOOAuthEnabled = false
-var WeChatAuthEnabled = false
-var TelegramOAuthEnabled = false
-var TurnstileCheckEnabled = false
-var RegisterEnabled = true
-var InvitationCodeEnabled = false
-var InvitationCodeOAuthRequired = false
-var InvitationCodeUserGenerateEnabled = false
-
-var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
-var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
-var EmailDomainWhitelist = []string{
-	"gmail.com",
-	"163.com",
-	"126.com",
-	"qq.com",
-	"outlook.com",
-	"hotmail.com",
-	"icloud.com",
-	"yahoo.com",
-	"foxmail.com",
-}
-var EmailLoginAuthServerList = []string{
-	"smtp.sendcloud.net",
-	"smtp.azurecomm.net",
-}
-
 var DebugEnabled bool
 var MemoryCacheEnabled bool
 
-var LogConsumeEnabled = true
-
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
-
-var SMTPServer = ""
-var SMTPPort = 587
-var SMTPSSLEnabled = false
-var SMTPForceAuthLogin = false
-var SMTPAccount = ""
-var SMTPFrom = ""
-var SMTPToken = ""
-
-// eflow: 发信归档 Bcc。非空时，每封外发邮件额外盲送一份到该地址（仅加进 RCPT，
-// 不写进邮件头，收件人看不到），用于发件留痕——SMTP 本身不会把副本存进"已发送"。
-// 多个地址用分号(;)分隔；空 = 关闭。热更新即时生效。
-var SMTPArchiveBcc = ""
-
-// 工单邮件通知配置
-var TicketNotifyEnabled = false
-var TicketAdminEmail = ""                                  // 多个邮箱使用分号(;)分隔
-var TicketReplyAttachmentEnabled = true                    // 管理员回复带附件时，附件随邮件一起发给用户（multipart/mixed）。默认开
-var TicketReplyAttachmentMaxBytes int64 = 20 * 1024 * 1024 // 单封邮件附件总字节上限（base64 后体积约 +33%），超限自动回退为不带附件
-
-// eflow: 最低开票金额（人民币元）。一次发票申请所选充值订单的合计金额需 >= 此值才允许提交；
-// 0 表示不限制。与发票 UI 展示的 ¥ 同口径（TopUp.Money）。
-var TicketInvoiceMinTopupMoney float64 = 0
-
-// 支付成功邮件通知配置
-var PaymentNotifyUserEnabled = false  // 支付成功后通知下单用户
-var PaymentNotifyAdminEnabled = false // 支付成功后通知管理员
-var PaymentAdminEmail = ""            // 管理员收件邮箱，多个以分号分隔
-
-var GitHubClientId = ""
-var GitHubClientSecret = ""
-var LinuxDOClientId = ""
-var LinuxDOClientSecret = ""
-var LinuxDOMinimumTrustLevel = 0
-
-var WeChatServerAddress = ""
-var WeChatServerToken = ""
-var WeChatAccountQRCodeImageURL = ""
-
-var TurnstileSiteKey = ""
-var TurnstileSecretKey = ""
-
-var TelegramBotToken = ""
-var TelegramBotName = ""
-
-var QuotaForNewUser = 0
-var QuotaForInviter = 0
-var QuotaForInvitee = 0
-
-// AffiliateEnabled controls both the user-facing referral program and whether
-// new inviter/invitee rewards are issued. Existing rewards remain untouched.
-var AffiliateEnabled = true
-var ChannelDisableThreshold = 5.0
-var AutomaticDisableChannelEnabled = false
-var AutomaticEnableChannelEnabled = false
-var QuotaRemindThreshold = 1000
-var PreConsumedQuota = 500
-
-var RetryTimes = 0
 
 //var RootUserEmail = ""
 
@@ -231,13 +118,6 @@ func RoleLabel(role int) string {
 	}
 }
 
-var (
-	FileUploadPermission    = RoleGuestUser
-	FileDownloadPermission  = RoleGuestUser
-	ImageUploadPermission   = RoleGuestUser
-	ImageDownloadPermission = RoleGuestUser
-)
-
 // All duration's unit is seconds
 // Shouldn't larger then RateLimitKeyExpirationDuration
 var (
@@ -248,6 +128,11 @@ var (
 	GlobalWebRateLimitEnable   bool
 	GlobalWebRateLimitNum      int
 	GlobalWebRateLimitDuration int64
+
+	// 前端构建文件（JS/CSS/图标等）单独计数，默认关闭，不再挤占 Web 页面额度。
+	GlobalStaticRateLimitEnable   bool
+	GlobalStaticRateLimitNum      int
+	GlobalStaticRateLimitDuration int64
 
 	CriticalRateLimitEnable   bool
 	CriticalRateLimitNum            = 20
@@ -263,6 +148,13 @@ var (
 	SearchRateLimitEnable         = true
 	SearchRateLimitNum            = 20
 	SearchRateLimitDuration int64 = 60
+
+	// Per-user limit for task status/result polling. These reads never select a
+	// channel, so they stay outside the model request/success limits; the
+	// separate bucket only bounds lookup and plugin-render CPU.
+	TaskQueryRateLimitEnable         = true
+	TaskQueryRateLimitNum            = 600
+	TaskQueryRateLimitDuration int64 = 60
 )
 
 var RateLimitKeyExpirationDuration = 20 * time.Minute

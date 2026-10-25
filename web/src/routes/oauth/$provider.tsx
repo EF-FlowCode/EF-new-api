@@ -1,5 +1,4 @@
 import { useEffect } from 'react'
-import type { AxiosRequestConfig } from 'axios'
 import {
   createFileRoute,
   useNavigate,
@@ -9,17 +8,17 @@ import {
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore, type AuthUser } from '@/stores/auth-store'
-import { api, getSelf } from '@/lib/api'
+import { api, CALLER_HANDLED_REQUEST_CONFIG, getSelf } from '@/lib/api'
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
+import {
+  isLoginChallenge,
+  rememberLoginChallenge,
+} from '@/features/auth/lib/login-challenge'
 import {
   getOAuthSessionStorage,
   resolveOAuthCallbackMode,
 } from '@/features/auth/lib/oauth-callback-mode'
-
-type OAuthRequestConfig = AxiosRequestConfig & {
-  skipBusinessError?: boolean
-}
 
 function OAuthCallback() {
   const navigate = useNavigate()
@@ -141,9 +140,9 @@ function OAuthCallback() {
       }
 
       try {
-        const config: OAuthRequestConfig = {
+        const config = {
+          ...CALLER_HANDLED_REQUEST_CONFIG,
           params: { code: search.code, state: search.state },
-          skipBusinessError: true,
         }
         const res = await api.get(`/api/oauth/${provider}`, config)
         if (res?.data?.success) {
@@ -159,6 +158,12 @@ function OAuthCallback() {
             } else {
               safeNavigate('/_authenticated/profile/')
             }
+            return
+          }
+          // 开了 2FA 的账号：后端只建立了待验证状态，转去输入验证码
+          if (isLoginChallenge(res.data?.data)) {
+            rememberLoginChallenge(res.data.data)
+            safeNavigate('/otp')
             return
           }
           // Otherwise it's a login, use payload user if available

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/setting"
+	"eflow.local/new-api/setting"
 	cos "github.com/tencentyun/cos-go-sdk-v5"
 )
 
@@ -23,19 +23,24 @@ type COSStorage struct {
 	secretId     string
 	secretKey    string
 	customDomain string
+	defaultTTL   time.Duration
 }
 
 func NewCOSStorage() (Storage, error) {
-	bucket := strings.TrimSpace(setting.TicketAttachmentCOSBucket)
-	region := strings.TrimSpace(setting.TicketAttachmentCOSRegion)
-	id := strings.TrimSpace(setting.TicketAttachmentCOSSecretId)
-	key := strings.TrimSpace(setting.TicketAttachmentCOSSecretKey)
+	return newCOSStorage(setting.GetTicketAttachmentSettings())
+}
+
+func newCOSStorage(settings setting.TicketAttachmentSettings) (Storage, error) {
+	bucket := strings.TrimSpace(settings.COSBucket)
+	region := strings.TrimSpace(settings.COSRegion)
+	id := strings.TrimSpace(settings.COSSecretID)
+	key := strings.TrimSpace(settings.COSSecretKey)
 	if id == "" || key == "" {
 		return nil, ErrStorageNotConfigured
 	}
 
 	var bucketURL *url.URL
-	if endpoint := strings.TrimSpace(setting.TicketAttachmentCOSEndpoint); endpoint != "" {
+	if endpoint := strings.TrimSpace(settings.COSEndpoint); endpoint != "" {
 		u, err := url.Parse(endpoint)
 		if err != nil {
 			return nil, fmt.Errorf("parse cos endpoint: %w", err)
@@ -62,7 +67,8 @@ func NewCOSStorage() (Storage, error) {
 		client:       client,
 		secretId:     id,
 		secretKey:    key,
-		customDomain: strings.TrimRight(strings.TrimSpace(setting.TicketAttachmentCOSCustomDomain), "/"),
+		customDomain: strings.TrimRight(strings.TrimSpace(settings.COSCustomDomain), "/"),
+		defaultTTL:   time.Duration(settings.SignedURLTTL) * time.Second,
 	}, nil
 }
 
@@ -111,7 +117,7 @@ func (s *COSStorage) Exists(ctx context.Context, key string) (bool, error) {
 
 func (s *COSStorage) SignedURL(ctx context.Context, key string, ttl time.Duration, filename string) (string, error) {
 	if ttl <= 0 {
-		ttl = time.Duration(setting.TicketAttachmentSignedURLTTL) * time.Second
+		ttl = s.defaultTTL
 	}
 	// COS SDK 不原生支持 response-content-disposition 注入到 presign，需要通过 opt.PresignOptions.
 	opt := &cos.PresignedURLOptions{

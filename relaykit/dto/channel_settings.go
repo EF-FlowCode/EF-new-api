@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/types"
 )
 
 type ChannelSettings struct {
@@ -116,11 +116,22 @@ type AdvancedCustomConfig struct {
 }
 
 type AdvancedCustomRoute struct {
-	IncomingPath string                   `json:"incoming_path,omitempty"`
-	UpstreamPath string                   `json:"upstream_path,omitempty"`
-	Converter    string                   `json:"converter,omitempty"`
-	Models       []string                 `json:"models,omitempty"`
-	Auth         *AdvancedCustomRouteAuth `json:"auth,omitempty"`
+	IncomingPath           string                   `json:"incoming_path,omitempty"`
+	UpstreamPath           string                   `json:"upstream_path,omitempty"`
+	Converter              string                   `json:"converter,omitempty"`
+	Models                 []string                 `json:"models,omitempty"`
+	Auth                   *AdvancedCustomRouteAuth `json:"auth,omitempty"`
+	PassThroughBodyEnabled bool                     `json:"pass_through_body_enabled,omitempty"`
+}
+
+// SupportsPassThroughBody reports whether the route converter leaves the request body untouched.
+func (r AdvancedCustomRoute) SupportsPassThroughBody() bool {
+	switch strings.TrimSpace(r.Converter) {
+	case "", advancedCustomConverterNone:
+		return true
+	default:
+		return false
+	}
 }
 
 type AdvancedCustomRouteAuth struct {
@@ -145,8 +156,14 @@ const (
 	advancedCustomEndpointPathEmbeddings             = "/v1/embeddings"
 )
 
-// AdvancedCustomModelListPath identifies the optional OpenAI Models discovery route.
-const AdvancedCustomModelListPath = "/v1/models"
+const (
+	// AdvancedCustomModelListPath identifies the optional OpenAI Models discovery route.
+	AdvancedCustomModelListPath = "/v1/models"
+	// AdvancedCustomBalancePath identifies the optional channel-management
+	// balance route. It is kept as a management route rather than a relay
+	// endpoint so it cannot accidentally match normal user traffic.
+	AdvancedCustomBalancePath = "/v1/dashboard/billing/credit_grants"
+)
 
 // MatchPath returns the first route whose IncomingPath matches requestPath.
 // Matching mirrors the relay adaptor: exact match, {model} placeholder, and
@@ -191,6 +208,36 @@ func (c *AdvancedCustomConfig) ModelListRoute() (AdvancedCustomRoute, bool) {
 		}
 	}
 	return AdvancedCustomRoute{}, false
+}
+
+// BalanceRoute returns the explicitly configured channel-management balance
+// route. Like ModelListRoute, matching is exact and does not accept templates.
+func (c *AdvancedCustomConfig) BalanceRoute() (AdvancedCustomRoute, bool) {
+	if c == nil {
+		return AdvancedCustomRoute{}, false
+	}
+	for _, route := range c.Routes {
+		if strings.TrimSpace(route.IncomingPath) == AdvancedCustomBalancePath {
+			return route, true
+		}
+	}
+	return AdvancedCustomRoute{}, false
+}
+
+// HasRelayRoutes reports whether the configuration contains at least one
+// request route. Management-only configurations (model discovery and balance)
+// intentionally keep the legacy Custom relay behavior.
+func (c *AdvancedCustomConfig) HasRelayRoutes() bool {
+	if c == nil {
+		return false
+	}
+	for _, route := range c.Routes {
+		path := strings.TrimSpace(route.IncomingPath)
+		if path != AdvancedCustomModelListPath && path != AdvancedCustomBalancePath {
+			return true
+		}
+	}
+	return false
 }
 
 // SupportsPath reports whether any route matches requestPath.
@@ -360,6 +407,7 @@ func (c *AdvancedCustomConfig) Validate() error {
 
 	paths := make(map[string]*advancedCustomPathModelState, len(c.Routes))
 	modelListRouteIndex := -1
+	balanceRouteIndex := -1
 	for i := range c.Routes {
 		route := c.Routes[i]
 		route.IncomingPath = strings.TrimSpace(route.IncomingPath)
@@ -378,19 +426,31 @@ func (c *AdvancedCustomConfig) Validate() error {
 		if strings.Contains(route.IncomingPath, "?") {
 			return fmt.Errorf("advanced_custom.advanced_routes[%d].incoming_path must not include query", i)
 		}
-		if route.IncomingPath == AdvancedCustomModelListPath {
-			if modelListRouteIndex >= 0 {
-				return fmt.Errorf("advanced_custom.advanced_routes[%d] duplicates the /v1/models route at advanced_routes[%d]", i, modelListRouteIndex)
+		if route.IncomingPath == AdvancedCustomModelListPath || route.IncomingPath == AdvancedCustomBalancePath {
+			managementRouteName := route.IncomingPath
+			previousIndex := modelListRouteIndex
+			if route.IncomingPath == AdvancedCustomBalancePath {
+				previousIndex = balanceRouteIndex
 			}
-			modelListRouteIndex = i
+			if previousIndex >= 0 {
+				return fmt.Errorf("advanced_custom.advanced_routes[%d] duplicates the %s route at advanced_routes[%d]", i, managementRouteName, previousIndex)
+			}
+			if route.IncomingPath == AdvancedCustomModelListPath {
+				modelListRouteIndex = i
+			} else {
+				balanceRouteIndex = i
+			}
 			if len(normalizeAdvancedCustomRouteModels(route.Models)) > 0 {
-				return fmt.Errorf("advanced_custom.advanced_routes[%d].models must be empty for /v1/models", i)
+				return fmt.Errorf("advanced_custom.advanced_routes[%d].models must be empty for %s", i, managementRouteName)
 			}
 			if route.Converter != advancedCustomConverterNone {
-				return fmt.Errorf("advanced_custom.advanced_routes[%d].converter must be none for /v1/models", i)
+				return fmt.Errorf("advanced_custom.advanced_routes[%d].converter must be none for %s", i, managementRouteName)
 			}
 			if strings.Contains(upstreamPath, advancedCustomModelPlaceholder) {
-				return fmt.Errorf("advanced_custom.advanced_routes[%d].upstream_path must not contain %s for /v1/models", i, advancedCustomModelPlaceholder)
+				return fmt.Errorf("advanced_custom.advanced_routes[%d].upstream_path must not contain %s for %s", i, advancedCustomModelPlaceholder, managementRouteName)
+			}
+			if route.PassThroughBodyEnabled {
+				return fmt.Errorf("advanced_custom.advanced_routes[%d].pass_through_body_enabled must be false for %s", i, managementRouteName)
 			}
 		}
 		if err := validateAdvancedCustomRouteModels(i, route.IncomingPath, route.Models, paths); err != nil {
@@ -409,6 +469,9 @@ func (c *AdvancedCustomConfig) Validate() error {
 		}
 		if err := validateAdvancedCustomConverterPath(i, route.IncomingPath, route.Converter); err != nil {
 			return err
+		}
+		if route.PassThroughBodyEnabled && !route.SupportsPassThroughBody() {
+			return fmt.Errorf("advanced_custom.advanced_routes[%d].pass_through_body_enabled requires converter none: %s", i, route.Converter)
 		}
 		if err := validateAdvancedCustomRouteAuth(i, route.Auth); err != nil {
 			return err

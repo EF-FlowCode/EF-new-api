@@ -1,43 +1,112 @@
 package setting
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+)
 
-var CheckSensitiveEnabled = true
-var CheckSensitiveOnPromptEnabled = true
-
-//var CheckSensitiveOnCompletionEnabled = true
-
-// StopOnSensitiveEnabled 如果检测到敏感词，是否立刻停止生成，否则替换敏感词
-var StopOnSensitiveEnabled = true
-
-// StreamCacheQueueLength 流模式缓存队列长度，0表示无缓存
-var StreamCacheQueueLength = 0
-
-// SensitiveWords 敏感词
-// var SensitiveWords []string
-var SensitiveWords = []string{
-	"test_sensitive",
+// SensitiveSettings is one immutable runtime version of sensitive-word
+// filtering. Words is caller-owned in values returned by GetSensitiveSettings.
+type SensitiveSettings struct {
+	CheckEnabled           bool
+	CheckOnPromptEnabled   bool
+	StopOnSensitive        bool
+	StreamCacheQueueLength int
+	Words                  []string
 }
 
-func SensitiveWordsToString() string {
-	return strings.Join(SensitiveWords, "\n")
+var (
+	sensitiveSettings   atomic.Pointer[SensitiveSettings]
+	sensitiveSettingsMu sync.Mutex
+)
+
+func init() {
+	publishSensitiveSettings(SensitiveSettings{
+		CheckEnabled:         true,
+		CheckOnPromptEnabled: true,
+		StopOnSensitive:      true,
+		Words:                []string{"test_sensitive"},
+	})
 }
 
-func SensitiveWordsFromString(s string) {
-	SensitiveWords = []string{}
-	sw := strings.Split(s, "\n")
-	for _, w := range sw {
-		w = strings.TrimSpace(w)
-		if w != "" {
-			SensitiveWords = append(SensitiveWords, w)
+// GetSensitiveSettings returns an isolated copy of one published version.
+func GetSensitiveSettings() SensitiveSettings {
+	current := sensitiveSettings.Load()
+	if current == nil {
+		return SensitiveSettings{}
+	}
+	return cloneSensitiveSettings(*current)
+}
+
+// UpdateSensitiveSettings parses all supplied options before publishing one
+// complete replacement. Unknown keys are ignored.
+func UpdateSensitiveSettings(values map[string]string) error {
+	sensitiveSettingsMu.Lock()
+	defer sensitiveSettingsMu.Unlock()
+
+	next := GetSensitiveSettings()
+	boolOptions := []struct {
+		key    string
+		target *bool
+	}{
+		{key: "CheckSensitiveEnabled", target: &next.CheckEnabled},
+		{key: "CheckSensitiveOnPromptEnabled", target: &next.CheckOnPromptEnabled},
+		{key: "StopOnSensitiveEnabled", target: &next.StopOnSensitive},
+	}
+	for _, option := range boolOptions {
+		value, ok := values[option.key]
+		if !ok {
+			continue
+		}
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s must be a boolean: %w", option.key, err)
+		}
+		*option.target = parsed
+	}
+	if value, ok := values["StreamCacheQueueLength"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("StreamCacheQueueLength must be an integer: %w", err)
+		}
+		next.StreamCacheQueueLength = parsed
+	}
+	if value, ok := values["SensitiveWords"]; ok {
+		next.Words = parseSensitiveWords(value)
+	}
+
+	publishSensitiveSettings(next)
+	return nil
+}
+
+func (settings SensitiveSettings) ShouldCheckPrompt() bool {
+	return settings.CheckEnabled && settings.CheckOnPromptEnabled
+}
+
+func (settings SensitiveSettings) WordsString() string {
+	return strings.Join(settings.Words, "\n")
+}
+
+func parseSensitiveWords(value string) []string {
+	words := make([]string, 0)
+	for word := range strings.SplitSeq(value, "\n") {
+		word = strings.TrimSpace(word)
+		if word != "" {
+			words = append(words, word)
 		}
 	}
+	return words
 }
 
-func ShouldCheckPromptSensitive() bool {
-	return CheckSensitiveEnabled && CheckSensitiveOnPromptEnabled
+func cloneSensitiveSettings(settings SensitiveSettings) SensitiveSettings {
+	settings.Words = append([]string(nil), settings.Words...)
+	return settings
 }
 
-//func ShouldCheckCompletionSensitive() bool {
-//	return CheckSensitiveEnabled && CheckSensitiveOnCompletionEnabled
-//}
+func publishSensitiveSettings(next SensitiveSettings) {
+	owned := cloneSensitiveSettings(next)
+	sensitiveSettings.Store(&owned)
+}

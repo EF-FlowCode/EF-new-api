@@ -35,6 +35,10 @@ import { registerFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useEmailVerification } from '@/features/auth/hooks/use-email-verification'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
+import {
+  isLoginChallenge,
+  rememberLoginChallenge,
+} from '@/features/auth/lib/login-challenge'
 import { getAffiliateCode } from '@/features/auth/lib/storage'
 
 export function SignUpForm({
@@ -58,7 +62,8 @@ export function SignUpForm({
     setTurnstileToken,
     validateTurnstile,
   } = useTurnstile()
-  const { redirectToLogin, handleLoginSuccess } = useAuthRedirect()
+  const { redirectToLogin, redirectTo2FA, handleLoginSuccess } =
+    useAuthRedirect()
   const {
     isSending: isSendingCode,
     secondsLeft,
@@ -201,7 +206,13 @@ export function SignUpForm({
 
     setIsWeChatSubmitting(true)
     try {
-      const res = await wechatLoginByCode(wechatCode)
+      const res = await wechatLoginByCode(wechatCode, invitationCodeValue)
+      if (res?.success && isLoginChallenge(res.data)) {
+        rememberLoginChallenge(res.data)
+        handleWeChatDialogChange(false)
+        redirectTo2FA()
+        return
+      }
       if (res?.success) {
         await handleLoginSuccess(res.data as { id?: number } | null)
         toast.success(t('Signed in via WeChat'))
@@ -375,6 +386,7 @@ export function SignUpForm({
             disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
             onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
             isWeChatLoading={isWeChatSubmitting}
+            invitationCode={invitationCodeValue}
             className='pt-2'
           />
         )}

@@ -7,51 +7,50 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relaykit/relayconvert"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	relaytypes "eflow.local/new-api/relaykit/types"
 )
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
-	relayReq, err := bridgeDTO[relaydto.GeneralOpenAIRequest](req)
+	result, err := relayconvert.ConvertRequest(context.Background(), nil, relaytypes.RelayFormatOpenAIResponses, req)
 	if err != nil {
 		return nil, err
 	}
-	result, err := relayconvert.ConvertRequest(context.Background(), nil, relaytypes.RelayFormatOpenAIResponses, relayReq)
-	if err != nil {
-		return nil, err
-	}
-	converted, ok := result.Value.(*relaydto.OpenAIResponsesRequest)
+	converted, ok := result.Value.(*dto.OpenAIResponsesRequest)
 	if !ok {
 		return nil, fmt.Errorf("expected OpenAI responses request, got %T", result.Value)
 	}
-	return bridgeDTO[dto.OpenAIResponsesRequest](converted)
+	return converted, nil
 }
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
+	return ResponsesRequestToChatCompletionsRequestWithInfo(req, nil)
+}
+func ResponsesRequestToChatCompletionsRequestWithInfo(req *dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	if req == nil {
 		return nil, errors.New("request is nil")
 	}
-	relayReq, err := bridgeDTO[relaydto.OpenAIResponsesRequest](req)
+	meta := &convmeta.Values{}
+	if info != nil {
+		info.ResponsesTools = nil
+	}
+	result, err := relayconvert.ConvertRequest(context.Background(), meta, relaytypes.RelayFormatOpenAI, req)
+	if err == nil && info != nil {
+		info.ResponsesTools = meta.ResponsesTools
+	}
 	if err != nil {
 		return nil, err
 	}
-	result, err := relayconvert.ConvertRequest(context.Background(), nil, relaytypes.RelayFormatOpenAI, relayReq)
-	if err != nil {
-		return nil, err
-	}
-	converted, ok := result.Value.(*relaydto.GeneralOpenAIRequest)
+	chatReq, ok := result.Value.(*dto.GeneralOpenAIRequest)
 	if !ok {
 		return nil, fmt.Errorf("expected OpenAI chat request, got %T", result.Value)
-	}
-	chatReq, err := bridgeDTO[dto.GeneralOpenAIRequest](converted)
-	if err != nil {
-		return nil, err
 	}
 
 	// DashScope chat/completions rejects these Responses-only fields. This
@@ -69,26 +68,26 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 }
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string, model string) ([]byte, *dto.Usage, error) {
+	return ChatCompletionsResponseToResponsesResponseWithTools(resp, id, model, nil)
+}
+func ChatCompletionsResponseToResponsesResponseWithTools(resp *dto.OpenAITextResponse, id string, model string, tools *convmeta.ResponsesToolState) ([]byte, *dto.Usage, error) {
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
-	relayResp, err := bridgeDTO[relaydto.OpenAITextResponse](resp)
-	if err != nil {
-		return nil, nil, err
-	}
+	relayResp := *resp
 	relayResp.Id = id
 	relayResp.Model = model
-	result, err := relayconvert.ConvertResponse(context.Background(), nil, relaytypes.RelayFormatOpenAIResponses, relayResp)
+	result, err := relayconvert.ConvertResponse(context.Background(), &convmeta.Values{ResponsesTools: tools}, relaytypes.RelayFormatOpenAIResponses, &relayResp)
 	if err != nil {
 		return nil, nil, err
 	}
-	converted, ok := result.Value.(*relaydto.OpenAIResponsesResponse)
+	converted, ok := result.Value.(*dto.OpenAIResponsesResponse)
 	if !ok {
 		return nil, nil, fmt.Errorf("expected OpenAI responses response, got %T", result.Value)
 	}
-	usage, err := bridgeDTO[dto.Usage](result.Usage)
-	if err != nil {
-		return nil, nil, err
+	usage := result.Usage
+	if usage == nil {
+		usage = &dto.Usage{}
 	}
 	if usage.InputTokensDetails != nil {
 		usage.PromptTokensDetails = *usage.InputTokensDetails
@@ -117,26 +116,19 @@ func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesRespons
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
-	relayResp, err := bridgeDTO[relaydto.OpenAIResponsesResponse](resp)
-	if err != nil {
-		return nil, nil, err
-	}
+	relayResp := *resp
 	relayResp.ID = id
-	result, err := relayconvert.ConvertResponse(context.Background(), nil, relaytypes.RelayFormatOpenAI, relayResp)
+	result, err := relayconvert.ConvertResponse(context.Background(), nil, relaytypes.RelayFormatOpenAI, &relayResp)
 	if err != nil {
 		return nil, nil, err
 	}
-	converted, ok := result.Value.(*relaydto.OpenAITextResponse)
+	chatResp, ok := result.Value.(*dto.OpenAITextResponse)
 	if !ok {
 		return nil, nil, fmt.Errorf("expected OpenAI chat response, got %T", result.Value)
 	}
-	chatResp, err := bridgeDTO[dto.OpenAITextResponse](converted)
-	if err != nil {
-		return nil, nil, err
-	}
-	usage, err := bridgeDTO[dto.Usage](result.Usage)
-	if err != nil {
-		return nil, nil, err
+	usage := result.Usage
+	if usage == nil {
+		usage = &dto.Usage{}
 	}
 	chatResp.Usage = *usage
 	return chatResp, usage, nil
@@ -146,54 +138,7 @@ func ExtractOutputTextFromResponses(resp *dto.OpenAIResponsesResponse) string {
 	if resp == nil {
 		return ""
 	}
-	relayResp, err := bridgeDTO[relaydto.OpenAIResponsesResponse](resp)
-	if err != nil {
-		return ""
-	}
-	return relayconvert.ExtractOutputTextFromResponses(relayResp)
-}
-
-// BuildResponsesUsage maps chat usage onto the Responses usage shape used by
-// the existing streaming bridge.
-func BuildResponsesUsage(u *dto.Usage) *dto.Usage {
-	if u == nil {
-		return &dto.Usage{}
-	}
-	out := &dto.Usage{
-		PromptTokens:           u.PromptTokens,
-		CompletionTokens:       u.CompletionTokens,
-		TotalTokens:            u.TotalTokens,
-		InputTokens:            u.PromptTokens,
-		OutputTokens:           u.CompletionTokens,
-		PromptTokensDetails:    u.PromptTokensDetails,
-		CompletionTokenDetails: u.CompletionTokenDetails,
-	}
-	if u.PromptTokensDetails.CachedTokens > 0 ||
-		u.PromptTokensDetails.CachedCreationTokens > 0 ||
-		u.PromptTokensDetails.CacheWriteTokens > 0 ||
-		u.PromptTokensDetails.TextTokens > 0 ||
-		u.PromptTokensDetails.AudioTokens > 0 ||
-		u.PromptTokensDetails.ImageTokens > 0 ||
-		u.PromptTokensDetails.VideoTokens > 0 {
-		details := u.PromptTokensDetails
-		out.InputTokensDetails = &details
-	}
-	if out.TotalTokens == 0 {
-		out.TotalTokens = out.PromptTokens + out.CompletionTokens
-	}
-	return out
-}
-
-func bridgeDTO[T any](value any) (*T, error) {
-	data, err := common.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var out T
-	if err := common.Unmarshal(data, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return relayconvert.ExtractOutputTextFromResponses(resp)
 }
 
 func responseStatus(raw json.RawMessage) string {
@@ -204,7 +149,7 @@ func responseStatus(raw json.RawMessage) string {
 	return status
 }
 
-func responseOutput(outputs []relaydto.ResponsesOutput) []map[string]any {
+func responseOutput(outputs []dto.ResponsesOutput) []map[string]any {
 	result := make([]map[string]any, 0, len(outputs))
 	for _, output := range outputs {
 		if output.Type == "reasoning" {
@@ -219,7 +164,7 @@ func responseOutput(outputs []relaydto.ResponsesOutput) []map[string]any {
 	return result
 }
 
-func responseOutputItem(output relaydto.ResponsesOutput) map[string]any {
+func responseOutputItem(output dto.ResponsesOutput) map[string]any {
 	item := map[string]any{
 		"type":   output.Type,
 		"id":     output.ID,
@@ -227,10 +172,18 @@ func responseOutputItem(output relaydto.ResponsesOutput) map[string]any {
 	}
 	switch output.Type {
 	case "reasoning":
-		item["summary"] = output.Content
+		if output.Summary != nil {
+			item["summary"] = output.Summary
+		} else {
+			item["summary"] = output.Content
+		}
 	case "message":
 		item["role"] = output.Role
 		item["content"] = output.Content
+	case "custom_tool_call":
+		item["call_id"] = output.CallId
+		item["name"] = output.Name
+		item["input"] = output.Input
 	case "function_call":
 		item["call_id"] = output.CallId
 		item["name"] = output.Name

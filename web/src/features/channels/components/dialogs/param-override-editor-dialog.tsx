@@ -45,6 +45,10 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { JsonCodeEditor } from '@/components/json-code-editor'
+import {
+  parseConditionValue,
+  parseLooseValue,
+} from '../../lib/param-override-condition'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,6 +129,7 @@ const CONDITION_MODE_OPTIONS = [
   { label: 'Prefix', value: 'prefix' },
   { label: 'Suffix', value: 'suffix' },
   { label: 'Contains', value: 'contains' },
+  { label: 'Regex', value: 'regex' },
   { label: 'Greater Than', value: 'gt' },
   { label: 'Greater Than or Equal', value: 'gte' },
   { label: 'Less Than', value: 'lt' },
@@ -422,16 +427,6 @@ const toValueText = (value: unknown): string => {
     return JSON.stringify(value)
   } catch {
     return String(value)
-  }
-}
-
-const parseLooseValue = (valueText: string): unknown => {
-  const raw = String(valueText ?? '').trim()
-  if (raw === '') return ''
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return raw
   }
 }
 
@@ -825,8 +820,9 @@ const buildPruneObjectsValueText = (draft: PruneObjectsDraft): string => {
         path: String(rule.path || '').trim(),
         mode: CONDITION_MODE_VALUES.has(rule.mode) ? rule.mode : 'full',
       }
-      const valueRaw = String(rule.value_text || '').trim()
-      if (valueRaw !== '') conditionPayload.value = parseLooseValue(valueRaw)
+      if (rule.mode === 'regex' || String(rule.value_text || '').trim()) {
+        conditionPayload.value = parseConditionValue(rule)
+      }
       if (rule.invert) conditionPayload.invert = true
       if (rule.pass_missing_key) conditionPayload.pass_missing_key = true
       return conditionPayload
@@ -869,7 +865,7 @@ const buildConditionPayload = (
   const payload: Record<string, unknown> = {
     path,
     mode: condition.mode || 'full',
-    value: parseLooseValue(condition.value_text),
+    value: parseConditionValue(condition),
   }
   if (condition.invert) payload.invert = true
   if (condition.pass_missing_key) payload.pass_missing_key = true
@@ -1238,7 +1234,7 @@ export function ParamOverrideEditorDialog(
         conditions: source.conditions.map((c) => ({
           path: c.path,
           mode: c.mode,
-          value: parseLooseValue(c.value_text),
+          value: parseConditionValue(c),
           invert: c.invert,
           pass_missing_key: c.pass_missing_key,
         })),
@@ -2549,7 +2545,7 @@ function ConditionEditor(conditionEditorProps: ConditionEditorProps) {
                       { value_text: e.target.value }
                     )
                   }
-                  placeholder='gpt'
+                  placeholder={condition.mode === 'regex' ? '^gpt-' : 'gpt'}
                   className='h-8 text-xs'
                 />
               </div>

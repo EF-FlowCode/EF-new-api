@@ -4,23 +4,35 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/pkg/requestip"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/pkg/requestip"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+)
+
+// eflow: Turnstile 通过标记 10 分钟有效，过期后重新校验，不再在整个会话期内免检。
+const (
+	turnstileSessionKey   = "turnstile"
+	turnstilePassedMaxAge = 10 * time.Minute
 )
 
 type turnstileCheckResponse struct {
 	Success bool `json:"success"`
 }
 
+// turnstileVerifyClient 限制 Cloudflare 校验耗时，避免上游无响应时注册请求一直挂起。
+var turnstileVerifyClient = &http.Client{Timeout: 10 * time.Second}
+
 func TurnstileCheck() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if common.TurnstileCheckEnabled {
+		authSettings := common.GetAuthSettings()
+		common.SetRequestAuthSettings(c, authSettings)
+		if authSettings.TurnstileCheckEnabled {
 			session := sessions.Default(c)
-			turnstileChecked := session.Get("turnstile")
-			if turnstileChecked != nil {
+			if passedAt, ok := session.Get(turnstileSessionKey).(int64); ok &&
+				time.Since(time.Unix(passedAt, 0)) < turnstilePassedMaxAge {
 				c.Next()
 				return
 			}
@@ -33,8 +45,8 @@ func TurnstileCheck() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			rawRes, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{
-				"secret":   {common.TurnstileSecretKey},
+			rawRes, err := turnstileVerifyClient.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{
+				"secret":   {authSettings.TurnstileSecretKey},
 				"response": {response},
 				"remoteip": {requestip.GetClientIP(c)},
 			})
@@ -67,13 +79,14 @@ func TurnstileCheck() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			session.Set("turnstile", true)
+			session.Set(turnstileSessionKey, time.Now().Unix())
 			err = session.Save()
 			if err != nil {
 				c.JSON(http.StatusOK, gin.H{
 					"message": "无法保存会话信息，请重试",
 					"success": false,
 				})
+				c.Abort()
 				return
 			}
 		}

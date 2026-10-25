@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 )
 
 const (
@@ -120,19 +120,25 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 					}
 					openAIMessage.SetMediaContent(systemMediaMessages)
 				} else {
-					systemStr := ""
+					var systemStr strings.Builder
 					for _, system := range systems {
 						if system.Text != nil {
-							systemStr += *system.Text
+							systemStr.WriteString(*system.Text)
 						}
 					}
-					openAIMessage.SetStringContent(systemStr)
+					openAIMessage.SetStringContent(systemStr.String())
 				}
 				openAIMessages = append(openAIMessages, openAIMessage)
 			}
 		}
 	}
 
+	type unnamedToolResult struct {
+		index int
+		id    string
+	}
+	toolNames := make(map[string]string)
+	var unnamedToolResults []unnamedToolResult
 	for _, claudeMessage := range claudeRequest.Messages {
 		openAIMessage := dto.Message{
 			Role: claudeMessage.Role,
@@ -148,6 +154,9 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			mediaMessages := make([]dto.MediaContent, 0, len(content))
 
 			for _, mediaMsg := range content {
+				if _, exists := toolNames[mediaMsg.Id]; !exists {
+					toolNames[mediaMsg.Id] = mediaMsg.Name
+				}
 				switch mediaMsg.Type {
 				case "text", "input_text":
 					message := dto.MediaContent{
@@ -176,7 +185,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 				case "tool_result":
 					toolName := mediaMsg.Name
 					if toolName == "" {
-						toolName = claudeRequest.SearchToolNameByToolCallId(mediaMsg.ToolUseId)
+						unnamedToolResults = append(unnamedToolResults, unnamedToolResult{index: len(openAIMessages), id: mediaMsg.ToolUseId})
 					}
 					oaiToolMessage := dto.Message{
 						Role:       "tool",
@@ -186,9 +195,9 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 					if mediaMsg.IsStringContent() {
 						oaiToolMessage.SetStringContent(mediaMsg.GetStringContent())
 					} else {
-						mediaContents := mediaMsg.ParseMediaContent()
-						encodedJSON, _ := kitutil.Marshal(mediaContents)
-						oaiToolMessage.SetStringContent(string(encodedJSON))
+						content, media := claudeToolResultToChat(mediaMsg.ParseMediaContent())
+						oaiToolMessage.SetStringContent(content)
+						mediaMessages = append(mediaMessages, media...)
 					}
 					openAIMessages = append(openAIMessages, oaiToolMessage)
 				}
@@ -197,7 +206,7 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			if len(toolCalls) > 0 {
 				openAIMessage.SetToolCalls(toolCalls)
 			}
-			if len(mediaMessages) > 0 && len(toolCalls) == 0 {
+			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
 		}
@@ -205,15 +214,48 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 			openAIMessages = append(openAIMessages, openAIMessage)
 		}
 	}
+	for _, result := range unnamedToolResults {
+		*openAIMessages[result.index].Name = toolNames[result.id]
+	}
 
 	openAIRequest.Messages = openAIMessages
 	return &openAIRequest, nil
 }
 
-func requestToJSONString(v interface{}) string {
+func requestToJSONString(v any) string {
 	b, err := kitutil.Marshal(v)
 	if err != nil {
 		return "{}"
 	}
 	return string(b)
+}
+
+func claudeToolResultToChat(blocks []dto.ClaudeMediaMessage) (string, []dto.MediaContent) {
+	texts := make([]string, 0, len(blocks))
+	media := make([]dto.MediaContent, 0, len(blocks))
+	for _, block := range blocks {
+		switch {
+		case block.Type == "text" || block.Type == "input_text":
+			if text := block.GetText(); text != "" {
+				texts = append(texts, text)
+			}
+		case block.Type == "image" && block.Source != nil:
+			url := block.Source.Url
+			if url == "" {
+				url = fmt.Sprintf("data:%s;base64,%s", block.Source.MediaType, kitutil.Interface2String(block.Source.Data))
+			}
+			media = append(media, dto.MediaContent{Type: "image_url", ImageUrl: &dto.MessageImageUrl{Url: url}})
+		default:
+			return requestToJSONString(blocks), nil
+		}
+	}
+	switch {
+	case len(texts) == 0 && len(media) == 0:
+		return requestToJSONString(blocks), nil
+	case len(texts) == 0:
+		// Upstreams reject empty tool content; the images ride on the following user message.
+		return "[image]", media
+	default:
+		return strings.Join(texts, "\n"), media
+	}
 }

@@ -25,7 +25,11 @@ import {
 } from '@/components/ui/sidebar'
 import { useActiveChatKey } from '@/features/chat/hooks/use-active-chat-key'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
-import { resolveChatUrl, type ChatPreset } from '@/features/chat/lib/chat-links'
+import {
+  resolveChatUrl,
+  chatLinkRequiresApiKey,
+  type ChatPreset,
+} from '@/features/chat/lib/chat-links'
 import { normalizeHref } from '../lib/url-utils'
 import type { NavChatPresets } from '../types'
 
@@ -33,7 +37,7 @@ import type { NavChatPresets } from '../types'
  * Check if a preset requires an API key
  */
 function requiresApiKey(preset: ChatPreset): boolean {
-  return preset.url.includes('{key}') || preset.url.includes('{cherryConfig}')
+  return chatLinkRequiresApiKey(preset.url)
 }
 
 /**
@@ -44,11 +48,13 @@ function ChatMenuItem({
   active,
   onOpen,
   onNavigate,
+  preload,
 }: {
   preset: ChatPreset
   active: boolean
   onOpen: (preset: ChatPreset) => void
   onNavigate: () => void
+  preload?: false
 }) {
   if (preset.type === 'web') {
     return (
@@ -57,6 +63,7 @@ function ChatMenuItem({
           <Link
             to='/chat/$chatId'
             params={{ chatId: preset.id }}
+            preload={preload}
             onClick={onNavigate}
           >
             <span>{preset.name}</span>
@@ -239,6 +246,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
                 active={normalizedHref === `/chat/${preset.id}`}
                 onOpen={handleOpenExternal}
                 onNavigate={() => setOpenMobile(false)}
+                preload={isMobile ? false : undefined}
               />
             ))}
             {hasKeyDependentPresets && isKeyPending && (

@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// ErrTicketInvoiceStatusTransition 发票已离开待处理状态后不允许再改（终态）。
+var ErrTicketInvoiceStatusTransition = fmt.Errorf("%w: only pending invoices can change status", ErrTicketInvoiceStatusInvalid)
 
 const (
 	InvoiceStatusPending  = 1
@@ -47,6 +51,7 @@ type CreateInvoiceTicketParams struct {
 	CompanyPhone   string
 	Email          string
 	TopUpOrderIds  []int
+	MinTopupMoney  float64
 }
 
 func (invoice *TicketInvoice) BeforeCreate(tx *gorm.DB) error {
@@ -249,6 +254,11 @@ func CreateInvoiceTicket(params CreateInvoiceTicketParams) (*Ticket, *TicketInvo
 		orderedTopUps []*TopUp
 	)
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		// 锁住用户行，串行化同一用户的并发开票申请，防止同一批订单被两张发票占用。
+		var user User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&user, "id = ?", params.UserId).Error; err != nil {
+			return err
+		}
 		usedSet, err := getProtectedInvoiceOrderSet(tx, params.UserId)
 		if err != nil {
 			return err
@@ -272,8 +282,8 @@ func CreateInvoiceTicket(params CreateInvoiceTicketParams) (*Ticket, *TicketInvo
 			totalMoney += topUp.Money
 		}
 		// eflow: 最低开票金额门槛（0 = 不限）。合计金额不达标直接拒绝，
-		// 阈值由调用方据 common.TicketInvoiceMinTopupMoney 拼错误文案。
-		if common.TicketInvoiceMinTopupMoney > 0 && totalMoney < common.TicketInvoiceMinTopupMoney {
+		// 阈值由调用方随本次请求快照传入，并用于拼接同版本错误文案。
+		if params.MinTopupMoney > 0 && totalMoney < params.MinTopupMoney {
 			return ErrTicketInvoiceAmountTooLow
 		}
 		orderedTopUps = orderTopUps(orderIds, topUps)
@@ -367,11 +377,16 @@ func UpdateInvoiceStatus(ticketId int, adminId int, invoiceStatus int) (*TicketI
 		prevStatus int
 	)
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("ticket_id = ?", ticketId).First(&invoice).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id = ?", ticketId).First(&invoice).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrTicketInvoiceNotFound
 			}
 			return err
+		}
+		// 只允许 待处理 → 已开具/已驳回；已开具与已驳回为终态。已开具改驳回会释放订单
+		// 导致重复开票，重复置已开具会再次发送发票邮件。
+		if invoice.InvoiceStatus != InvoiceStatusPending || invoiceStatus == InvoiceStatusPending {
+			return ErrTicketInvoiceStatusTransition
 		}
 		if err := tx.First(&ticket, "id = ?", ticketId).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -396,10 +411,10 @@ func UpdateInvoiceStatus(ticketId int, adminId int, invoiceStatus int) (*TicketI
 		}
 
 		now := common.GetTimestamp()
-		invoiceUpdates := map[string]interface{}{
+		invoiceUpdates := map[string]any{
 			"invoice_status": invoiceStatus,
 		}
-		ticketUpdates := map[string]interface{}{
+		ticketUpdates := map[string]any{
 			"updated_time": now,
 			"admin_id":     adminId,
 		}

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"eflow.local/new-api/relaykit/dto"
+	kitutil "eflow.local/new-api/relaykit/relayconvert/kitutil"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +84,41 @@ func TestChatCompletionsRequestToResponsesRequestRejectsMultipleChoices(t *testi
 	assert.Contains(t, err.Error(), "n>1")
 }
 
+func TestChatCompletionsRequestToResponsesRequestPreservesCacheKeyAndPenalties(t *testing.T) {
+	frequency := 0.0
+	presence := 1.5
+	key := "session-\"quoted\"\\path\n世界"
+
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:            "gpt-test",
+		Messages:         []dto.Message{{Role: "user", Content: "hello"}},
+		PromptCacheKey:   key,
+		FrequencyPenalty: &frequency,
+		PresencePenalty:  &presence,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, json.RawMessage(`0`), got.FrequencyPenalty)
+	assert.Equal(t, json.RawMessage(`1.5`), got.PresencePenalty)
+	assert.Equal(t, json.RawMessage(`"session-\"quoted\"\\path\n世界"`), got.PromptCacheKey)
+
+	encoded, err := kitutil.Marshal(got)
+	require.NoError(t, err)
+	assert.Equal(t, key, gjson.GetBytes(encoded, "prompt_cache_key").String())
+	assert.True(t, gjson.GetBytes(encoded, "frequency_penalty").Exists())
+}
+
+func TestChatCompletionsRequestToResponsesRequestOmitsUnsetCacheKeyAndPenalties(t *testing.T) {
+	got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+		Model:    "gpt-test",
+		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got.PromptCacheKey)
+	assert.Nil(t, got.FrequencyPenalty)
+	assert.Nil(t, got.PresencePenalty)
+}
+
 func assistantMessageWithTool(content string, id string, name string, args string) dto.Message {
 	msg := dto.Message{Role: "assistant", Content: content}
 	msg.SetToolCalls([]dto.ToolCallRequest{
@@ -97,4 +132,36 @@ func assistantMessageWithTool(content string, id string, name string, args strin
 		},
 	})
 	return msg
+}
+
+func TestChatCompletionsRequestToResponsesRequestImageDetail(t *testing.T) {
+	tests := []struct {
+		name     string
+		imageURL any
+		want     string
+	}{
+		{name: "object without detail defaults to auto", imageURL: map[string]any{"url": "https://example.test/a.png"}, want: "auto"},
+		{name: "low detail is preserved", imageURL: map[string]any{"url": "https://example.test/a.png", "detail": "low"}, want: "low"},
+		// Parsing defaults a missing detail to "high"; the two are indistinguishable.
+		{name: "high detail uses the default", imageURL: map[string]any{"url": "https://example.test/a.png", "detail": "high"}, want: "auto"},
+		{name: "auto detail is preserved", imageURL: map[string]any{"url": "https://example.test/a.png", "detail": "auto"}, want: "auto"},
+		{name: "original detail is preserved", imageURL: map[string]any{"url": "https://example.test/a.png", "detail": "original"}, want: "original"},
+		{name: "unknown detail falls back to auto", imageURL: map[string]any{"url": "https://example.test/a.png", "detail": "bogus"}, want: "auto"},
+		{name: "plain string url defaults to auto", imageURL: "https://example.test/a.png", want: "auto"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ChatCompletionsRequestToResponsesRequest(&dto.GeneralOpenAIRequest{
+				Model: "gpt-test",
+				Messages: []dto.Message{{Role: "user", Content: []any{
+					map[string]any{"type": "image_url", "image_url": tt.imageURL},
+				}}},
+			})
+			require.NoError(t, err)
+
+			assert.Equal(t, "input_image", gjson.GetBytes(got.Input, "0.content.0.type").String())
+			assert.Equal(t, tt.want, gjson.GetBytes(got.Input, "0.content.0.detail").String())
+		})
+	}
 }

@@ -16,7 +16,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const botProtectionSchema = z.object({
   TurnstileCheckEnabled: z.boolean(),
@@ -34,7 +34,7 @@ export function BotProtectionSection({
   defaultValues,
 }: BotProtectionSectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm<BotProtectionFormValues>({
     resolver: zodResolver(botProtectionSchema),
@@ -51,9 +51,10 @@ export function BotProtectionSection({
         value !== defaultValues[key as keyof BotProtectionFormValues]
     )
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({ key, value: value ?? '' })
-    }
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({ key, value: value ?? '' }))
+    )
   }
 
   return (
@@ -131,8 +132,8 @@ export function BotProtectionSection({
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
 )
 
 // 满载策略常量
@@ -90,16 +90,6 @@ func resolvedConfig(cfg *dto.ChannelRateLimit) *dto.ChannelRateLimit {
 	return &out
 }
 
-// CheckOnly 在不预占的情况下，快速判定渠道是否仍有容量。
-// Allowed=true 不保证后续 Acquire 也成功（可能竞态），但能廉价过滤明显达限的渠道。
-func CheckOnly(ctx context.Context, channelID int, cfg *dto.ChannelRateLimit) Decision {
-	resolved := resolvedConfig(cfg)
-	if !IsActive(resolved) {
-		return Decision{Allowed: true}
-	}
-	return getBackend().Peek(ctx, channelID, resolved)
-}
-
 // Acquire 预占一个渠道槽位。Allowed=true 时返回的 Token 必须 Release。
 // 若 OnLimit=queue，本函数会阻塞最多 QueueMaxWaitMs。
 func Acquire(ctx context.Context, channelID int, cfg *dto.ChannelRateLimit) (*Token, Decision) {
@@ -169,7 +159,6 @@ func leaveQueue(channelID int) {
 // backend 抽象：当前提供 Redis（首选）与内存（单实例）两种实现。
 type backend interface {
 	Acquire(ctx context.Context, channelID int, cfg *dto.ChannelRateLimit) (*Token, Decision)
-	Peek(ctx context.Context, channelID int, cfg *dto.ChannelRateLimit) Decision
 }
 
 var (

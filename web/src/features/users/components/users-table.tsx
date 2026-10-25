@@ -13,10 +13,12 @@ import {
   useReactTable,
 } from '@tanstack/react-table'
 import { useMediaQuery } from '@/hooks'
+import { Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   Table,
@@ -93,8 +95,7 @@ export function UsersTable() {
   })
 
   // eflow: 三个独立搜索框（ID / 用户名 / 邮箱），各自一个 URL query，互不串字段。
-  // URL 为单一数据源；本地 state 仅承载输入框文字（含中文 IME 输入不被打断），
-  // debounce 300ms 后写回 URL，并重置到第 1 页避免停在越界页码。
+  // URL 为已提交的数据源；本地 state 承载输入框草稿，点击 Search 或按 Enter 后提交。
   const searchId = search.search_id ?? ''
   const searchName = search.search_name ?? ''
   const searchEmail = search.search_email ?? ''
@@ -105,34 +106,22 @@ export function UsersTable() {
   useEffect(() => setIdInput(searchId), [searchId])
   useEffect(() => setNameInput(searchName), [searchName])
   useEffect(() => setEmailInput(searchEmail), [searchEmail])
-  // 本地 → URL（debounce）
-  useEffect(() => {
-    const h = setTimeout(() => {
-      const nid = idInput.trim()
-      const nname = nameInput.trim()
-      const nemail = emailInput.trim()
-      if (nid === searchId && nname === searchName && nemail === searchEmail)
-        return
-      navigate({
-        search: (prev) => ({
-          ...prev,
-          page: undefined,
-          search_id: nid || undefined,
-          search_name: nname || undefined,
-          search_email: nemail || undefined,
-        }),
-      })
-    }, 300)
-    return () => clearTimeout(h)
-  }, [
-    idInput,
-    nameInput,
-    emailInput,
-    searchId,
-    searchName,
-    searchEmail,
-    navigate,
-  ])
+  const applyScopedSearch = () => {
+    const nid = idInput.trim()
+    const nname = nameInput.trim()
+    const nemail = emailInput.trim()
+    if (nid === searchId && nname === searchName && nemail === searchEmail)
+      return
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        page: undefined,
+        search_id: nid || undefined,
+        search_name: nname || undefined,
+        search_email: nemail || undefined,
+      }),
+    })
+  }
   const hasScopedSearch = !!(searchId || searchName || searchEmail)
   const clearScopedSearch = () => {
     setIdInput('')
@@ -300,20 +289,47 @@ export function UsersTable() {
         value={idInput}
         inputMode='numeric'
         onChange={(e) => setIdInput(e.target.value.replace(/[^0-9]/g, ''))}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            applyScopedSearch()
+          }
+        }}
         className='h-9 w-full sm:h-8 sm:w-[110px]'
       />
       <Input
         placeholder={t('Username')}
         value={nameInput}
         onChange={(e) => setNameInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            applyScopedSearch()
+          }
+        }}
         className='h-9 w-full sm:h-8 sm:w-[150px]'
       />
       <Input
         placeholder={t('Email')}
         value={emailInput}
         onChange={(e) => setEmailInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            applyScopedSearch()
+          }
+        }}
         className='h-9 w-full sm:h-8 sm:w-[180px]'
       />
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-9 shrink-0 sm:h-8'
+        onClick={applyScopedSearch}
+      >
+        <Search className='size-3.5' />
+        {t('Search')}
+      </Button>
     </div>
   )
 

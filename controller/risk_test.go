@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 

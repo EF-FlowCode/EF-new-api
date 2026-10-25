@@ -7,6 +7,7 @@ import {
   Wallet,
   TrendingUp,
   Activity,
+  RotateCcw,
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -67,6 +68,8 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
 export function useSummaryCardsConfig(totals: {
   remainDisplay: string
   usedDisplay: string
+  netDisplay: string
+  refundDisplay: string
   requestCountDisplay: string
   currencyLabel: string
   currencyEnabled: boolean
@@ -85,12 +88,19 @@ export function useSummaryCardsConfig(totals: {
     },
     {
       key: 'usage',
-      title: t('Historical Usage'),
-      value: totals.usedDisplay,
-      description: totals.currencyEnabled
-        ? `${t('Total consumed')} (${totals.currencyLabel})`
-        : t('Total consumed quota'),
+      title: t('Net consumption'),
+      value: totals.netDisplay,
+      description: t('Settled consumption: {{amount}}', {
+        amount: totals.usedDisplay,
+      }),
       icon: TrendingUp,
+    },
+    {
+      key: 'refunds',
+      title: t('Consumption returned'),
+      value: totals.refundDisplay,
+      description: t('Credited to your balance'),
+      icon: RotateCcw,
     },
     {
       key: 'requests',

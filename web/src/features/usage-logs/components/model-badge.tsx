@@ -1,6 +1,8 @@
-import { Route } from 'lucide-react'
+import { AlertTriangle, Route } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { IconWan } from '@/assets/custom/icon-wan'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { resolveModelProvider } from '@/lib/model-provider'
 import { cn } from '@/lib/utils'
 import {
   Popover,
@@ -8,69 +10,32 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { StatusBadge } from '@/components/status-badge'
+import {
+  hasResponseModelDetails,
+  isResponseModelMismatch,
+  type ResponseModelObservation,
+} from '../lib/response-model'
+import type { LogOtherData } from '../types'
 
 interface ModelBadgeProps {
   modelName: string
   actualModel?: string
+  responseModel?: LogOtherData['response_model']
   className?: string
 }
 
-interface ModelProvider {
-  icon: string
-  label: string
+// eflow: @lobehub/icons 没有的供应商图标在这里补（按上游 d92612038 的 Wan 图标）。
+// 不改 @/lib/lobe-icon，免得与图标按需加载的改造冲突。
+const CUSTOM_PROVIDER_ICONS: Record<
+  string,
+  (props: { size?: number }) => React.ReactNode
+> = {
+  Wan: IconWan,
 }
 
-function resolveModelProvider(modelName: string): ModelProvider | null {
-  const model = modelName.toLowerCase()
-  const hasAny = (keywords: string[]) =>
-    keywords.some((keyword) => model.includes(keyword))
-
-  if (
-    hasAny([
-      'gpt-',
-      'chatgpt-',
-      'text-embedding-',
-      'omni-moderation',
-      'dall-e',
-      'whisper',
-      'tts-',
-    ]) ||
-    /\bo[134](?:-|$)/.test(model)
-  ) {
-    return { icon: 'OpenAI.Color', label: 'OpenAI' }
-  }
-  if (hasAny(['claude-', 'anthropic'])) {
-    return { icon: 'Claude.Color', label: 'Claude' }
-  }
-  if (hasAny(['gemini-', 'learnlm-'])) {
-    return { icon: 'Gemini.Color', label: 'Gemini' }
-  }
-  if (hasAny(['grok-', 'xai-'])) {
-    return { icon: 'Grok.Color', label: 'Grok' }
-  }
-  if (hasAny(['deepseek-'])) {
-    return { icon: 'DeepSeek.Color', label: 'DeepSeek' }
-  }
-  if (hasAny(['qwen', 'qwq-'])) {
-    return { icon: 'Qwen.Color', label: 'Qwen' }
-  }
-  if (hasAny(['doubao-', 'volcengine'])) {
-    return { icon: 'Doubao.Color', label: 'Doubao' }
-  }
-  if (hasAny(['moonshot-', 'kimi-'])) {
-    return { icon: 'Moonshot.Color', label: 'Moonshot' }
-  }
-  if (hasAny(['mistral-', 'mixtral-'])) {
-    return { icon: 'Mistral.Color', label: 'Mistral' }
-  }
-  if (hasAny(['llama-', 'meta-'])) {
-    return { icon: 'Meta.Color', label: 'Meta' }
-  }
-  if (hasAny(['command-', 'cohere-'])) {
-    return { icon: 'Cohere.Color', label: 'Cohere' }
-  }
-
-  return null
+function renderProviderIcon(icon: string, size: number): React.ReactNode {
+  const Custom = CUSTOM_PROVIDER_ICONS[icon]
+  return Custom ? <Custom size={size} /> : getLobeIcon(icon, size)
 }
 
 function ModelBadgeContent(props: ModelBadgeProps) {
@@ -83,7 +48,7 @@ function ModelBadgeContent(props: ModelBadgeProps) {
       showDot={!provider}
       autoColor={provider ? undefined : props.modelName}
       className={cn(
-        'rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 font-mono',
+        'border-border/60 bg-muted/30 rounded-md border px-1.5 py-0.5 font-mono',
         provider && 'text-foreground',
         props.className
       )}
@@ -92,10 +57,10 @@ function ModelBadgeContent(props: ModelBadgeProps) {
         {provider && (
           <span
             className='flex size-3.5 shrink-0 items-center justify-center'
-            title={provider.label}
-            aria-label={provider.label}
+            title={provider.label ?? provider.name}
+            aria-label={provider.label ?? provider.name}
           >
-            {getLobeIcon(provider.icon, 14)}
+            {renderProviderIcon(provider.icon, 14)}
           </span>
         )}
         <span>{props.modelName}</span>
@@ -106,39 +71,111 @@ function ModelBadgeContent(props: ModelBadgeProps) {
 
 export function ModelBadge(props: ModelBadgeProps) {
   const { t } = useTranslation()
+  // eflow: 按上游 ed7c4e35d + 972aed197，响应模型与请求不一致时在徽章旁警示；
+  // 不一致按名称现算（isResponseModelMismatch），不读存储的标志位。
+  const mismatch = isResponseModelMismatch(props.responseModel)
+  const responseModelLabel =
+    mismatch && props.responseModel
+      ? t('Response model: {{model}}', {
+          model: props.responseModel.returned_model,
+        })
+      : ''
 
-  if (!props.actualModel) {
+  if (!props.actualModel && !hasResponseModelDetails(props.responseModel)) {
     return <ModelBadgeContent {...props} />
   }
 
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type='button' className='inline-flex items-center gap-1'>
+        <button
+          type='button'
+          className='inline-flex flex-wrap items-center gap-1'
+          aria-label={`${t('Model')}: ${props.modelName}${responseModelLabel ? `, ${responseModelLabel}` : ''}`}
+        >
           <ModelBadgeContent {...props} />
-          <Route className='text-muted-foreground size-3 shrink-0' />
+          {mismatch ? (
+            <StatusBadge
+              icon={AlertTriangle}
+              label={responseModelLabel}
+              variant='warning'
+              showDot={false}
+              copyable={false}
+            />
+          ) : (
+            <Route className='text-muted-foreground size-3 shrink-0' />
+          )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className='w-72'>
-        <div className='space-y-2'>
-          <div className='flex items-start justify-between gap-3'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Request Model:')}
-            </span>
-            <span className='truncate font-mono text-xs font-medium'>
-              {props.modelName}
-            </span>
+      <PopoverContent className='w-96 max-w-[calc(100vw-2rem)]'>
+        {props.responseModel ? (
+          <ResponseModelDetails observation={props.responseModel} />
+        ) : (
+          <div className='space-y-2'>
+            <ModelRow label={t('Request Model')} value={props.modelName} />
+            <ModelRow label={t('Actual Model')} value={props.actualModel} />
           </div>
-          <div className='flex items-start justify-between gap-3'>
-            <span className='text-muted-foreground text-xs'>
-              {t('Actual Model:')}
-            </span>
-            <span className='truncate font-mono text-xs font-medium'>
-              {props.actualModel}
-            </span>
-          </div>
-        </div>
+        )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+function ModelRow(props: { label: string; value?: string }) {
+  return (
+    <div className='flex items-start justify-between gap-3'>
+      <span className='text-muted-foreground shrink-0 text-xs'>
+        {props.label}
+      </span>
+      <span className='min-w-0 font-mono text-xs font-medium break-all'>
+        {props.value || '-'}
+      </span>
+    </div>
+  )
+}
+
+/** 请求模型 / 上游请求模型 / 响应模型三行对照，不一致时带警示与说明。 */
+export function ResponseModelDetails(props: {
+  observation: ResponseModelObservation
+}) {
+  const { t } = useTranslation()
+  const mismatch = isResponseModelMismatch(props.observation)
+
+  return (
+    <div className='min-w-0 space-y-2'>
+      {mismatch && (
+        <StatusBadge
+          icon={AlertTriangle}
+          label={t('Response model: {{model}}', {
+            model: props.observation.returned_model,
+          })}
+          variant='warning'
+          showDot={false}
+          copyable={false}
+          className='h-auto whitespace-normal'
+        />
+      )}
+      <ModelRow
+        label={t('Request Model')}
+        value={props.observation.requested_model}
+      />
+      <ModelRow
+        label={t('Upstream Model')}
+        value={
+          props.observation.upstream_model || props.observation.requested_model
+        }
+      />
+      <ModelRow
+        label={t('Response Model')}
+        value={props.observation.returned_model}
+      />
+      {mismatch && (
+        <p className='text-muted-foreground text-xs'>
+          {t(
+            'The upstream returned a model name different from both the requested and upstream models. Aliases or dated versions may also cause this; this warning alone does not prove model substitution.'
+          )}
+        </p>
+      )}
+    </div>
   )
 }

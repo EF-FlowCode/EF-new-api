@@ -6,9 +6,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/model"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -48,19 +48,19 @@ func handleInvitationCodeError(c *gin.Context, err error) bool {
 }
 
 type invitationCodeQuotaResponse struct {
-	Limit                int    `json:"limit"`
-	Used                 int64  `json:"used"`
-	Remaining            int    `json:"remaining"`
-	AccountAgeDays       int    `json:"account_age_days"`
-	MinAccountAgeDays    int    `json:"min_account_age_days"`
-	DefaultCodeMaxUses   int    `json:"default_code_max_uses"`
-	DefaultCodeValidDays int    `json:"default_code_valid_days"`
+	Limit                int   `json:"limit"`
+	Used                 int64 `json:"used"`
+	Remaining            int   `json:"remaining"`
+	AccountAgeDays       int   `json:"account_age_days"`
+	MinAccountAgeDays    int   `json:"min_account_age_days"`
+	DefaultCodeMaxUses   int   `json:"default_code_max_uses"`
+	DefaultCodeValidDays int   `json:"default_code_valid_days"`
 	// 月度滑动窗口配额：0 = 不限制，>0 = 上限。
 	// MonthlyNextResetAt = 窗口里最早一条邀请码出窗时刻（秒级 Unix 时间戳，0=未触发）。
-	MonthlyLimit       int     `json:"monthly_limit"`
-	MonthlyUsed        int64   `json:"monthly_used"`
-	MonthlyRemaining   int     `json:"monthly_remaining"`
-	MonthlyNextResetAt int64   `json:"monthly_next_reset_at"`
+	MonthlyLimit       int   `json:"monthly_limit"`
+	MonthlyUsed        int64 `json:"monthly_used"`
+	MonthlyRemaining   int   `json:"monthly_remaining"`
+	MonthlyNextResetAt int64 `json:"monthly_next_reset_at"`
 	// 最低累计充值门槛与用户当前累计成功充值额；min_topup_money=0 表示策略关闭。
 	MinTopupMoney  float64 `json:"min_topup_money"`
 	UserTopupMoney float64 `json:"user_topup_money"`

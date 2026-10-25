@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/controller"
+	"eflow.local/new-api/middleware"
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
@@ -23,11 +23,17 @@ func SetWebRouter(router *gin.Engine, assets WebAssets) {
 	buildFS := common.EmbedFolder(assets.BuildFS, "web/dist")
 
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
-	router.Use(middleware.GlobalWebRateLimit())
+	router.Use(middleware.GlobalWebRateLimit(buildFS))
 	router.Use(middleware.Cache())
 	router.Use(static.Serve("/", buildFS))
 	router.NoRoute(func(c *gin.Context) {
 		c.Set(middleware.RouteTagKey, "web")
+		// Missing hashed files must never fall back to HTML or be cached as assets.
+		if strings.HasPrefix(c.Request.URL.Path, "/static/") || strings.HasPrefix(c.Request.URL.Path, "/assets/") {
+			c.Header("Cache-Control", "no-store")
+			c.Status(http.StatusNotFound)
+			return
+		}
 		if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
 			controller.RelayNotFound(c)
 			return

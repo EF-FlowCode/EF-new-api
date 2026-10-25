@@ -1,7 +1,68 @@
-import axios from 'axios'
+import axios, {
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type InternalAxiosRequestConfig,
+} from 'axios'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { isMaintenanceError, setMaintenance } from '@/lib/maintenance'
+import { securityProofHeaders } from './secure-verification'
+
+declare module 'axios' {
+  // Keep custom request controls available on every Axios method signature.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
+  interface AxiosRequestConfig<D = any> {
+    disableDuplicate?: boolean
+    skipBusinessError?: boolean
+    skipErrorHandler?: boolean
+    skipErrorNotification?: boolean
+  }
+}
+
+export type ApiResult<T = unknown> =
+  | { success: true; message?: string; data: T }
+  | { success: false; message?: string; data?: T }
+
+export type ApiRequestConfig<D = unknown> = AxiosRequestConfig<D>
+
+// Keep the literal type: a widened AxiosRequestConfig would carry generic
+// fields (e.g. paramsSerializer) that conflict with typed params when spread.
+export const CALLER_HANDLED_REQUEST_CONFIG = {
+  skipBusinessError: true,
+  skipErrorNotification: true,
+} as const satisfies ApiRequestConfig
+
+export function unwrapApiResult<T>(
+  result: ApiResult<T>,
+  fallbackMessage: string
+): T {
+  if (!result.success) {
+    throw new Error(result.message || fallbackMessage)
+  }
+  return result.data
+}
+
+export function getRequestErrorMessage(
+  error: unknown,
+  fallbackMessage: string
+): string {
+  if (axios.isAxiosError<{ message?: unknown }>(error)) {
+    const responseMessage = error.response?.data?.message
+    if (typeof responseMessage === 'string' && responseMessage) {
+      return responseMessage
+    }
+  }
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+  return fallbackMessage
+}
+
+type ApiErrorInterceptorOptions = {
+  notifyError?: (message: string) => unknown
+  resetAuth?: () => void
+}
 
 // ============================================================================
 // Axios Instance Configuration
@@ -28,14 +89,14 @@ export const api = axios.create({
 const inFlightGet = new Map<string, Promise<unknown>>()
 const originalGet = api.get.bind(api)
 
-api.get = ((url: string, config = {}) => {
-  const disableDuplicate = (config as unknown as Record<string, unknown>)
-    ?.disableDuplicate
-  if (disableDuplicate) return originalGet(url, config)
+api.get = ((url: string, config: ApiRequestConfig = {}) => {
+  const disableDuplicate = config.disableDuplicate
+  // A caller that supplies an AbortSignal owns this request's lifecycle. Sharing
+  // another caller's promise would let aborting the older request cancel the
+  // newer one as well.
+  if (disableDuplicate || config.signal) return originalGet(url, config)
 
-  const params = (config as unknown as Record<string, unknown>)?.params
-    ? JSON.stringify((config as unknown as Record<string, unknown>).params)
-    : '{}'
+  const params = config.params ? JSON.stringify(config.params) : '{}'
   const key = `${url}?${params}`
 
   // Return existing in-flight request if available
@@ -51,50 +112,66 @@ api.get = ((url: string, config = {}) => {
 // Response Interceptor
 // ============================================================================
 
-// Handle business logic errors and HTTP errors globally
-api.interceptors.response.use(
-  (response) => {
-    const skipBusiness = (response.config as unknown as Record<string, unknown>)
-      ?.skipBusinessError
+// Handle business logic errors and HTTP errors globally.
+export function installApiErrorInterceptor(
+  client: AxiosInstance,
+  options: ApiErrorInterceptorOptions = {}
+) {
+  const notifyError = options.notifyError ?? ((message) => toast.error(message))
+  const resetAuth =
+    options.resetAuth ?? (() => useAuthStore.getState().auth.reset())
 
-    // Unified business response format: { success, message, data }
-    if (
-      !skipBusiness &&
-      response &&
-      response.data &&
-      typeof response.data.success === 'boolean'
-    ) {
-      if (!response.data.success) {
-        // Show error toast for business failures
-        const msg = response.data.message || 'Request failed'
-        toast.error(msg)
+  return client.interceptors.response.use(
+    (response) => {
+      const skipBusiness = (
+        response.config as InternalAxiosRequestConfig & ApiRequestConfig
+      ).skipBusinessError
+
+      // Unified business response format: { success, message, data }
+      if (
+        !skipBusiness &&
+        response &&
+        response.data &&
+        typeof response.data.success === 'boolean' &&
+        !response.data.success
+      ) {
+        notifyError(response.data.message || i18next.t('Request failed'))
       }
-    }
-    return response
-  },
-  (error) => {
-    const skip = error?.config?.skipErrorHandler
-    if (!skip) {
-      const status = error?.response?.status
+      return response
+    },
+    (error) => {
+      if (isMaintenanceError(error)) {
+        setMaintenance(true)
+        return Promise.reject(error)
+      }
+      const skipHandler = error?.config?.skipErrorHandler
+      if (!skipHandler) {
+        const skipNotification = error?.config?.skipErrorNotification
+        const status = error?.response?.status
 
-      if (status === 401) {
-        // Unauthorized: clear auth state and show toast
-        toast.error(i18next.t('Session expired!'))
-        try {
-          useAuthStore.getState().auth.reset()
-        } catch {
-          /* empty */
+        if (status === 401) {
+          if (!skipNotification) {
+            notifyError(i18next.t('Session expired!'))
+          }
+          try {
+            resetAuth()
+          } catch {
+            /* empty */
+          }
+        } else if (!skipNotification) {
+          const message = getRequestErrorMessage(
+            error,
+            i18next.t('Request error')
+          )
+          notifyError(i18next.exists(message) ? i18next.t(message) : message)
         }
-      } else {
-        // Other errors: show error message from response or default
-        const msg =
-          error?.response?.data?.message || error?.message || 'Request error'
-        toast.error(msg)
       }
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
-  }
-)
+  )
+}
+
+installApiErrorInterceptor(api)
 
 // ============================================================================
 // Common Headers Utility
@@ -175,9 +252,34 @@ export async function getUserModels(): Promise<{
 export async function getUserGroups(): Promise<{
   success: boolean
   message?: string
-  data?: Record<string, { desc: string; ratio: number | string }>
+  data?: Record<
+    string,
+    { desc: string; ratio: number | string; available?: boolean }
+  >
 }> {
   const res = await api.get('/api/user/self/groups')
+  return res.data
+}
+
+export type WebGroupRegionAccess = {
+  region: string
+  restricted: boolean
+  popup?: {
+    display_name?: string
+    title?: string
+    content?: string
+    notice?: string
+    button?: string
+    version?: string
+  }
+}
+
+export async function getWebGroupRegionAccess(): Promise<{
+  success: boolean
+  message?: string
+  data?: WebGroupRegionAccess
+}> {
+  const res = await api.get('/api/web-group-region')
   return res.data
 }
 
@@ -206,14 +308,16 @@ export async function getNotice(): Promise<{
 // ----------------------------------------------------------------------------
 
 // Get 2FA status
-export async function get2FAStatus() {
-  const res = await api.get('/api/user/2fa/status')
+export async function get2FAStatus(config: ApiRequestConfig = {}) {
+  const res = await api.get('/api/user/2fa/status', config)
   return res.data
 }
 
-// Setup 2FA
-export async function setup2FA() {
-  const res = await api.post('/api/user/2fa/setup')
+// Setup 2FA (needs a 2fa.setup proof)
+export async function setup2FA(proofToken?: string) {
+  const res = await api.post('/api/user/2fa/setup', undefined, {
+    headers: securityProofHeaders(proofToken),
+  })
   return res.data
 }
 
@@ -223,14 +327,18 @@ export async function enable2FA(code: string) {
   return res.data
 }
 
-// Disable 2FA with verification code
-export async function disable2FA(code: string) {
-  const res = await api.post('/api/user/2fa/disable', { code })
+// Disable 2FA (needs a 2fa.disable proof)
+export async function disable2FA(proofToken?: string) {
+  const res = await api.post('/api/user/2fa/disable', undefined, {
+    headers: securityProofHeaders(proofToken),
+  })
   return res.data
 }
 
-// Regenerate 2FA backup codes
-export async function regenerate2FABackupCodes(code: string) {
-  const res = await api.post('/api/user/2fa/backup_codes', { code })
+// Regenerate 2FA backup codes (needs a 2fa.backup_codes.regenerate proof)
+export async function regenerate2FABackupCodes(proofToken?: string) {
+  const res = await api.post('/api/user/2fa/backup_codes', undefined, {
+    headers: securityProofHeaders(proofToken),
+  })
   return res.data
 }

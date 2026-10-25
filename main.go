@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
 	"errors"
 	"fmt"
@@ -15,24 +16,25 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/router"
-	"github.com/QuantumNous/new-api/service"
-	_ "github.com/QuantumNous/new-api/setting/performance_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/controller"
+	"eflow.local/new-api/i18n"
+	"eflow.local/new-api/internal/deployment"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/middleware"
+	"eflow.local/new-api/model"
+	"eflow.local/new-api/oauth"
+	perfmetrics "eflow.local/new-api/pkg/perf_metrics"
+	"eflow.local/new-api/plugins"
+	"eflow.local/new-api/router"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/service/taskplugin"
+	_ "eflow.local/new-api/setting/performance_setting"
+	"eflow.local/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 
@@ -69,6 +71,9 @@ func main() {
 		}
 	}()
 
+	if common.DeploymentRole == "migrate" {
+		return
+	}
 	if common.RedisEnabled {
 		// for compatibility with old versions
 		common.MemoryCacheEnabled = true
@@ -81,6 +86,9 @@ func main() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					if common.DeploymentRole == "web" {
+						common.FatalLog("channel cache initialization failed; web role cannot repair shared configuration")
+					}
 					common.SysLog(fmt.Sprintf("InitChannelCache panic: %v, retrying once", r))
 					// Retry once
 					_, _, fixErr := model.FixAbility()
@@ -97,11 +105,12 @@ func main() {
 
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
+	stopTaskPlugins := taskplugin.Default.Start(context.Background(), 30*time.Second, func(err error) {
+		common.SysError("task plugin runtime refresh failed: " + err.Error())
+	})
+	defer stopTaskPlugins()
 
-	// 数据看板
-	go model.UpdateQuotaData()
-
-	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
+	if common.IsMasterNode && os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
 		if err != nil {
 			common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
@@ -123,17 +132,12 @@ func main() {
 	// Moderation center (async OpenAI omni-moderation; never blocks relay)
 	service.StartModerationCenter()
 
+	// Cross-instance reload of risk/moderation rules, unblocks and moderation keys
+	service.StartRuntimeSync()
+
 	// Ticket attachment orphan cleanup (master-node only)
 	service.StartTicketAttachmentCleanupTask()
-
-	// Wire task polling adaptor factory (breaks service -> relay import cycle)
-	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		a := relay.GetTaskAdaptor(platform)
-		if a == nil {
-			return nil
-		}
-		return a
-	}
+	service.StartUsageRefundNoticeTask()
 
 	// Channel upstream model update check task
 	controller.StartChannelUpstreamModelUpdateTask()
@@ -144,6 +148,9 @@ func main() {
 		})
 		gopool.Go(func() {
 			controller.UpdateTaskBulk()
+		})
+		gopool.Go(func() {
+			service.KnowledgeBatchPollingLoop(context.Background(), 15*time.Second)
 		})
 	}
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
@@ -165,21 +172,25 @@ func main() {
 		common.SysError(fmt.Sprintf("start pyroscope error : %v", err))
 	}
 
+	var lifecycle *deployment.Lifecycle
+	if common.DeploymentRole != "" {
+		lifecycle = startDeploymentControl()
+	}
+	if common.DeploymentRole == "worker" {
+		quit := make(chan os.Signal, 1)
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+		<-quit
+		common.SysLog("worker stopping; worker upgrades require maintenance deployment")
+		return
+	}
+
 	// Initialize HTTP server
 	server := gin.New()
 	// Keep Gin's default ForwardedByClientIP = true so deployments behind reverse
 	// proxies (Nginx / Cloudflare) see real client IPs via X-Forwarded-For out of
 	// the box. Admins who need stricter IP trust can enable "Trusted IP Header"
 	// in risk-control settings — GetClientIP will then only honor that header.
-	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
-		common.SysLog(fmt.Sprintf("panic detected: %v", err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": fmt.Sprintf("Panic detected, error: %v. Please submit a issue here: https://github.com/Calcium-Ion/new-api", err),
-				"type":    "new_api_panic",
-			},
-		})
-	}))
+	server.Use(gin.CustomRecovery(recoverFromPanic))
 	// This will cause SSE not to work!!!
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.RequestId())
@@ -187,12 +198,11 @@ func main() {
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)
 	// Initialize session store
-	store := cookie.NewStore([]byte(common.SessionSecret))
-	store.Options(sessions.Options{
+	store := common.NewSessionStore(sessions.Options{
 		Path:     "/",
 		MaxAge:   2592000, // 30 days
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   common.SessionCookieSecure,
 		SameSite: http.SameSiteStrictMode,
 	})
 	server.Use(sessions.Sessions("session", store))
@@ -214,6 +224,9 @@ func main() {
 	common.LogStartupSuccess(startTime, port)
 
 	srv := &http.Server{Addr: ":" + port, Handler: server}
+	if lifecycle != nil {
+		srv.Handler = lifecycle.Wrap(server)
+	}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.FatalLog("failed to start HTTP server: " + err.Error())
@@ -224,15 +237,20 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	common.SysLog(fmt.Sprintf("received signal: %v, shutting down...", sig))
+	if lifecycle != nil {
+		lifecycle.Drain()
+		// Rolling cleanup never imposes a deadline on existing streams/settlement.
+		_ = srv.Shutdown(context.Background())
+		waitDeploymentDrain(lifecycle)
+		common.SysLog("drained server exited")
+		return
+	}
 
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
-	}
-	if common.DataExportEnabled {
-		model.SaveQuotaDataCache()
 	}
 	common.SysLog("server exited")
 }
@@ -292,6 +310,15 @@ func InitResources() error {
 
 	// 加载环境变量
 	common.InitEnv()
+	if err := common.InitDeploymentRole(); err != nil {
+		return err
+	}
+	if common.DeploymentRole == "worker" {
+		deploymentWorkerLock, err = deployment.LockWorker("/data/.rolling-worker.lock")
+		if err != nil {
+			return err
+		}
+	}
 
 	logger.SetupLogger()
 
@@ -308,23 +335,63 @@ func InitResources() error {
 		common.FatalLog("failed to initialize database: " + err.Error())
 		return err
 	}
-
-	model.CheckSetup()
-
-	// Initialize options, should after model.InitDB()
-	model.InitOptionMap()
-
-	// 清理旧的磁盘缓存文件
-	common.CleanupOldCacheFiles()
-
-	// 初始化模型
-	model.GetPricing()
-
-	// Initialize SQL Database
+	// Open and validate both configured servers before any schema or data
+	// migration can mutate the primary database.
 	err = model.InitLogDB()
 	if err != nil {
 		return err
 	}
+	err = model.MigrateDatabases()
+	if err != nil {
+		return err
+	}
+
+	model.CheckSetup()
+
+	// Initialize options, should after model.InitDB()
+	if err := model.InitOptionMap(); err != nil {
+		return err
+	}
+	// eflow: 旧版访问令牌在本版本首次迁移后 30 天停用；迁移节点写入期限，其余节点只读取。
+	if common.DeploymentRole == "" && common.IsMasterNode || common.DeploymentRole == "migrate" {
+		if err := model.EnsureLegacyAccessTokenRetireAt(time.Now().Unix()); err != nil {
+			return fmt.Errorf("legacy access token retire deadline: %w", err)
+		}
+	} else if err := model.LoadLegacyAccessTokenRetireAt(); err != nil {
+		common.SysError("legacy access tokens are rejected until the retire deadline is migrated: " + err.Error())
+	}
+	if common.DeploymentRole == "" && common.IsMasterNode || common.DeploymentRole == "migrate" {
+		// eflow: 私有渠道类型 58–61 → 1001–1004，失败时中止启动，维护发布不会带着半迁移的数据继续。
+		happyhorseSource, sourceErr := plugins.Source("happyhorse")
+		if sourceErr != nil {
+			return fmt.Errorf("read happyhorse factory source: %w", sourceErr)
+		}
+		renumber, renumberErr := model.MigrateChannelTypeRenumberV1(fmt.Sprintf("%x", sha256.Sum256([]byte(happyhorseSource))))
+		if renumberErr != nil {
+			return fmt.Errorf("channel type renumber migration: %w", renumberErr)
+		}
+		if !renumber.AlreadyApplied {
+			common.SysLog(fmt.Sprintf("channel type renumber migration applied: channels=%d tasks=%d plugin_bindings=%d",
+				renumber.Channels, renumber.Tasks, renumber.PluginBindings))
+		}
+		if migratedModels, migrationErr := model.MigrateLegacyFlatPriceBillingModes(); migrationErr != nil {
+			common.SysLog("failed to migrate legacy flat-price billing modes: " + migrationErr.Error())
+		} else if len(migratedModels) > 0 {
+			common.SysLog(fmt.Sprintf("migrated %d legacy flat-price billing modes: %s", len(migratedModels), strings.Join(migratedModels, ", ")))
+		}
+
+	}
+	if common.DeploymentRole == "migrate" {
+		return nil
+	}
+
+	// 清理旧的磁盘缓存文件
+	if common.DeploymentRole == "" {
+		common.CleanupOldCacheFiles()
+	}
+
+	// 初始化模型
+	model.GetPricing()
 
 	// Initialize Redis
 	err = common.InitRedisClient()
@@ -356,4 +423,21 @@ func InitResources() error {
 	}
 
 	return nil
+}
+
+// recoverFromPanic answers a recovered panic without echoing its details to the
+// client. Once a response has started (for example an SSE stream) nothing can be
+// appended safely, so the request is only logged and aborted.
+func recoverFromPanic(c *gin.Context, err any) {
+	common.SysLog(fmt.Sprintf("panic detected: %v", err))
+	if c.Writer.Written() {
+		c.Abort()
+		return
+	}
+	c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+		"error": gin.H{
+			"message": "Internal server error",
+			"type":    "new_api_panic",
+		},
+	})
 }

@@ -17,6 +17,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { CopyButton } from '@/components/copy-button'
+import {
+  SecureVerificationDialog,
+  useSecureVerification,
+  type SecurityProof,
+} from '@/features/auth/secure-verification'
 import type { TwoFASetupData } from '../../types'
 
 // ============================================================================
@@ -46,27 +51,55 @@ export function TwoFASetupDialog({
     t('Verify Setup'),
   ]
 
+  // Setup starts only after a 2fa.setup proof; dismissing the verification
+  // closes the setup dialog.
+  const verification = useSecureVerification({
+    onCancel: () => {
+      setInitializing(false)
+      onOpenChange(false)
+    },
+  })
+  const { startVerification } = verification
+
+  const runSetup = useCallback(
+    async (proof?: SecurityProof) => {
+      try {
+        const response = await setup2FA(proof?.proof_token)
+        if (response.success && response.data) {
+          setSetupData(response.data)
+          setStep(0)
+        } else {
+          toast.error(response.message || t('Failed to setup 2FA'))
+          onOpenChange(false)
+        }
+      } finally {
+        setInitializing(false)
+      }
+    },
+    [onOpenChange, t]
+  )
+
   const handleSetup = useCallback(async () => {
     try {
       setInitializing(true)
-      const response = await setup2FA()
-
-      if (response.success && response.data) {
-        setSetupData(response.data)
-        setStep(0)
-      } else {
-        toast.error(response.message || t('Failed to setup 2FA'))
+      const started = await startVerification(runSetup, {
+        operation: { scope: '2fa.setup' },
+        description: t(
+          'Confirm your identity before enabling two-factor authentication.'
+        ),
+      })
+      if (!started) {
+        setInitializing(false)
         onOpenChange(false)
       }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Setup 2FA error:', error)
       toast.error(t('Failed to setup 2FA'))
-      onOpenChange(false)
-    } finally {
       setInitializing(false)
+      onOpenChange(false)
     }
-  }, [onOpenChange, t])
+  }, [onOpenChange, runSetup, startVerification, t])
 
   const handleEnable = async () => {
     if (!code) {
@@ -262,6 +295,7 @@ export function TwoFASetupDialog({
           )}
         </DialogFooter>
       </DialogContent>
+      <SecureVerificationDialog {...verification.dialogProps} />
     </Dialog>
   )
 }

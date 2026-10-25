@@ -1,7 +1,13 @@
+import {
+  File as FileIcon,
+  Image as ImageIcon,
+  Loader2,
+  Paperclip,
+  X,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { File as FileIcon, Image as ImageIcon, Loader2, Paperclip, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import type { UseTicketAttachmentsResult } from '../hooks/use-ticket-attachments'
 
 const humanSize = (bytes: number): string => {
@@ -19,7 +25,11 @@ type Props = {
   className?: string
 }
 
-export function AttachmentPicker({ state, disabled = false, className }: Props) {
+export function AttachmentPicker({
+  state,
+  disabled = false,
+  className,
+}: Props) {
   const { t } = useTranslation()
   const {
     config,
@@ -41,7 +51,9 @@ export function AttachmentPicker({ state, disabled = false, className }: Props) 
           variant='outline'
           size='sm'
           onClick={openFilePicker}
-          disabled={disabled || uploading || attachments.length >= config.maxCount}
+          disabled={
+            disabled || uploading || attachments.length >= config.maxCount
+          }
         >
           {uploading ? (
             <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />

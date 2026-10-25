@@ -1,10 +1,9 @@
 import type { Message, ContentPart } from '../types'
-import { getVersionText } from './message-utils'
+import { getCurrentVersion, getVersionText } from './message-utils'
 
 // 轻量、无依赖的 token 估算，仅供 UI 参考（非精确分词）：
 // CJK 字符 ≈ 1 token/字，其余 ≈ 1 token / 4 字符，外加每条消息角色开销。
-const CJK_RE =
-  /[㐀-鿿豈-﫿぀-ヿ가-힯]/g
+const CJK_RE = /[㐀-鿿豈-﫿぀-ヿ가-힯]/g
 const PER_MESSAGE_OVERHEAD = 4
 
 export function estimateTextTokens(text: string): number {
@@ -29,7 +28,7 @@ export function estimateConversationUsage(
   let tokens = 0
   let images = 0
   for (const m of messages) {
-    const content = m.versions?.[0]?.content
+    const content = getCurrentVersion(m).content
     if (Array.isArray(content)) {
       for (const p of content as ContentPart[]) {
         if (p.type === 'image_url' && p.image_url?.url) images++

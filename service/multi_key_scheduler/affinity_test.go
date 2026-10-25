@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/QuantumNous/new-api/dto"
+	"eflow.local/new-api/dto"
 )
 
 // 默认配置（InFlightCap=0）下，亲和**不看 in_flight**——即便 pin 的 key 在途很高
@@ -22,7 +22,7 @@ func TestAffinityIgnoresInFlightByDefault(t *testing.T) {
 
 	r1 := Acquire(ctx, 1, "m", affinityTestCands(), cfg, "u1") // pin K
 	// 把 K 的 in_flight 灌高（都不 release，模拟泄漏/突发），默认配置应忽略它
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		got := Acquire(ctx, 1, "m", affinityTestCands(), cfg, "u1")
 		if got.KeyFp != r1.KeyFp {
 			t.Fatalf("default affinity should ignore in_flight and stay on pin %s, drifted to %s at i=%d", r1.KeyFp, got.KeyFp, i)

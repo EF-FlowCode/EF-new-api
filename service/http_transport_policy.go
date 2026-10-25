@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
 )
 
 type HTTPTransportPolicy struct {

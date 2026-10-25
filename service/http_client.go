@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/dto"
+	"eflow.local/new-api/logger"
+	"eflow.local/new-api/setting/system_setting"
 
 	"golang.org/x/net/proxy"
 )
@@ -51,6 +52,75 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+func keepRedirectResponse(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+// NewRedirectlessHTTPClient returns a shallow copy of client that never follows
+// redirects; the 3xx response is handed back to the caller as is. Use it for
+// outbound requests that carry channel credentials: on a cross-host redirect
+// net/http only strips Authorization/Cookie, so custom auth headers such as
+// x-api-key, x-goog-api-key, api-key or mj-api-secret would otherwise reach the
+// redirect target. The cached client is not mutated and the copy keeps sharing
+// its transport and connection pool.
+func NewRedirectlessHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		return &http.Client{CheckRedirect: keepRedirectResponse}
+	}
+	redirectless := *client
+	redirectless.CheckRedirect = keepRedirectResponse
+	return &redirectless
+}
+
+// NewCredentialStrippingRedirectClient returns a shallow copy of client that
+// still follows redirects through the client's own CheckRedirect (SSRF checks
+// included), but removes headerNames from every hop whose origin differs from
+// the initial request. Use it only where following redirects is required, e.g.
+// media downloads that are redirected to signed storage URLs.
+func NewCredentialStrippingRedirectClient(client *http.Client, headerNames ...string) *http.Client {
+	var cloned http.Client
+	if client != nil {
+		cloned = *client
+	}
+	base := cloned.CheckRedirect
+	cloned.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if base != nil {
+			if err := base(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if len(via) > 0 && !sameURLOrigin(via[0].URL, req.URL) {
+			for _, name := range headerNames {
+				req.Header.Del(name)
+			}
+		}
+		return nil
+	}
+	return &cloned
+}
+
+func sameURLOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(canonicalURLHostPort(a), canonicalURLHostPort(b))
+}
+
+func canonicalURLHostPort(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		switch strings.ToLower(u.Scheme) {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
 func checkProtectedFetchRedirect(req *http.Request, via []*http.Request) error {
 	urlStr := req.URL.String()
 	if err := ValidateSSRFProtectedFetchURL(urlStr); err != nil {
@@ -76,10 +146,15 @@ func newRelayHTTPTransport() *http.Transport {
 	transport.MaxIdleConns = common.RelayMaxIdleConns
 	transport.MaxIdleConnsPerHost = common.RelayMaxIdleConnsPerHost
 	transport.IdleConnTimeout = time.Duration(common.RelayIdleConnTimeout) * time.Second
-	transport.ResponseHeaderTimeout = time.Duration(common.RelayResponseHeaderTimeout) * time.Second
+	transport.ResponseHeaderTimeout = 0
+	if seconds := common.RelayResponseHeaderTimeout; seconds > 0 {
+		// Clamp before conversion so large values cannot wrap into a short timeout.
+		seconds = min(seconds, int(math.MaxInt64/int64(time.Second)))
+		transport.ResponseHeaderTimeout = time.Duration(seconds) * time.Second
+	}
 	transport.ForceAttemptHTTP2 = true
 	if common.TLSInsecureSkipVerify {
-		transport.TLSClientConfig = common.InsecureTLSConfig
+		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
 	}
 	return transport
 }

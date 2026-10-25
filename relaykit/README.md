@@ -34,10 +34,20 @@ RelayKit 是从 [new-api](https://github.com/QuantumNous/new-api) 中拆分出�
 
 ## 安装
 
-RelayKit 要求 Go 1.25.1 或更高版本。
+RelayKit 要求 Go 1.25.1 或更高版本。本地模块路径为 `eflow.local/new-api/relaykit`；`eflow.local` 是模块标识，不提供公共下载服务。主项目已通过 `replace => ./relaykit` 引用此目录。
+
+其他本地 Go 项目接入时，在其 `go.mod` 中声明依赖，并将 `replace` 指向本仓库的 `relaykit` 目录。例如两个项目位于同一父目录时：
+
+```gomod
+require eflow.local/new-api/relaykit v0.0.0
+
+replace eflow.local/new-api/relaykit => ../new-api/relaykit
+```
+
+添加下面的 import 后，在调用方项目中运行：
 
 ```bash
-go get github.com/QuantumNous/new-api/relaykit@latest
+go mod tidy
 ```
 
 主要包：
@@ -61,10 +71,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/relayconvert"
+	"eflow.local/new-api/relaykit/relayconvert/convmeta"
+	"eflow.local/new-api/relaykit/types"
 )
 
 func main() {
@@ -172,6 +182,16 @@ usage := state.Usage()
 ```
 
 RelayKit 不负责 SSE 的读取和写入。宿主需要将每个 SSE 事件解析为对应 DTO，并将转换结果重新编码后发送给下游。不要省略 `FinalizeStreamResponse`，部分转换器会在该阶段补发终止事件或最终 usage。
+
+Responses custom tools 可经 Chat、Claude、Gemini function 工具往返。请求和响应必须共享
+`convmeta.Values`（或实现可选 `ResponsesToolStateCarrier`），以保留自定义工具身份。
+原始输入包装为字符串 `input`；流式输出在参数完整后解包并发出 custom tool input 事件。
+grammar 仅转换为描述提示，同名歧义或无效的指定工具选择返回错误。
+跨协议工具媒体、模型参数与宿主整合边界见 [协议兼容说明](../docs/development/relay-protocol-compatibility.md)。
+
+Chat→Responses 支持晚到工具名称和中途 finish 后的新文字/推理分段；可设置
+`ResponseStreamOptions.EmitSequenceNumber` 输出序号及完整 done 字段。
+Claude 流分帧用量应由调用方聚合，并在终止前调用 `state.SetUsage`。
 
 ## 转换上下文
 

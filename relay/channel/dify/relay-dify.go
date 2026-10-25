@@ -11,13 +11,13 @@ import (
 	"os"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/dto"
+	relaycommon "eflow.local/new-api/relay/common"
+	"eflow.local/new-api/relay/helper"
+	"eflow.local/new-api/service"
+	"eflow.local/new-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
@@ -126,7 +126,7 @@ func uploadDifyFile(c *gin.Context, info *relaycommon.RelayInfo, user string, me
 
 func requestOpenAI2Dify(c *gin.Context, info *relaycommon.RelayInfo, request dto.GeneralOpenAIRequest) *DifyChatRequest {
 	difyReq := DifyChatRequest{
-		Inputs:           make(map[string]interface{}),
+		Inputs:           make(map[string]any),
 		AutoGenerateName: false,
 	}
 
@@ -159,9 +159,11 @@ func requestOpenAI2Dify(c *gin.Context, info *relaycommon.RelayInfo, request dto
 					media := mediaContent.GetImageMedia()
 					var file *DifyFile
 					if media.IsRemoteImage() {
-						file.Type = media.MimeType
-						file.TransferMode = "remote_url"
-						file.URL = media.Url
+						file = &DifyFile{
+							Type:         media.MimeType,
+							TransferMode: "remote_url",
+							URL:          media.Url,
+						}
 					} else {
 						file = uploadDifyFile(c, info, difyReq.User, mediaContent)
 					}

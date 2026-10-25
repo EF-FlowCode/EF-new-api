@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"eflow.local/new-api/constant"
+	"eflow.local/new-api/internal/testconfig"
+	relaycommon "eflow.local/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,7 +48,7 @@ func setupStreamTest(t *testing.T, body io.Reader) (*gin.Context, *http.Response
 
 func buildSSEBody(n int) string {
 	var b strings.Builder
-	for i := 0; i < n; i++ {
+	for i := range n {
 		fmt.Fprintf(&b, "data: {\"id\":%d,\"choices\":[{\"delta\":{\"content\":\"token_%d\"}}]}\n", i, i)
 	}
 	b.WriteString("data: [DONE]\n")
@@ -132,7 +132,7 @@ func TestStreamScannerHandler_OrderPreserved(t *testing.T) {
 	})
 
 	require.Equal(t, numChunks, len(received))
-	for i := 0; i < numChunks; i++ {
+	for i := range numChunks {
 		expected := fmt.Sprintf("{\"id\":%d,\"choices\":[{\"delta\":{\"content\":\"token_%d\"}}]}", i, i)
 		assert.Equal(t, expected, received[i], "chunk %d out of order", i)
 	}
@@ -181,7 +181,7 @@ func TestStreamScannerHandler_SkipsNonDataLines(t *testing.T) {
 	b.WriteString("event: message\n")
 	b.WriteString("id: 12345\n")
 	b.WriteString("retry: 5000\n")
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		fmt.Fprintf(&b, "data: payload_%d\n", i)
 		b.WriteString(": interleaved comment\n")
 	}
@@ -286,20 +286,15 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 // ---------- Ping tests ----------
 
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
-	oldEnabled := setting.PingIntervalEnabled
-	oldSeconds := setting.PingIntervalSeconds
-	setting.PingIntervalEnabled = true
-	setting.PingIntervalSeconds = 1
-	t.Cleanup(func() {
-		setting.PingIntervalEnabled = oldEnabled
-		setting.PingIntervalSeconds = oldSeconds
+	testconfig.Set(t, "general_setting", map[string]string{
+		"ping_interval_enabled": "true",
+		"ping_interval_seconds": "1",
 	})
 
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			fmt.Fprintf(pw, "data: chunk_%d\n", i)
 			time.Sleep(400 * time.Millisecond)
 		}
@@ -337,14 +332,9 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 }
 
 func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
-	oldEnabled := setting.PingIntervalEnabled
-	oldSeconds := setting.PingIntervalSeconds
-	setting.PingIntervalEnabled = true
-	setting.PingIntervalSeconds = 1
-	t.Cleanup(func() {
-		setting.PingIntervalEnabled = oldEnabled
-		setting.PingIntervalSeconds = oldSeconds
+	testconfig.Set(t, "general_setting", map[string]string{
+		"ping_interval_enabled": "true",
+		"ping_interval_seconds": "1",
 	})
 
 	recorder := httptest.NewRecorder()
@@ -394,13 +384,39 @@ func TestStreamScannerHandler_StreamStatus_DoneReason(t *testing.T) {
 	assert.Nil(t, info.StreamStatus.EndError)
 	assert.True(t, info.StreamStatus.IsNormalEnd())
 	assert.False(t, info.StreamStatus.HasErrors())
+	status, exists := c.Get(string(constant.ContextKeyRelayStreamStatus))
+	require.True(t, exists)
+	require.Same(t, info.StreamStatus, status)
+	require.False(t, info.StreamStatus.ResponseFailed())
+}
+
+func TestStreamScannerHandler_TerminalCleanupIsNotFailure(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() })
+	c, resp, info := setupStreamTest(t, pr)
+	resp.Body = pr
+	info.DisablePing = true
+	done := make(chan struct{})
+	go func() {
+		StreamScannerHandler(c, resp, info, func(_ string, sr *StreamResult) { sr.Done() })
+		close(done)
+	}()
+	_, err := io.WriteString(pw, "data: terminal\n\n")
+	require.NoError(t, err)
+	// Leave the upstream open: normal terminal handling must interrupt its read.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal event did not close upstream")
+	}
+	require.False(t, info.StreamStatus.ResponseFailed())
 }
 
 func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 	t.Parallel()
 
 	var b strings.Builder
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		fmt.Fprintf(&b, "data: {\"id\":%d}\n", i)
 	}
 	c, resp, info := setupStreamTest(t, strings.NewReader(b.String()))
@@ -526,7 +542,7 @@ func TestStreamScannerHandler_StreamStatus_ErrorThenStop(t *testing.T) {
 	// Use a large body without [DONE] to avoid race between scanner's [DONE]
 	// and handler's Stop on the sync.Once EndReason.
 	var b strings.Builder
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		fmt.Fprintf(&b, "data: {\"id\":%d}\n", i)
 	}
 	c, resp, info := setupStreamTest(t, strings.NewReader(b.String()))
@@ -570,4 +586,112 @@ func TestStreamScannerHandler_StreamStatus_ReplacesPreInitialized(t *testing.T) 
 
 	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
 	assert.Equal(t, 0, info.StreamStatus.TotalErrorCount())
+}
+
+// ---------- Write deadlines ----------
+
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlines []time.Time
+}
+
+func (r *deadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.deadlines = append(r.deadlines, deadline)
+	return nil
+}
+
+func TestStreamWriteBudget(t *testing.T) {
+	start := time.Unix(1_800_000_000, 0)
+	var budget StreamWriteBudget
+	steps := []struct {
+		name  string
+		at    time.Duration
+		bytes int
+		want  time.Duration
+	}{
+		{"small event", 0, 8 << 10, 31 * time.Second},
+		{"image event gets the time a slow client needs", 0, 3600 << 10, 481 * time.Second},
+		{"next write keeps the image budget", 60 * time.Second, 8 << 10, 482 * time.Second},
+		{"budget starts over once it ran out", 600 * time.Second, 8 << 10, 631 * time.Second},
+	}
+	for _, step := range steps {
+		assert.Equal(t, start.Add(step.want), budget.Deadline(start.Add(step.at), step.bytes), step.name)
+	}
+}
+
+func TestSetEventStreamHeadersBoundsStreamWritesByBudget(t *testing.T) {
+	recorder := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	SetEventStreamHeaders(c)
+
+	before := time.Now()
+	require.NoError(t, StringData(c, strings.Repeat("A", 3600<<10)))
+
+	require.NotEmpty(t, recorder.deadlines)
+	assert.False(t, recorder.deadlines[0].Before(before.Add(streamWriteTimeout+450*time.Second)))
+	assert.Contains(t, recorder.Body.String(), "data: AAAA")
+}
+
+type headerCommitWriter struct {
+	*httptest.ResponseRecorder
+	headerStarted chan struct{}
+	once          sync.Once
+}
+
+func (w *headerCommitWriter) WriteHeader(code int) {
+	// Let the scanner start while the first keepalive snapshots the headers.
+	w.once.Do(func() { close(w.headerStarted) })
+	w.ResponseRecorder.WriteHeader(code)
+}
+
+func TestStreamScannerHandler_RequestKeepAliveHandoff(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		interval    time.Duration
+		waitForPing bool
+	}{
+		{name: "before first keepalive", interval: time.Hour},
+		{name: "during header commit", interval: time.Millisecond, waitForPing: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writer := &headerCommitWriter{
+				ResponseRecorder: httptest.NewRecorder(),
+				headerStarted:    make(chan struct{}),
+			}
+			c, _ := gin.CreateTestContext(writer)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			stop := StartStreamKeepAlive(c, test.interval)
+			defer stop()
+			if test.waitForPing {
+				select {
+				case <-writer.headerStarted:
+				case <-time.After(time.Second):
+					t.Fatal("keepalive did not start")
+				}
+			}
+
+			resp := &http.Response{
+				Header: http.Header{},
+				Body:   io.NopCloser(strings.NewReader("data: chunk\n\ndata: [DONE]\n\n")),
+			}
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+			var received []string
+			StreamScannerHandler(c, resp, info, func(data string, _ *StreamResult) {
+				received = append(received, data)
+				assert.NoError(t, StringData(c, data))
+			})
+			stop()
+
+			require.NotNil(t, info.StreamStatus)
+			assert.True(t, info.StreamStatus.IsNormalEnd())
+			assert.Equal(t, []string{"chunk"}, received)
+			assert.True(t, strings.HasSuffix(writer.Body.String(), "data: chunk\n\n"))
+			if test.waitForPing {
+				assert.True(t, strings.HasPrefix(writer.Body.String(), ": PING\n\n"))
+			} else {
+				assert.Equal(t, "data: chunk\n\n", writer.Body.String())
+			}
+		})
+	}
 }

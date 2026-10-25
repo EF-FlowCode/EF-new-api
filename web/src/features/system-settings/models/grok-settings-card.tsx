@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
-import { useUpdateOption } from '../hooks/use-update-option'
+import { useUpdateOptions } from '../hooks/use-update-option'
 
 const XAI_VIOLATION_FEE_DOC_URL =
   'https://docs.x.ai/docs/models#usage-guidelines-violation-fee'
@@ -33,7 +33,7 @@ interface Props {
 
 export function GrokSettingsCard(props: Props) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const updateOptions = useUpdateOptions()
 
   const form = useForm<GrokFormValues>({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -50,12 +50,13 @@ export function GrokSettingsCard(props: Props) {
       ([key, value]) =>
         value !== (props.defaultValues[key as keyof GrokFormValues] as unknown)
     )
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
+    if (updates.length === 0) return
+    await updateOptions.mutateAsync(
+      updates.map(([key, value]) => ({
         key,
         value: value as string | number | boolean,
-      })
-    }
+      }))
+    )
   }
 
   const enabled = form.watch('grok.violation_deduction_enabled')
@@ -122,8 +123,8 @@ export function GrokSettingsCard(props: Props) {
             )}
           />
 
-          <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save Changes')}
+          <Button type='submit' disabled={updateOptions.isPending}>
+            {updateOptions.isPending ? t('Saving...') : t('Save Changes')}
           </Button>
         </form>
       </Form>

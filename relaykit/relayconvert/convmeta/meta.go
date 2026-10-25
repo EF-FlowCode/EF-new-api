@@ -5,8 +5,8 @@
 package convmeta
 
 import (
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"eflow.local/new-api/relaykit/dto"
+	"eflow.local/new-api/relaykit/types"
 )
 
 // Meta is the only view of the relay session that format converters may use.
@@ -28,6 +28,7 @@ type Meta interface {
 	// SetReasoningEffort records the effort level a converter derived from a
 	// model-name suffix so downstream billing/logging can see it.
 	SetReasoningEffort(effort string)
+	ReasoningState() *dto.ReasoningConversionState
 	GetEstimatePromptTokens() int
 
 	// EnsureClaudeConvertInfo lazily creates and returns the mutable
@@ -72,6 +73,8 @@ const (
 // Values is a plain-struct Meta implementation for tests and non-RelayInfo
 // hosts (the relaykit-native entry point).
 type Values struct {
+	ResponsesTools       *ResponsesToolState
+	ReasoningConversion  *dto.ReasoningConversionState
 	OriginModelName      string
 	UpstreamModelName    string
 	ChannelMetaAttached  bool
@@ -212,4 +215,17 @@ func OptionsOf(m Meta) *Options {
 		return &Options{}
 	}
 	return m.ConvOptions()
+}
+
+func (v *Values) ReasoningState() *dto.ReasoningConversionState {
+	if v == nil {
+		return nil
+	}
+	return v.ReasoningConversion
+}
+func ReasoningStateOf(m Meta) *dto.ReasoningConversionState {
+	if m == nil {
+		return nil
+	}
+	return m.ReasoningState()
 }

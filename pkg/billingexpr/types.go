@@ -4,12 +4,15 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/QuantumNous/new-api/common"
+	"eflow.local/new-api/common"
+	"eflow.local/new-api/pkg/jsplugin"
 )
 
 type RequestInput struct {
-	Headers map[string]string
-	Body    []byte
+	Headers     map[string]string
+	Body        []byte
+	Usage       map[string]any
+	UsageSchema map[string]jsplugin.UsageFieldSchema
 }
 
 // TokenParams holds all token dimensions passed into an Expr evaluation.
@@ -39,6 +42,9 @@ type TraceResult struct {
 // BillingSnapshot captures the billing rule state frozen at pre-consume time.
 // It is fully serializable and contains no compiled program pointers.
 type BillingSnapshot struct {
+	PriceSource               string  `json:"price_source,omitempty"`
+	PriceModel                string  `json:"price_model,omitempty"`
+	PricePlugin               string  `json:"price_plugin,omitempty"`
 	BillingMode               string  `json:"billing_mode"`
 	ModelName                 string  `json:"model_name"`
 	ExprString                string  `json:"expr_string"`
