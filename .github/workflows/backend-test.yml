@@ -42,6 +42,10 @@ jobs:
           go-version: '>=1.25.1'
           cache: true
 
+      # main.go embeds web/dist, which is gitignored and not built here; tests only need a placeholder.
+      - name: Create web/dist placeholder
+        run: mkdir -p web/dist && echo '<!doctype html><title>test</title>' > web/dist/index.html
+
       - name: Test root module
         run: go test ./... -count=1
 
