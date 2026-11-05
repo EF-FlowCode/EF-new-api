@@ -198,7 +198,7 @@ export function RiskRuleDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value='token'>{t('Token')}</SelectItem>
+                  <SelectItem value='token'>{t('API key')}</SelectItem>
                   <SelectItem value='user'>{t('User')}</SelectItem>
                 </SelectContent>
               </Select>

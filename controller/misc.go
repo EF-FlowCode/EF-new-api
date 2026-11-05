@@ -93,7 +93,7 @@ func GetStatus(c *gin.Context) {
 		"turnstile_check":             authSettings.TurnstileCheckEnabled,
 		"turnstile_site_key":          authSettings.TurnstileSiteKey,
 		"group_monitoring_url":        brandingSettings.GroupMonitoringURL,
-		"group_monitoring_available":  len(groupMonitoringSetting.MonitoringGroups) > 0,
+		"group_monitoring_available":  len(service.MonitoredGroups(groupMonitoringSetting)) > 0,
 		"affiliate_enabled":           userQuotaSettings.AffiliateEnabled,
 		"docs_link":                   generalSetting.DocsLink,
 		"quota_per_unit":              common.GetQuotaPerUnit(),

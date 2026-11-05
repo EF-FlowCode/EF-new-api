@@ -1,4 +1,7 @@
 import { Link } from '@tanstack/react-router'
+import { useAuthStore } from '@/stores/auth-store'
+import { ProjectAttribution } from '@/components/layout/components/footer'
+import { ProfileDropdown } from '@/components/profile-dropdown'
 import { ThemeSwitch } from '@/components/theme-switch'
 import './portal.css'
 
@@ -94,6 +97,8 @@ const workshops: Workshop[] = [
 ]
 
 export function Portal() {
+  const user = useAuthStore((state) => state.auth.user)
+
   return (
     <div className='portal-root'>
       {/* ───────── nav ───────── */}
@@ -130,9 +135,16 @@ export function Portal() {
           <div className='theme-picker-slot'>
             <ThemeSwitch />
           </div>
-          <Link to='/sign-in' className='nav-cta'>
-            注册 →
-          </Link>
+          {/* 与 AppHeader 一致：已登录显示头像菜单，访客才显示注册/登录入口 */}
+          {user ? (
+            <div className='nav-account'>
+              <ProfileDropdown />
+            </div>
+          ) : (
+            <Link to='/sign-in' className='nav-cta'>
+              登录 →
+            </Link>
+          )}
         </div>
       </nav>
 
@@ -313,6 +325,11 @@ export function Portal() {
           })}
         </div>
       </section>
+
+      {/* AGPL 署名每页可见，门户也不例外 */}
+      <footer className='portal-foot'>
+        <ProjectAttribution currentYear={new Date().getFullYear()} />
+      </footer>
     </div>
   )
 }

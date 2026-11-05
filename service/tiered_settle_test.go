@@ -903,13 +903,56 @@ func TestBuildTieredTokenParams_ClaudeFoldsUnpricedCacheReadsIntoInput(t *testin
 		ClaudeCacheCreation1hTokens: 500,
 	}
 
-	params := BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 3 + c * 15)`))
+	params := BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 3 + c * 15 + cc * 3.75 + cc1h * 6)`))
 	if params.P != 8000 {
-		t.Fatalf("P = %f, want 8000: unpriced cache reads bill as input, cache writes do not", params.P)
+		t.Fatalf("P = %f, want 8000: unpriced cache reads bill as input", params.P)
 	}
 
-	params = BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 3 + c * 15 + cr * 0.3)`))
+	params = BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 3 + c * 15 + cr * 0.3 + cc * 3.75 + cc1h * 6)`))
 	if params.P != 5000 {
 		t.Fatalf("P = %f, want 5000: separately priced cache reads stay out of input", params.P)
+	}
+}
+
+// A GPT expression reached over native /v1/messages has no cc price; the
+// writes must still be charged (they used to bill at zero).
+func TestBuildTieredTokenParams_ClaudeFoldsUnpricedCacheWrites(t *testing.T) {
+	claude := func(split5m, split1h int) dto.Usage {
+		return dto.Usage{PromptTokens: 100, UsageSemantic: "anthropic",
+			ClaudeCacheCreation5mTokens: split5m, ClaudeCacheCreation1hTokens: split1h,
+			PromptTokensDetails: dto.InputTokenDetails{CachedCreationTokens: split5m + split1h}}
+	}
+	for _, tc := range []struct {
+		name        string
+		usage       dto.Usage
+		expr        string
+		p, cc, cc1h float64
+		cost        float64
+	}{
+		{"1h joins cc at 1.6x", claude(0, 10000), `tier("base", p * 3 + c * 15 + cr * 0.3 + cc * 3.75)`, 100, 16000, 0, 60300},
+		{"5m bills as input", claude(10000, 0), `tier("base", p * 3 + c * 15)`, 10100, 0, 0, 30300},
+		{"5m bills as input beside priced 1h", claude(2000, 10000), `tier("base", p * 3 + cc1h * 6)`, 2100, 0, 10000, 66300},
+		{"1h bills as input at 1.6x", claude(2000, 10000), `tier("base", p * 3)`, 18100, 0, 0, 54300},
+		{"gpt-5.6-sol first write", dto.Usage{PromptTokens: 3, CompletionTokens: 64, UsageSemantic: "anthropic",
+			PromptTokensDetails: dto.InputTokenDetails{CachedCreationTokens: 6319}},
+			`tier("standard", p * 5 + cr * 0.5 + c * 30)`, 6322, 0, 0, 33530},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := BuildTieredTokenParams(&tc.usage, true, billingexpr.UsedVars(tc.expr))
+			if params.P != tc.p || params.CC != tc.cc || params.CC1h != tc.cc1h {
+				t.Fatalf("p, cc, cc1h = %f, %f, %f, want %f, %f, %f", params.P, params.CC, params.CC1h, tc.p, tc.cc, tc.cc1h)
+			}
+			wantLen := float64(tc.usage.PromptTokens + tc.usage.PromptTokensDetails.CacheCreationTokensTotal())
+			if params.Len != wantLen {
+				t.Fatalf("Len = %f, want %f (len keeps the unweighted counts)", params.Len, wantLen)
+			}
+			cost, _, err := billingexpr.RunExpr(tc.expr, params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if math.Abs(cost-tc.cost) > 0.01 {
+				t.Fatalf("cost = %f, want %f", cost, tc.cost)
+			}
+		})
 	}
 }

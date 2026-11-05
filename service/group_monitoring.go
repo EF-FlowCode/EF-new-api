@@ -156,6 +156,8 @@ func runAggregationCycle() {
 	defer atomic.StoreInt32(&aggregationRunning, 0)
 
 	cfg := operation_setting.GetGroupMonitoringSetting()
+	// eflow: 规则（prefix* / !排除）在这里一次性展开成具体分组，下游聚合函数照旧按分组名处理。
+	cfg.MonitoringGroups = MonitoredGroups(cfg)
 	if len(cfg.MonitoringGroups) == 0 {
 		return
 	}

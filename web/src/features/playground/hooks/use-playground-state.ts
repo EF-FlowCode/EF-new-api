@@ -1,117 +1,157 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { DEFAULT_CONFIG, DEFAULT_PARAMETER_ENABLED } from '../constants'
 import {
-  DEFAULT_CONFIG,
-  DEFAULT_PARAMETER_ENABLED,
-  DEFAULT_SESSION_TITLE,
-} from '../constants'
-import {
-  loadConfig,
-  saveConfig,
-  loadParameterEnabled,
-  saveParameterEnabled,
+  addSession,
+  applyMessageStateUpdate,
+  createSessionStore,
+  getActiveSession,
+  getInitialParameterEnabled,
+  getInitialPlaygroundConfig,
   loadSessions,
+  removeSession,
+  renameSession as renameSessionInStore,
+  saveConfig,
+  saveParameterEnabled,
   saveSessions,
-  createSession as createSessionLib,
-  deriveSessionTitle,
+  setActiveSystemPrompt,
+  switchSession as switchSessionInStore,
+  updateActiveSessionMessages,
+  type MessageStateUpdater,
+  type SessionStore,
 } from '../lib'
 import type {
   Message,
-  Session,
   PlaygroundConfig,
   ParameterEnabled,
   ModelOption,
   GroupOption,
 } from '../types'
 
-// 流式持久化节流窗口：700ms 内的多次增量更新合并成一次写盘。
-const SAVE_THROTTLE_MS = 700
+const SESSION_SAVE_DEBOUNCE_MS = 500
 const EMPTY_MESSAGES: Message[] = []
-
-interface SessionStore {
-  sessions: Session[]
-  activeId: string
-}
 
 /**
  * Main state management hook for playground
  */
 export function usePlaygroundState() {
+  const { t } = useTranslation()
   // Load initial state from localStorage
-  const [config, setConfig] = useState<PlaygroundConfig>(() => {
-    const savedConfig = loadConfig()
-    return { ...DEFAULT_CONFIG, ...savedConfig }
-  })
+  const [config, setConfig] = useState<PlaygroundConfig>(
+    getInitialPlaygroundConfig
+  )
 
   const [parameterEnabled, setParameterEnabled] = useState<ParameterEnabled>(
-    () => {
-      const saved = loadParameterEnabled()
-      return { ...DEFAULT_PARAMETER_ENABLED, ...saved }
-    }
+    getInitialParameterEnabled
   )
 
-  // 多会话：单一 store（sessions + activeId），对外仍派生出 messages /
-  // updateMessages，使 chat handler / index.tsx 的契约保持不变。
-  const [store, setStore] = useState<SessionStore>(() => loadSessions())
-  const { sessions, activeId } = store
-
-  const activeSession = useMemo(
-    () => sessions.find((s) => s.id === activeId) ?? sessions[0],
-    [sessions, activeId]
-  )
-  const messages = activeSession?.messages ?? EMPTY_MESSAGES
+  const [store, setStore] = useState<SessionStore>(createSessionStore)
+  const [isLoadingMessages, setIsLoadingMessages] = useState(true)
+  const saveTimerRef = useRef<number | null>(null)
+  const latestStoreRef = useRef<SessionStore>(store)
+  const hasLoadedSessionsRef = useRef(false)
+  const fileDropNoticeShownRef = useRef(false)
 
   const [models, setModels] = useState<ModelOption[]>([])
   const [groups, setGroups] = useState<GroupOption[]>([])
 
-  // 流式时 updateMessages 每 token 调一次；同步 saveSessions(JSON.stringify)
-  // 会随对话变长产生 O(n²) 临时字符串把渲染进程内存打爆（OOM 主因）。
-  // 内存 state 仍每 token 更新（流式 UI 不变），持久化解耦为 700ms 节流；
-  // 显式/批量动作（清空、新建、切换、删除、重命名）取消挂起节流并立即落盘。
-  const pendingSaveRef = useRef<SessionStore | null>(null)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeSession = useMemo(() => getActiveSession(store), [store])
+  const messages = activeSession?.messages ?? EMPTY_MESSAGES
 
-  const scheduleSave = useCallback((next: SessionStore) => {
-    pendingSaveRef.current = next
-    if (saveTimerRef.current !== null) return
-    saveTimerRef.current = setTimeout(() => {
-      saveTimerRef.current = null
-      const s = pendingSaveRef.current
-      pendingSaveRef.current = null
-      if (s) saveSessions(s.sessions, s.activeId)
-    }, SAVE_THROTTLE_MS)
-  }, [])
+  const writeSessions = useCallback(
+    (storeToSave: SessionStore) => {
+      const result = saveSessions(storeToSave)
+      if (result === 'saved-without-files' && !fileDropNoticeShownRef.current) {
+        fileDropNoticeShownRef.current = true
+        toast.warning(
+          t(
+            'Browser storage is full; images and PDFs were not saved to local history.'
+          )
+        )
+      }
+    },
+    [t]
+  )
 
-  const cancelPendingSave = useCallback(() => {
-    if (saveTimerRef.current !== null) {
-      clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = null
+  // Streaming updates arrive many times per second; persistence is debounced.
+  // Explicit actions (switch, create, delete, rename) flush immediately.
+  const persistSessions = useCallback(
+    (storeToSave: SessionStore, immediate = false) => {
+      latestStoreRef.current = storeToSave
+
+      if (!hasLoadedSessionsRef.current) {
+        return
+      }
+
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+
+      if (immediate) {
+        writeSessions(storeToSave)
+        return
+      }
+
+      saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null
+        writeSessions(latestStoreRef.current)
+      }, SESSION_SAVE_DEBOUNCE_MS)
+    },
+    [writeSessions]
+  )
+
+  useEffect(() => {
+    let cancelled = false
+
+    window.setTimeout(() => {
+      const loadedStore = loadSessions()
+      if (cancelled) {
+        return
+      }
+
+      latestStoreRef.current = loadedStore
+      hasLoadedSessionsRef.current = true
+      setStore(loadedStore)
+      setIsLoadingMessages(false)
+    }, 0)
+
+    return () => {
+      cancelled = true
     }
-    pendingSaveRef.current = null
   }, [])
 
-  // 收尾兜底：卸载 / 关页时把还没落盘的最新状态刷一次。
+  // Flush pending changes when the page is hidden or the playground unmounts.
   useEffect(() => {
     const flush = () => {
-      const s = pendingSaveRef.current
-      if (s) {
-        pendingSaveRef.current = null
-        saveSessions(s.sessions, s.activeId)
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+        saveSessions(latestStoreRef.current)
       }
     }
     window.addEventListener('pagehide', flush)
     return () => {
       window.removeEventListener('pagehide', flush)
-      if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current)
       flush()
     }
   }, [])
 
-  const persistNow = useCallback(
-    (next: SessionStore) => {
-      cancelPendingSave()
-      saveSessions(next.sessions, next.activeId)
+  const updateStore = useCallback(
+    (
+      updater: (previousStore: SessionStore) => SessionStore,
+      immediate = false
+    ) => {
+      setStore((previousStore) => {
+        const nextStore = updater(previousStore)
+        if (nextStore !== previousStore) {
+          persistSessions(nextStore, immediate)
+        }
+        return nextStore
+      })
     },
-    [cancelPendingSave]
+    [persistSessions]
   )
 
   // Update config with automatic save
@@ -138,117 +178,67 @@ export function usePlaygroundState() {
     []
   )
 
-  // 更新「当前会话」的 messages。函数式 updater（流式逐 token）→ 节流持久化；
-  // 显式数组（清空 / 整体替换）→ 取消挂起节流并立即落盘。契约与旧版一致。
+  // Update the active session's messages
   const updateMessages = useCallback(
-    (updater: Message[] | ((prev: Message[]) => Message[])) => {
-      setStore((prev) => {
-        const cur =
-          prev.sessions.find((s) => s.id === prev.activeId) ?? prev.sessions[0]
-        if (!cur) return prev
-        const prevMsgs = cur.messages
-        const newMsgs =
-          typeof updater === 'function' ? updater(prevMsgs) : updater
-        const sessions = prev.sessions.map((s) =>
-          s.id === cur.id
-            ? {
-                ...s,
-                messages: newMsgs,
-                updatedAt: Date.now(),
-                // 仅当尚未拥有实质标题时，从首条用户消息派生
-                title:
-                  s.title === DEFAULT_SESSION_TITLE
-                    ? deriveSessionTitle(newMsgs)
-                    : s.title,
-              }
-            : s
+    (updater: MessageStateUpdater) => {
+      updateStore((previousStore) => {
+        const previousMessages =
+          getActiveSession(previousStore)?.messages ?? EMPTY_MESSAGES
+        return updateActiveSessionMessages(
+          previousStore,
+          applyMessageStateUpdate(previousMessages, updater)
         )
-        const next: SessionStore = { sessions, activeId: prev.activeId }
-        if (typeof updater === 'function') scheduleSave(next)
-        else persistNow(next)
-        return next
       })
     },
-    [scheduleSave, persistNow]
+    [updateStore]
   )
 
-  // 清空「当前会话」消息（保留会话本身）
+  // Clear the active session's messages (the session itself is kept)
   const clearMessages = useCallback(() => {
-    updateMessages([])
-  }, [updateMessages])
+    updateStore(
+      (previousStore) => updateActiveSessionMessages(previousStore, []),
+      true
+    )
+  }, [updateStore])
 
   const createSession = useCallback(() => {
-    setStore((prev) => {
-      const s = createSessionLib([])
-      const next: SessionStore = {
-        sessions: [...prev.sessions, s],
-        activeId: s.id,
-      }
-      persistNow(next)
-      return next
-    })
-  }, [persistNow])
+    updateStore(addSession, true)
+  }, [updateStore])
 
   const switchSession = useCallback(
     (id: string) => {
-      setStore((prev) => {
-        if (id === prev.activeId || !prev.sessions.some((s) => s.id === id))
-          return prev
-        const next: SessionStore = { sessions: prev.sessions, activeId: id }
-        persistNow(next)
-        return next
-      })
+      updateStore(
+        (previousStore) => switchSessionInStore(previousStore, id),
+        true
+      )
     },
-    [persistNow]
+    [updateStore]
   )
 
   const deleteSession = useCallback(
     (id: string) => {
-      setStore((prev) => {
-        let sessions = prev.sessions.filter((s) => s.id !== id)
-        if (sessions.length === 0) sessions = [createSessionLib([])]
-        const activeId = prev.activeId === id ? sessions[0].id : prev.activeId
-        const next: SessionStore = { sessions, activeId }
-        persistNow(next)
-        return next
-      })
+      updateStore((previousStore) => removeSession(previousStore, id), true)
     },
-    [persistNow]
+    [updateStore]
   )
 
   const renameSession = useCallback(
     (id: string, title: string) => {
-      const t = title.trim()
-      if (!t) return
-      setStore((prev) => {
-        const sessions = prev.sessions.map((s) =>
-          s.id === id ? { ...s, title: t, updatedAt: Date.now() } : s
-        )
-        const next: SessionStore = { sessions, activeId: prev.activeId }
-        persistNow(next)
-        return next
-      })
+      updateStore(
+        (previousStore) => renameSessionInStore(previousStore, id, title),
+        true
+      )
     },
-    [persistNow]
+    [updateStore]
   )
 
   const setSystemPrompt = useCallback(
-    (text: string) => {
-      setStore((prev) => {
-        const cur =
-          prev.sessions.find((s) => s.id === prev.activeId) ?? prev.sessions[0]
-        if (!cur) return prev
-        const sessions = prev.sessions.map((s) =>
-          s.id === cur.id
-            ? { ...s, systemPrompt: text, updatedAt: Date.now() }
-            : s
-        )
-        const next: SessionStore = { sessions, activeId: prev.activeId }
-        persistNow(next)
-        return next
-      })
+    (systemPrompt: string) => {
+      updateStore((previousStore) =>
+        setActiveSystemPrompt(previousStore, systemPrompt)
+      )
     },
-    [persistNow]
+    [updateStore]
   )
 
   // Reset config to defaults
@@ -264,10 +254,11 @@ export function usePlaygroundState() {
     config,
     parameterEnabled,
     messages,
+    isLoadingMessages,
     models,
     groups,
-    sessions,
-    activeId,
+    sessions: store.sessions,
+    activeSessionId: activeSession?.id ?? store.activeId,
     systemPrompt: activeSession?.systemPrompt ?? '',
 
     // Setters

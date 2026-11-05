@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Plus, RefreshCw, XCircle } from 'lucide-react'
+import { Plus, RefreshCw, Search, XCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -27,6 +26,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useLatestRequest } from '@/components/data-table/latest-request'
+import { PageFooterPortal, SectionPageLayout } from '@/components/layout'
 import {
   batchAdminUpdateTicketStatus,
   fetchTickets,
@@ -330,216 +330,239 @@ export function TicketListPage({
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   return (
-    <div className='px-4 py-6 sm:px-8'>
-      <div className='mx-auto w-full max-w-[1440px] space-y-5'>
-        <div className='flex flex-col gap-1'>
-          <h1 className='text-xl font-semibold tracking-tight'>{title}</h1>
-          <p className='text-muted-foreground text-sm'>{description}</p>
-        </div>
-
-        <div className='bg-card flex flex-wrap items-center gap-2 rounded-xl border p-3'>
-          {showCreate && (
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus className='mr-1.5 h-3.5 w-3.5' />
+    <>
+      <SectionPageLayout>
+        <SectionPageLayout.Title>{title}</SectionPageLayout.Title>
+        <SectionPageLayout.Description>
+          {description}
+        </SectionPageLayout.Description>
+        {showCreate && (
+          <SectionPageLayout.Actions>
+            <Button size='sm' onClick={() => setCreateOpen(true)}>
+              <Plus className='h-4 w-4' />
               {t('New ticket')}
             </Button>
-          )}
-          <Button variant='outline' onClick={refresh}>
-            <RefreshCw
-              className={cn('mr-1.5 h-3.5 w-3.5', loading && 'animate-spin')}
-            />
-            {t('Refresh')}
-          </Button>
-          <Select
-            value={String(statusFilter)}
-            onValueChange={(v) =>
-              setStatusFilter(v === 'all' ? 'all' : (Number(v) as TicketStatus))
-            }
-          >
-            <SelectTrigger className='w-[160px]'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>{t('All statuses')}</SelectItem>
-              {(
-                [
-                  TICKET_STATUS.PENDING,
-                  TICKET_STATUS.IN_PROGRESS,
-                  TICKET_STATUS.RESOLVED,
-                  TICKET_STATUS.CLOSED,
-                ] as const
-              ).map((s) => (
-                <SelectItem key={s} value={String(s)}>
-                  {t(TICKET_STATUS_META[s].labelKey)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={typeFilter}
-            onValueChange={(value) => {
-              setTypeFilter(value)
-              if (value !== 'invoice') {
-                setCompanyName('')
-                setCompanyNameInput('')
-              }
-            }}
-          >
-            <SelectTrigger className='w-[160px]'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TYPE_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {t(opt.labelKey)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {admin && (
-          <form
-            className='flex flex-wrap items-end gap-2'
-            onSubmit={(event) => {
-              event.preventDefault()
-              setCompanyName(companyNameInput.trim())
-              setTypeFilter('invoice')
-              setPage(1)
-              clearSelection()
-            }}
-          >
-            <div className='flex min-w-48 flex-1 flex-col gap-2 sm:max-w-sm'>
-              <Label htmlFor='invoice-company-search'>
-                {t('Search invoice title')}
-              </Label>
-              <Input
-                id='invoice-company-search'
-                value={companyNameInput}
-                placeholder={t('Enter part of a company or invoice title')}
-                maxLength={255}
-                onChange={(event) => setCompanyNameInput(event.target.value)}
-              />
-            </div>
-            <Button type='submit' variant='outline'>
-              {t('Search')}
-            </Button>
-            {companyName && (
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={() => {
-                  setCompanyName('')
-                  setCompanyNameInput('')
-                  setPage(1)
-                  clearSelection()
-                }}
-              >
-                {t('Clear search')}
-              </Button>
-            )}
-          </form>
+          </SectionPageLayout.Actions>
         )}
-
-        {admin && selectedIds.size > 0 && (
-          <div className='bg-card flex flex-wrap items-center gap-3 rounded-xl border border-dashed p-3'>
-            <span className='text-sm font-medium'>
-              {t('{{n}} selected', { n: selectedIds.size })}
-            </span>
-            {canExport && typeFilter === 'invoice' && (
-              <Button
-                size='sm'
-                variant='outline'
-                disabled={exporting || bulkBusy || loading}
-                onClick={handleInvoiceExport}
-              >
-                {exporting
-                  ? t('Exporting invoices...')
-                  : t('Export selected invoices')}
-              </Button>
-            )}
-            <Button
-              size='sm'
-              variant='destructive'
-              disabled={bulkBusy}
-              onClick={() => setConfirmCloseOpen(true)}
-            >
-              {t('Mark as closed')}
-            </Button>
-            <Button
-              size='sm'
-              variant='ghost'
-              disabled={bulkBusy}
-              onClick={clearSelection}
-            >
-              <XCircle className='mr-1.5 h-3.5 w-3.5' />
-              {t('Clear selection')}
-            </Button>
-          </div>
-        )}
-
-        <TicketsTable
-          tickets={tickets}
-          loading={loading}
-          showAssignee={admin}
-          sortField={sortField}
-          sortDir={sortDir}
-          onSort={handleSort}
-          selectable={admin}
-          selectedIds={selectedIds}
-          onToggleSelect={toggleSelect}
-          onToggleSelectAll={toggleSelectAllOnPage}
-          onRowClick={(ticket) =>
-            navigate({ to: `${detailPathPrefix}/${ticket.id}` })
-          }
-        />
-
-        {total > 0 && (
-          <div className='flex flex-wrap items-center justify-between gap-3'>
-            <div className='text-muted-foreground text-xs'>
-              {t('Total {{n}} records', { n: total })}
-            </div>
-            <div className='flex items-center gap-2'>
+        <SectionPageLayout.Content>
+          <div className='space-y-3 sm:space-y-4'>
+            <div className='flex flex-wrap items-center gap-2'>
               <Select
-                value={String(pageSize)}
-                onValueChange={(v) => setPageSize(Number(v))}
+                value={String(statusFilter)}
+                onValueChange={(v) =>
+                  setStatusFilter(
+                    v === 'all' ? 'all' : (Number(v) as TicketStatus)
+                  )
+                }
               >
-                <SelectTrigger className='w-[100px]'>
+                <SelectTrigger size='sm' className='w-[140px]'>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PAGE_SIZES.map((size) => (
-                    <SelectItem key={size} value={String(size)}>
-                      {t('{{n}} / page', { n: size })}
+                  <SelectItem value='all'>{t('All statuses')}</SelectItem>
+                  {(
+                    [
+                      TICKET_STATUS.PENDING,
+                      TICKET_STATUS.IN_PROGRESS,
+                      TICKET_STATUS.RESOLVED,
+                      TICKET_STATUS.CLOSED,
+                    ] as const
+                  ).map((s) => (
+                    <SelectItem key={s} value={String(s)}>
+                      {t(TICKET_STATUS_META[s].labelKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <Select
+                value={typeFilter}
+                onValueChange={(value) => {
+                  setTypeFilter(value)
+                  if (value !== 'invoice') {
+                    setCompanyName('')
+                    setCompanyNameInput('')
+                  }
+                }}
+              >
+                <SelectTrigger size='sm' className='w-[140px]'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TYPE_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {t(opt.labelKey)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {admin && (
+                <form
+                  className='flex w-full items-center gap-2 sm:w-auto'
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    setCompanyName(companyNameInput.trim())
+                    setTypeFilter('invoice')
+                    setPage(1)
+                    clearSelection()
+                  }}
+                >
+                  <Input
+                    id='invoice-company-search'
+                    aria-label={t('Search invoice title')}
+                    value={companyNameInput}
+                    placeholder={t('Search invoice title')}
+                    maxLength={255}
+                    className='h-8 sm:w-64'
+                    onChange={(event) =>
+                      setCompanyNameInput(event.target.value)
+                    }
+                  />
+                  <Button
+                    type='submit'
+                    variant='outline'
+                    size='sm'
+                    className='h-8 shrink-0'
+                  >
+                    <Search className='size-3.5' />
+                    {t('Search')}
+                  </Button>
+                  {companyName && (
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      className='h-8 shrink-0'
+                      onClick={() => {
+                        setCompanyName('')
+                        setCompanyNameInput('')
+                        setPage(1)
+                        clearSelection()
+                      }}
+                    >
+                      {t('Clear search')}
+                    </Button>
+                  )}
+                </form>
+              )}
               <Button
-                type='button'
                 variant='outline'
                 size='sm'
-                disabled={page <= 1 || loading}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className='ml-auto h-8'
+                onClick={refresh}
               >
-                {t('Previous')}
-              </Button>
-              <span className='text-muted-foreground text-xs'>
-                {t('Page {{p}} / {{total}}', { p: page, total: totalPages })}
-              </span>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                disabled={page >= totalPages || loading}
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              >
-                {t('Next')}
+                <RefreshCw
+                  className={cn('size-3.5', loading && 'animate-spin')}
+                />
+                {t('Refresh')}
               </Button>
             </div>
+
+            {admin && selectedIds.size > 0 && (
+              <div className='bg-card flex flex-wrap items-center gap-3 rounded-xl border border-dashed p-3'>
+                <span className='text-sm font-medium'>
+                  {t('{{n}} selected', { n: selectedIds.size })}
+                </span>
+                {canExport && typeFilter === 'invoice' && (
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    disabled={exporting || bulkBusy || loading}
+                    onClick={handleInvoiceExport}
+                  >
+                    {exporting
+                      ? t('Exporting invoices...')
+                      : t('Export selected invoices')}
+                  </Button>
+                )}
+                <Button
+                  size='sm'
+                  variant='destructive'
+                  disabled={bulkBusy}
+                  onClick={() => setConfirmCloseOpen(true)}
+                >
+                  {t('Mark as closed')}
+                </Button>
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  disabled={bulkBusy}
+                  onClick={clearSelection}
+                >
+                  <XCircle className='mr-1.5 h-3.5 w-3.5' />
+                  {t('Clear selection')}
+                </Button>
+              </div>
+            )}
+
+            <TicketsTable
+              tickets={tickets}
+              loading={loading}
+              showAssignee={admin}
+              sortField={sortField}
+              sortDir={sortDir}
+              onSort={handleSort}
+              selectable={admin}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={toggleSelectAllOnPage}
+              onRowClick={(ticket) =>
+                navigate({ to: `${detailPathPrefix}/${ticket.id}` })
+              }
+            />
           </div>
-        )}
-      </div>
+
+          {total > 0 && (
+            <PageFooterPortal>
+              <div className='flex flex-wrap items-center justify-between gap-3'>
+                <div className='text-muted-foreground text-xs'>
+                  {t('Total {{n}} records', { n: total })}
+                </div>
+                <div className='flex items-center gap-2'>
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={(v) => setPageSize(Number(v))}
+                  >
+                    <SelectTrigger size='sm' className='w-[100px]'>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAGE_SIZES.map((size) => (
+                        <SelectItem key={size} value={String(size)}>
+                          {t('{{n}} / page', { n: size })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    disabled={page <= 1 || loading}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    {t('Previous')}
+                  </Button>
+                  <span className='text-muted-foreground text-xs'>
+                    {t('Page {{p}} / {{total}}', {
+                      p: page,
+                      total: totalPages,
+                    })}
+                  </span>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    disabled={page >= totalPages || loading}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  >
+                    {t('Next')}
+                  </Button>
+                </div>
+              </div>
+            </PageFooterPortal>
+          )}
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
 
       <CreateTicketDialog
         open={createOpen}
@@ -579,6 +602,6 @@ export function TicketListPage({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   )
 }

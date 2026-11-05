@@ -77,6 +77,7 @@ const endpointTypeOptions: Array<{ value: string; label: string }> = [
     label: 'OpenAI Response Compaction (/v1/responses/compact)',
   },
   { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
+  { value: 'claude-code', label: 'Claude Code native (/v1/messages)' },
   {
     value: 'gemini',
     label: 'Gemini (/v1beta/models/{model}:generateContent)',
@@ -134,13 +135,18 @@ export function ChannelTestDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentRow?.id, resetState])
 
-  const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
+  // Claude Code always streams; the switch is shown on and locked.
+  const isClaudeCodeTest = endpointType === 'claude-code'
+  const streamDisabled =
+    STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType) || isClaudeCodeTest
 
   useEffect(() => {
-    if (streamDisabled) {
+    if (isClaudeCodeTest) {
+      setIsStreamTest(true)
+    } else if (streamDisabled) {
       setIsStreamTest(false)
     }
-  }, [streamDisabled])
+  }, [isClaudeCodeTest, streamDisabled])
 
   const modelsValue = currentRow?.models ?? ''
   const defaultTestModel = currentRow?.test_model?.trim()
@@ -449,9 +455,13 @@ export function ChannelTestDialog({
                 </SelectContent>
               </Select>
               <p className='text-muted-foreground text-xs'>
-                {t(
-                  'Override the endpoint used for testing. Leave empty to auto detect.'
-                )}
+                {isClaudeCodeTest
+                  ? t(
+                      'Runs the real Claude Code client against the upstream with a random question. Each test costs about 16k input tokens.'
+                    )
+                  : t(
+                      'Override the endpoint used for testing. Leave empty to auto detect.'
+                    )}
               </p>
             </div>
             <div className='grid gap-2'>

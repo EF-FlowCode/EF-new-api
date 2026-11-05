@@ -47,7 +47,7 @@ export const ADMIN_SETTINGS_DOMAINS: AdminSettingsDomain[] = [
       { area: 'auth', section: 'basic-auth', titleKey: 'Basic Authentication' },
       {
         area: 'auth',
-        section: 'oauth-integrations',
+        section: 'oauth',
         titleKey: 'OAuth Integrations',
       },
       { area: 'auth', section: 'passkey', titleKey: 'Passkey Authentication' },
@@ -70,8 +70,13 @@ export const ADMIN_SETTINGS_DOMAINS: AdminSettingsDomain[] = [
       },
       {
         area: 'request-limits',
-        section: 'ssrf-protection',
+        section: 'ssrf',
         titleKey: 'SSRF Protection',
+      },
+      {
+        area: 'request-limits',
+        section: 'runtime-limits',
+        titleKey: 'Runtime Limits',
       },
     ],
   },

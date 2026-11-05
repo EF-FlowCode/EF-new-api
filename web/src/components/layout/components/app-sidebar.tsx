@@ -103,6 +103,9 @@ function AdminEntryButton() {
   const { t } = useTranslation()
   const { state } = useSidebar()
   const collapsed = state === 'collapsed'
+  // 落地页与 workspace 切换器一致：管理员进渠道，客服/财务进工单后台（/channels 要 ADMIN）
+  const role = useAuthStore((s) => s.auth.user?.role ?? 0)
+  const target = role >= ROLE.ADMIN ? '/channels' : '/admin-tickets'
   return (
     <Button
       asChild
@@ -111,7 +114,7 @@ function AdminEntryButton() {
       className={collapsed ? 'w-full' : 'w-full justify-start gap-2'}
       title={t('Admin')}
     >
-      <Link to='/channels'>
+      <Link to={target}>
         <Shield className='size-4 shrink-0' />
         {!collapsed && <span>{t('Admin')}</span>}
       </Link>
@@ -228,10 +231,10 @@ export function AppSidebar() {
       .filter((group) => group.items.length > 0)
   }, [configFilteredNavGroups, userRole])
 
-  // eflow: 访客（未登录）只在侧栏看到公开页入口（模型广场 / 分组监控 / 关于）
+  // eflow: 访客（未登录）只在侧栏看到公开页入口（模型广场 / 排行榜 / 分组监控 / 关于）
   // external:true 的外链 (例: 文档站) 也放行——这类链接不受本站鉴权约束
   const GUEST_VISIBLE_URLS = useMemo(
-    () => new Set<string>(['/pricing', '/group-monitoring']),
+    () => new Set<string>(['/pricing', '/leaderboard', '/group-monitoring']),
     []
   )
   const guestFilteredNavGroups = useMemo(() => {
@@ -256,7 +259,7 @@ export function AppSidebar() {
 
   // eflow: 主侧栏 Footer 入口
   //   - 所有人：「公告」入口（原右上角铃铛挪到这里）
-  //   - 访客：Sign in 按钮（原状）
+  //   - 访客：只有公告；登录入口统一在顶栏右上角，侧栏不再重复一个
   //   - 登录 + SUPPORT+ + 当前在主 workspace：「管理员」快捷按钮 + 菜单搜索
   //   - 登录 + 已在 admin workspace：仅菜单搜索（避免按钮自指）
   //   - 登录 + 普通用户：仅菜单搜索（看不到 admin 入口）
@@ -266,6 +269,18 @@ export function AppSidebar() {
     WORKSPACE_IDS.SYSTEM_SETTINGS
   )
   const showAdminEntry = !isGuest && role >= ROLE.SUPPORT && !inAdminWorkspace
+
+  // 选中项在侧栏底部被 Footer 挡住时滚进可见区
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(
+          "[data-sidebar='content'] [data-active='true']"
+        )
+        ?.scrollIntoView({ block: 'nearest' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [pathname])
 
   return (
     <Sidebar collapsible={collapsible} variant={variant}>
@@ -286,13 +301,7 @@ export function AppSidebar() {
       <SidebarFooter>
         <div className='flex flex-col gap-2 p-2'>
           <AnnouncementEntry />
-          {isGuest ? (
-            <Button asChild className='w-full'>
-              <Link to='/sign-in'>{t('Sign in')}</Link>
-            </Button>
-          ) : (
-            showAdminEntry && <AdminEntryButton />
-          )}
+          {showAdminEntry && <AdminEntryButton />}
         </div>
         {!isGuest && <SidebarSearch value={query} onChange={setQuery} />}
       </SidebarFooter>

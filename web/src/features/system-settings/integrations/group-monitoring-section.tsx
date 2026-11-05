@@ -19,6 +19,10 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/tag-input'
+import {
+  resolveMonitoringGroups,
+  unmatchedPatternRules,
+} from '@/features/group-monitoring/lib/monitoring-rules'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOptions } from '../hooks/use-update-option'
@@ -47,7 +51,6 @@ type GroupMonitoringFormValues = z.infer<typeof monitoringSchema>
 
 const FIELD_KEYS = {
   monitoring_groups: 'group_monitoring_setting.monitoring_groups',
-  group_display_order: 'group_monitoring_setting.group_display_order',
   availability_period_minutes:
     'group_monitoring_setting.availability_period_minutes',
   cache_hit_period_minutes: 'group_monitoring_setting.cache_hit_period_minutes',
@@ -82,6 +85,50 @@ function parseArrayField(value: string | undefined): string[] {
 function toJsonArrayString(arr: string[] | undefined): string {
   const cleaned = (arr || []).map((v) => String(v).trim()).filter(Boolean)
   return JSON.stringify(cleaned)
+}
+
+// eflow: 规则实时预览——命中哪些分组、哪些分组没被纳入、哪条通配规则一个都没匹配到。
+function MonitoringRulesPreview({
+  rules,
+  availableGroups,
+}: {
+  rules: string[]
+  availableGroups: string[]
+}) {
+  const { t } = useTranslation()
+  if (availableGroups.length === 0) {
+    return (
+      <p className='text-muted-foreground text-xs'>
+        {t('Loading available groups…')}
+      </p>
+    )
+  }
+  const matched = resolveMonitoringGroups(rules, availableGroups)
+  const matchedSet = new Set(matched)
+  const unmonitored = availableGroups.filter((g) => !matchedSet.has(g)).sort()
+  const deadRules = unmatchedPatternRules(rules, availableGroups)
+  return (
+    <div className='bg-muted/40 space-y-1 rounded-md px-3 py-2 text-xs'>
+      <p>
+        {t('Matched {{count}} groups: {{groups}}', {
+          count: matched.length,
+          groups: matched.join(', ') || '-',
+        })}
+      </p>
+      <p className='text-muted-foreground'>
+        {t('Not monitored: {{groups}}', {
+          groups: unmonitored.join(', ') || '-',
+        })}
+      </p>
+      {deadRules.length > 0 && (
+        <p className='text-amber-600 dark:text-amber-400'>
+          {t('These rules match no group: {{rules}}', {
+            rules: deadRules.join(', '),
+          })}
+        </p>
+      )}
+    </div>
+  )
 }
 
 // ----------------------------------------------------------------------------
@@ -176,10 +223,13 @@ export function GroupMonitoringSettingsSection({
   }, [])
 
   const onSubmit = async (values: GroupMonitoringFormValues) => {
-    const monitoringGroupsJson = toJsonArrayString(values.monitoring_groups)
+    // eflow: monitoring_groups 现在是规则（可含 1_* / !name），不再同步写 group_display_order；
+    // 卡片顺序由监控页的排序选项决定。
     const updates: Array<{ key: string; value: string | number }> = [
-      { key: FIELD_KEYS.monitoring_groups, value: monitoringGroupsJson },
-      { key: FIELD_KEYS.group_display_order, value: monitoringGroupsJson },
+      {
+        key: FIELD_KEYS.monitoring_groups,
+        value: toJsonArrayString(values.monitoring_groups),
+      },
       {
         key: FIELD_KEYS.availability_period_minutes,
         value: String(values.availability_period_minutes),
@@ -252,29 +302,23 @@ export function GroupMonitoringSettingsSection({
             name='monitoring_groups'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Monitored groups')}</FormLabel>
+                <FormLabel>{t('Monitoring group rules')}</FormLabel>
                 <FormControl>
                   <TagInput
                     value={field.value}
-                    onChange={(next) =>
-                      field.onChange(
-                        next.filter((g) =>
-                          availableGroups.length === 0
-                            ? true
-                            : availableGroups.includes(g)
-                        )
-                      )
-                    }
-                    placeholder={t('Select groups to monitor')}
+                    onChange={field.onChange}
+                    placeholder={t('e.g. 1_* (press Enter to add)')}
                   />
                 </FormControl>
                 <FormDescription>
-                  {availableGroups.length === 0
-                    ? t('Loading available groups…')
-                    : t('Available groups: {{groups}}', {
-                        groups: availableGroups.join(', '),
-                      })}
+                  {t(
+                    'Use a group name for an exact match, prefix* to match by prefix, and !name or !prefix* to exclude. Groups created later are monitored automatically when they match a rule.'
+                  )}
                 </FormDescription>
+                <MonitoringRulesPreview
+                  rules={field.value}
+                  availableGroups={availableGroups}
+                />
                 <FormMessage />
               </FormItem>
             )}

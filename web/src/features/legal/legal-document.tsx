@@ -1,18 +1,40 @@
 import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { FileWarning } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useSystemConfig } from '@/hooks/use-system-config'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Markdown } from '@/components/ui/markdown'
 import { Skeleton } from '@/components/ui/skeleton'
 import { HtmlContent } from '@/components/html-content'
+import { ProjectAttribution } from '@/components/layout/components/footer'
 import type { LegalDocumentResponse } from './types'
 
 // eflow: 法务页（隐私政策 / 用户协议）保持独立全宽，不进侧栏壳——
-// 它们多在登录前从注册页跳转访问。这里只提供主题底色与最小高度。
+// 它们多在登录前从注册页跳转访问。顶部与登录页同款品牌链接（可回首页），
+// 不铺实底色，透出与登录页一致的主题柔光；左右留白避免手机上卡片贴边。
 function PublicLayout({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
+  const { systemName, logo } = useSystemConfig()
   return (
-    <div className='bg-background text-foreground min-h-svh'>{children}</div>
+    <div className='text-foreground min-h-svh px-4 pt-4 sm:px-8 sm:pt-8'>
+      <Link
+        to='/'
+        className='inline-flex items-center gap-2 transition-opacity hover:opacity-80'
+      >
+        <img
+          src={logo}
+          alt={t('Logo')}
+          className='h-8 w-8 rounded-full object-cover'
+        />
+        <span className='text-xl font-medium'>{systemName}</span>
+      </Link>
+      {children}
+      <footer className='border-t py-5'>
+        <ProjectAttribution currentYear={new Date().getFullYear()} />
+      </footer>
+    </div>
   )
 }
 

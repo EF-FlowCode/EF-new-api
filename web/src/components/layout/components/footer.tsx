@@ -61,8 +61,8 @@ export function ProjectAttribution(props: { currentYear: number }) {
   const { t } = useTranslation()
 
   return (
-    <div className='text-muted-foreground/45 text-center text-xs sm:text-right'>
-      <span className='text-muted-foreground/45'>
+    <div className='text-muted-foreground/70 text-center text-xs sm:text-right'>
+      <span className='text-muted-foreground/70'>
         &copy; {props.currentYear}{' '}
         <a
           href='https://github.com/QuantumNous/new-api'
@@ -77,13 +77,13 @@ export function ProjectAttribution(props: { currentYear: number }) {
       {/* eflow: AGPLv3 §7 author attribution kept verbatim (do NOT translate this
           exact sentence — it is the notice required by upstream's NOTICE file),
           followed by the §13 link to THIS modified version's corresponding source. */}
-      <span className='text-muted-foreground/45 mt-0.5 block'>
+      <span className='text-muted-foreground/70 mt-0.5 block'>
         Frontend design and development by New API contributors.{' '}
         <a
           href='https://github.com/EF-FlowCode/EF-new-api'
           target='_blank'
           rel='noopener noreferrer'
-          className='text-foreground/70 hover:text-foreground font-medium transition-colors'
+          className='text-foreground/70 hover:text-foreground font-medium whitespace-nowrap transition-colors'
         >
           {t('Modified version source')}
         </a>

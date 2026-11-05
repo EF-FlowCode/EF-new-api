@@ -9,6 +9,7 @@ import (
 
 	"eflow.local/new-api/common"
 	"eflow.local/new-api/setting/operation_setting"
+	"eflow.local/new-api/setting/ratio_setting"
 )
 
 var (
@@ -16,10 +17,23 @@ var (
 	monitoredGroupsCache map[string]struct{}
 )
 
+// MonitoredGroups 返回监控规则按当前分组倍率表（系统全部分组）展开后的分组列表。
+// eflow: MonitoringGroups 存的是规则（支持 prefix* / !排除），凡是要"实际监控哪些分组"
+// 的地方都走这里，不要直接读 cfg.MonitoringGroups。
+func MonitoredGroups(cfg operation_setting.GroupMonitoringSetting) []string {
+	ratios := ratio_setting.GetGroupRatioCopy()
+	known := make([]string, 0, len(ratios))
+	for name := range ratios {
+		known = append(known, name)
+	}
+	return cfg.ResolveMonitoringGroups(known)
+}
+
 func refreshMonitoredGroupsCache() {
 	cfg := operation_setting.GetGroupMonitoringSetting()
-	m := make(map[string]struct{}, len(cfg.MonitoringGroups))
-	for _, g := range cfg.MonitoringGroups {
+	groups := MonitoredGroups(cfg)
+	m := make(map[string]struct{}, len(groups))
+	for _, g := range groups {
 		m[g] = struct{}{}
 	}
 	monitoredGroupsMu.Lock()

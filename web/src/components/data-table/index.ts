@@ -9,7 +9,7 @@ export { DataTableViewOptions } from './view-options'
 export { DataTableToolbar } from './toolbar'
 export { DataTableBulkActions } from './bulk-actions'
 export { TableSkeleton } from './table-skeleton'
-export { TableEmpty } from './table-empty'
+export { ListEmpty, TableEmpty } from './table-empty'
 export { MobileCardList } from './mobile-card-list'
 
 export const DISABLED_ROW_DESKTOP =

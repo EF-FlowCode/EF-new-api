@@ -50,7 +50,7 @@ const workspaceRegistry: WorkspaceConfig[] = [
     id: WORKSPACE_IDS.SYSTEM_SETTINGS,
     name: 'Admin',
     pathPattern:
-      /^\/(system-settings|channels|models\/metadata|users|redemption-codes|invitation-codes|admin-tickets|risk-center)(\/|$)/,
+      /^\/(system-settings|channels|models\/(?:metadata|deployments)|users|redemption-codes|invitation-codes|admin-tickets|risk-center)(\/|$)/,
     getNavGroups: getSystemSettingsNavGroups,
   },
   // Default workspace (must be last)

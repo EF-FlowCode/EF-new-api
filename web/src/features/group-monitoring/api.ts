@@ -32,6 +32,7 @@ type GroupApiResult<T> = ApiResult<T> & {
   aggregation_interval_minutes?: number
   all_groups?: string[]
   monitored_groups?: string[]
+  monitoring_rules?: string[]
   categories?: Record<string, string>
   category_order?: string[]
 }
@@ -51,6 +52,7 @@ export async function fetchGroups(admin: boolean): Promise<GroupListResult> {
     meta: {
       all_groups: res.data.all_groups,
       monitored_groups: res.data.monitored_groups,
+      monitoring_rules: res.data.monitoring_rules,
       categories: res.data.categories || {},
       category_order: res.data.category_order || [],
     },

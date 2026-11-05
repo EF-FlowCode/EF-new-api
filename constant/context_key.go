@@ -92,4 +92,10 @@ const (
 
 	// ContextKeyTokenAuditParams contains only the API token operation's safe metadata.
 	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
+
+	// eflow: protocol routing. ContextKeyProtocolFallback asks the next attempt
+	// on the current channel to use the Chat fallback instead of the native
+	// protocol; ContextKeyProtocolAttempts records every attempt for admin logs.
+	ContextKeyProtocolFallback ContextKey = "protocol_fallback"
+	ContextKeyProtocolAttempts ContextKey = "protocol_attempts"
 )

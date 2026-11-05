@@ -32,10 +32,47 @@ func (p ChatCompletionsToResponsesPolicy) IsChannelEnabled(channelID int, channe
 	return false
 }
 
+// ProtocolRoutingSettings controls eflow protocol routing: native-first channel
+// ordering and same-channel Chat fallback.
+// Keyword lists classify upstream errors; matching is case-insensitive.
+type ProtocolRoutingSettings struct {
+	Enabled bool `json:"enabled"`
+	// FormatErrorKeywords mark a 400 as a protocol/format error, which allows
+	// the same-channel Chat fallback.
+	FormatErrorKeywords []string `json:"format_error_keywords"`
+	// ContextLengthKeywords and ContentPolicyKeywords mark errors that another
+	// protocol or channel cannot fix; they are returned to the client.
+	ContextLengthKeywords []string `json:"context_length_keywords"`
+	ContentPolicyKeywords []string `json:"content_policy_keywords"`
+	// ClientRestrictedKeywords mark a probe 403 caused by an upstream client
+	// whitelist (e.g. Claude Code only).
+	ClientRestrictedKeywords []string `json:"client_restricted_keywords"`
+}
+
 type GlobalSettings struct {
 	PassThroughRequestEnabled        bool                             `json:"pass_through_request_enabled"`
 	ThinkingModelBlacklist           []string                         `json:"thinking_model_blacklist"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	ProtocolRouting                  ProtocolRoutingSettings          `json:"protocol_routing"`
+}
+
+func DefaultProtocolRoutingSettings() ProtocolRoutingSettings {
+	return ProtocolRoutingSettings{
+		Enabled: true,
+		FormatErrorKeywords: []string{
+			"unsupported", "not supported", "unknown field", "unrecognized",
+			"invalid request format", "no route", "not found",
+		},
+		ContextLengthKeywords: []string{
+			"context_length_exceeded", "maximum context length", "prompt is too long", "too many tokens",
+		},
+		ContentPolicyKeywords: []string{
+			"content_policy", "content_filter", "sensitive", "safety",
+		},
+		ClientRestrictedKeywords: []string{
+			"claude code 客户端", "standard claude code client", "client anomaly", "客户端存在异常",
+		},
+	}
 }
 
 // 默认配置
@@ -49,6 +86,7 @@ var defaultOpenaiSettings = GlobalSettings{
 		Enabled:     false,
 		AllChannels: true,
 	},
+	ProtocolRouting: DefaultProtocolRoutingSettings(),
 }
 
 // 全局实例

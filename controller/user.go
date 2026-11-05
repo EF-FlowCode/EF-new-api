@@ -808,21 +808,31 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserEffectiveGroups(user.Group, user.AdditionalCustomerTiers.Values())
-	var models []string
-	for group := range groups {
-		for _, g := range model.GetGroupEnabledModels(group) {
-			if !common.StringsContains(models, g) {
-				models = append(models, g)
-			}
+	additionalTiers := user.AdditionalCustomerTiers.Values()
+	groups := service.GetUserEffectiveGroups(user.Group, additionalTiers)
+	// group 为空时返回全部可用分组的模型并集；指定分组时只返回该分组的模型，
+	// 不可用的分组返回空列表。auto 按自动分组配置顺序展开。
+	group := c.Query("group")
+	var groupsToQuery []string
+	switch {
+	case group == "":
+		for g := range groups {
+			groupsToQuery = append(groupsToQuery, g)
+		}
+	case group == "auto":
+		if _, ok := groups[group]; ok {
+			groupsToQuery = service.GetUserAutoGroup(user.Group, additionalTiers)
+		}
+	default:
+		if _, ok := groups[group]; ok {
+			groupsToQuery = []string{group}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    models,
+		"data":    service.GetGroupsEnabledModels(groupsToQuery),
 	})
-	return
 }
 
 func UpdateUser(c *gin.Context) {
@@ -1692,6 +1702,10 @@ type UpdateUserSettingRequest struct {
 	UpstreamModelUpdateNotifyEnabled *bool   `json:"upstream_model_update_notify_enabled,omitempty"`
 	AcceptUnsetModelRatioModel       bool    `json:"accept_unset_model_ratio_model"`
 	RecordIpLog                      bool    `json:"record_ip_log"`
+	// eflow: API 密钥额度预警（用户级，作用于全部限额令牌）
+	TokenQuotaWarningDisabled bool     `json:"token_quota_warning_disabled"`
+	TokenQuotaWarningPercent  *float64 `json:"token_quota_warning_percent"`
+	TokenQuotaWarningAmount   int      `json:"token_quota_warning_amount"`
 }
 
 func UpdateUserSetting(c *gin.Context) {
@@ -1710,6 +1724,15 @@ func UpdateUserSetting(c *gin.Context) {
 	// 验证预警阈值
 	if req.QuotaWarningThreshold <= 0 {
 		common.ApiErrorI18n(c, i18n.MsgQuotaThresholdGtZero)
+		return
+	}
+
+	if req.TokenQuotaWarningPercent != nil && (*req.TokenQuotaWarningPercent < 0 || *req.TokenQuotaWarningPercent > 100) {
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaWarningPercentRange)
+		return
+	}
+	if req.TokenQuotaWarningAmount < 0 {
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaWarningAmountNegative)
 		return
 	}
 
@@ -1794,6 +1817,9 @@ func UpdateUserSetting(c *gin.Context) {
 	settings.UpstreamModelUpdateNotifyEnabled = upstreamModelUpdateNotifyEnabled
 	settings.AcceptUnsetRatioModel = req.AcceptUnsetModelRatioModel
 	settings.RecordIpLog = req.RecordIpLog
+	settings.TokenQuotaWarningDisabled = req.TokenQuotaWarningDisabled
+	settings.TokenQuotaWarningPercent = req.TokenQuotaWarningPercent
+	settings.TokenQuotaWarningAmount = req.TokenQuotaWarningAmount
 	settings.WebhookUrl = ""
 	settings.WebhookSecret = ""
 	settings.NotificationEmail = ""

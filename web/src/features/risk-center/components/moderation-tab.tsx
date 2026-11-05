@@ -48,6 +48,7 @@ import {
   ServerPagination,
   useLatestRequest,
   useServerPagination,
+  TableEmpty,
 } from '@/components/data-table'
 import {
   debugModeration,
@@ -465,14 +466,7 @@ export function ModerationTab() {
               </TableHeader>
               <TableBody>
                 {rules.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className='text-muted-foreground py-8 text-center text-sm'
-                    >
-                      {t('No rules')}
-                    </TableCell>
-                  </TableRow>
+                  <TableEmpty colSpan={6} title={t('No rules')} />
                 ) : (
                   rules.map((r) => (
                     <TableRow key={r.id}>
@@ -575,14 +569,7 @@ export function ModerationTab() {
                     </TableRow>
                   ))
                 ) : incidents.items.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={7}
-                      className='text-muted-foreground py-8 text-center text-sm'
-                    >
-                      {t('No incidents')}
-                    </TableCell>
-                  </TableRow>
+                  <TableEmpty colSpan={7} title={t('No incidents')} />
                 ) : (
                   incidents.items.map((it) => (
                     <TableRow key={it.id}>

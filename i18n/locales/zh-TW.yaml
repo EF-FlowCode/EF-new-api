@@ -131,6 +131,8 @@ quota.exceed_max: "額度值超出有效範圍"
 quota.insufficient: "額度不足"
 quota.warning_invalid: "無效的預警類型"
 quota.threshold_gt_zero: "預警閾值必須大於0"
+quota.token_warning_percent_range: "API 金鑰預警百分比必須在 0 到 100 之間"
+quota.token_warning_amount_negative: "API 金鑰預警金額不能為負數"
 
 
 # Ticket messages

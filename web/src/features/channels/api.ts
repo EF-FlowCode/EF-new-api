@@ -24,6 +24,8 @@ import type {
   SearchChannelsParams,
   SearchChannelsResponse,
   TagOperationParams,
+  UpstreamProtocol,
+  UpstreamProtocolProbeResult,
 } from './types'
 
 export type CodexOAuthStartResponse = {
@@ -185,6 +187,46 @@ export async function testChannel(
     ...CALLER_HANDLED_REQUEST_CONFIG,
     params,
   })
+  return res.data
+}
+
+/**
+ * Probe which upstream protocols the channel natively supports. The result is
+ * stored for review only; it does not change routing.
+ */
+export async function probeChannelProtocols(
+  id: number,
+  model?: string
+): Promise<{
+  success: boolean
+  message?: string
+  data?: UpstreamProtocolProbeResult
+}> {
+  const res = await api.post(
+    `/api/channel/${id}/protocols/probe`,
+    model ? { model } : {},
+    { ...CALLER_HANDLED_REQUEST_CONFIG, timeout: 240000 }
+  )
+  return res.data
+}
+
+/**
+ * Save the administrator-confirmed upstream protocols. An empty list restores
+ * the legacy behavior.
+ */
+export async function confirmChannelProtocols(
+  id: number,
+  protocols: UpstreamProtocol[]
+): Promise<{
+  success: boolean
+  message?: string
+  data?: { protocols: UpstreamProtocol[] }
+}> {
+  const res = await api.put(
+    `/api/channel/${id}/protocols`,
+    { protocols },
+    CALLER_HANDLED_REQUEST_CONFIG
+  )
   return res.data
 }
 

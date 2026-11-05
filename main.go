@@ -30,6 +30,7 @@ import (
 	"eflow.local/new-api/router"
 	"eflow.local/new-api/service"
 	"eflow.local/new-api/service/taskplugin"
+	"eflow.local/new-api/setting/operation_setting"
 	_ "eflow.local/new-api/setting/performance_setting"
 	"eflow.local/new-api/setting/ratio_setting"
 
@@ -324,6 +325,10 @@ func InitResources() error {
 
 	// Initialize model settings
 	ratio_setting.InitRatioSettings()
+	// eflow: 后台运行参数先取环境变量，随后 InitOptionMap 用数据库里的值覆盖。
+	if err := operation_setting.InitRuntimeLimitSettingFromEnv(); err != nil {
+		return fmt.Errorf("runtime limit settings: %w", err)
+	}
 
 	service.InitHttpClient()
 

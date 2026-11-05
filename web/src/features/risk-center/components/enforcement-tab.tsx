@@ -22,6 +22,7 @@ import {
   ServerPagination,
   useLatestRequest,
   useServerPagination,
+  TableEmpty,
 } from '@/components/data-table'
 import {
   fetchEnforcementConfig,
@@ -333,14 +334,7 @@ export function EnforcementTab() {
                     </TableRow>
                   ))
                 ) : counters.items.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className='text-muted-foreground py-8 text-center text-sm'
-                    >
-                      {t('No counters')}
-                    </TableCell>
-                  </TableRow>
+                  <TableEmpty colSpan={5} title={t('No counters')} />
                 ) : (
                   counters.items.map((c) => (
                     <TableRow key={c.id}>
@@ -392,14 +386,7 @@ export function EnforcementTab() {
                     </TableRow>
                   ))
                 ) : incidents.items.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className='text-muted-foreground py-8 text-center text-sm'
-                    >
-                      {t('No incidents')}
-                    </TableCell>
-                  </TableRow>
+                  <TableEmpty colSpan={6} title={t('No incidents')} />
                 ) : (
                   incidents.items.map((it) => (
                     <TableRow key={it.id}>

@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { CompactDateTimeRangePicker } from '../compact-date-time-range-picker'
+import { CompactDateTimeRangePicker } from '@/components/compact-date-time-range-picker'
 
 interface ExportLogsDialogProps {
   open: boolean

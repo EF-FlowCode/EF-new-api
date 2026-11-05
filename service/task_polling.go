@@ -17,23 +17,25 @@ import (
 	"eflow.local/new-api/relay/channel/task/taskcommon"
 	relaycommon "eflow.local/new-api/relay/common"
 	management "eflow.local/new-api/service/taskplugin"
+	"eflow.local/new-api/setting/operation_setting"
 )
 
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
 func sweepTimedOutTasks(ctx context.Context) {
-	if constant.TaskTimeoutMinutes <= 0 {
+	timeoutMinutes := operation_setting.TaskTimeoutMinutes()
+	if timeoutMinutes <= 0 {
 		return
 	}
-	cutoff := time.Now().Unix() - int64(constant.TaskTimeoutMinutes)*60
+	cutoff := time.Now().Unix() - int64(timeoutMinutes)*60
 	tasks := model.GetTimedOutUnfinishedTasks(cutoff, 100)
 	if len(tasks) == 0 {
 		return
 	}
 
 	const legacyTaskCutoff int64 = 1740182400 // 2026-02-22 00:00:00 UTC
-	reason := fmt.Sprintf("任务超时（%d分钟）", constant.TaskTimeoutMinutes)
+	reason := fmt.Sprintf("任务超时（%d分钟）", timeoutMinutes)
 	legacyReason := "任务超时（旧系统遗留任务，不进行退款，请联系管理员）"
 	now := time.Now().Unix()
 	timedOutCount := 0

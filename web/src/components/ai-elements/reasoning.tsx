@@ -8,8 +8,9 @@ import {
   useEffect,
   useState,
 } from 'react'
-import { useControllableState } from '@radix-ui/react-use-controllable-state'
 import { BrainIcon, ChevronDownIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { useControllableState } from '@/lib/use-controllable-state'
 import { cn } from '@/lib/utils'
 import {
   Collapsible,
@@ -120,39 +121,42 @@ export const Reasoning = memo(
 
 export type ReasoningTriggerProps = ComponentProps<typeof CollapsibleTrigger>
 
-const getThinkingMessage = (isStreaming: boolean, duration?: number) => {
-  if (isStreaming) {
-    return <Shimmer duration={1}>Thinking...</Shimmer>
-  }
-  // When duration is unknown or 0 (e.g., non-streaming responses), show a generic message
-  if (duration === undefined || duration === 0) {
-    return <p>Thought for a few seconds</p>
-  }
-  return <p>Thought for {duration} seconds</p>
-}
-
 export const ReasoningTrigger = memo(
   ({ className, children, ...props }: ReasoningTriggerProps) => {
     const { isStreaming, isOpen, duration } = useReasoning()
+    const { t } = useTranslation()
+    const thinkingText = t('Thought for {{duration}} seconds', {
+      duration: duration ?? 0,
+    })
 
     return (
       <CollapsibleTrigger
         className={cn(
-          'text-muted-foreground hover:text-foreground flex w-full items-center gap-2 text-sm transition-colors',
+          'text-muted-foreground hover:text-foreground inline-grid w-fit max-w-full grid-cols-[0.875rem_minmax(0,auto)_0.875rem] items-center gap-1.5 text-sm leading-none transition-colors [&_p]:m-0',
           className
         )}
         {...props}
       >
         {children ?? (
           <>
-            <BrainIcon className='size-4' />
-            {getThinkingMessage(isStreaming, duration)}
-            <ChevronDownIcon
-              className={cn(
-                'size-4 transition-transform',
-                isOpen ? 'rotate-180' : 'rotate-0'
+            <span className='grid size-3.5 place-items-center'>
+              <BrainIcon className='size-3.5' />
+            </span>
+            <span className='min-w-0 truncate leading-none'>
+              {isStreaming ? (
+                <Shimmer duration={1}>{t('Thinking...')}</Shimmer>
+              ) : (
+                thinkingText
               )}
-            />
+            </span>
+            <span className='grid size-3.5 place-items-center'>
+              <ChevronDownIcon
+                className={cn(
+                  'size-3.5 transition-transform duration-200 ease-out',
+                  isOpen ? 'rotate-180' : 'rotate-0'
+                )}
+              />
+            </span>
           </>
         )}
       </CollapsibleTrigger>
@@ -167,18 +171,30 @@ export type ReasoningContentProps = ComponentProps<
 }
 
 export const ReasoningContent = memo(
-  ({ className, children, ...props }: ReasoningContentProps) => (
-    <CollapsibleContent
-      className={cn(
-        'mt-4 text-sm',
-        'data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground data-[state=closed]:animate-out data-[state=open]:animate-in outline-none',
-        className
-      )}
-      {...props}
-    >
-      <Response className='grid gap-2'>{children}</Response>
-    </CollapsibleContent>
-  )
+  ({ className, children, ...props }: ReasoningContentProps) => {
+    const { isStreaming } = useReasoning()
+
+    return (
+      <CollapsibleContent
+        className={cn(
+          'CollapsibleContent group/reasoning-content border-border/70 mt-2 ml-1.5 border-l pl-3 text-sm leading-5',
+          'text-muted-foreground outline-none',
+          className
+        )}
+        {...props}
+      >
+        <div className='transition-[opacity,transform] duration-200 ease-out group-data-[state=closed]/reasoning-content:-translate-y-1 group-data-[state=closed]/reasoning-content:opacity-0 group-data-[state=open]/reasoning-content:translate-y-0 group-data-[state=open]/reasoning-content:opacity-100 motion-reduce:transition-none'>
+          <Response
+            className='grid gap-1.5 [&_li]:my-0.5 [&_ol]:my-1.5 [&_p]:my-1.5 [&_p]:leading-5 [&_ul]:my-1.5'
+            final={!isStreaming}
+            parserId='new-api-reasoning'
+          >
+            {children}
+          </Response>
+        </div>
+      </CollapsibleContent>
+    )
+  }
 )
 
 Reasoning.displayName = 'Reasoning'

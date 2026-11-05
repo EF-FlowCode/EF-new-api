@@ -19,7 +19,7 @@ export function SignIn() {
           </h2>
           {!status?.self_use_mode_enabled &&
             status?.register_enabled !== false && (
-              <p className='text-muted-foreground text-left text-sm sm:text-base'>
+              <p className='text-muted-foreground text-center text-sm sm:text-left sm:text-base'>
                 {t("Don't have an account?")}{' '}
                 <Link
                   to='/sign-up'
@@ -27,7 +27,6 @@ export function SignIn() {
                 >
                   {t('Sign up')}
                 </Link>
-                .
               </p>
             )}
         </div>

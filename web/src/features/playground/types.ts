@@ -3,57 +3,84 @@ export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type MessageStatus = 'loading' | 'streaming' | 'complete' | 'error'
 
-export interface MessageVersion {
-  id: string
-  // string: 纯文本（assistant 永远走这里）
-  // ContentPart[]: 多模态用户消息（文本 + 图片），由 buildMessageContent 生成
-  content: string | ContentPart[]
+export type PlaygroundMessageLayoutMode = 'alternating' | 'left'
+
+// 用户消息附件：图片和 PDF 以 data URL 原样发送；Word、纯文本在浏览器里
+// 提取成文字后作为文本发送
+export type MessageAttachmentKind = 'image' | 'file' | 'text'
+
+export interface MessageAttachment {
+  kind: MessageAttachmentKind
+  name: string
+  mediaType: string
+  // image / file：data URL；浏览器存储空间不足时本地历史里会丢弃
+  url?: string
+  // text：提取出的文字
+  text?: string
 }
 
-// 流式 <think> 增量解析器的状态。挂在 Message 上，逐 token 只处理新增 chunk，
-// 避免每 token 对全量内容重跑 parseThinkTags（O(n²)）。完成/加载时清除。
-export interface ThinkStreamState {
-  // 当前是否处于未闭合的 <think> 块内
-  inThink: boolean
-  // 尾部尚不能判定归属的部分（可能是被 chunk 边界截断的 <think> / </think>）
-  pending: string
-  // 已累积的思考内容
-  reasoning: string
-  // 已累积的可见正文
-  visible: string
+// 一次回答自己的状态；当前版本的放在 Message 上，其它版本存进 version.state
+export type MessageAnswerState = Pick<
+  Message,
+  | 'createdAt'
+  | 'startedAt'
+  | 'completedAt'
+  | 'durationMs'
+  | 'sources'
+  | 'reasoning'
+  | 'isReasoningStreaming'
+  | 'isReasoningComplete'
+  | 'isContentComplete'
+  | 'status'
+  | 'errorCode'
+>
+
+export interface MessageVersion {
+  id: string
+  content: string
+  // 非当前版本的回答状态（耗时、思考过程等），切换回来时恢复
+  state?: MessageAnswerState
 }
 
 export interface Message {
   key: string
   from: MessageRole
   versions: MessageVersion[]
+  // 当前显示的版本下标；缺省为最后一个（重新生成会追加新版本）
+  activeVersion?: number
+  createdAt?: number
+  startedAt?: number
+  completedAt?: number
+  durationMs?: number
   sources?: { href: string; title: string }[]
   reasoning?: {
     content: string
     duration: number
+    startedAt?: number
+    completedAt?: number
+    durationMs?: number
   }
   isReasoningStreaming?: boolean
   isReasoningComplete?: boolean
   isContentComplete?: boolean
   status?: MessageStatus
   errorCode?: string | null
-  // 流式期间的瞬态字段；finalizeMessage / 加载时清除，不进入最终持久态语义
-  thinkStream?: ThinkStreamState
-  streamingVisible?: string
+  // 用户消息附件，发送时与文本组成多模态 content
+  attachments?: MessageAttachment[]
 }
 
-// 一个独立会话：标题 + 消息列表。多会话持久化的基本单元。
+// 一个独立会话：标题 + 消息列表 + 该会话的系统提示词
 export interface Session {
   id: string
   title: string
   createdAt: number
   updatedAt: number
   messages: Message[]
-  // 该会话的系统提示词；发送时作为首条 system 注入 payload（不进消息列表 UI）
+  // 发送时作为首条 system 注入 payload，不进消息列表
   systemPrompt?: string
 }
 
-// 系统提示词预设（跨会话共享，独立持久化）
+// 系统提示词预设，跨会话共享
 export interface SystemPreset {
   id: string
   name: string
@@ -67,10 +94,14 @@ export interface ChatCompletionMessage {
 }
 
 export interface ContentPart {
-  type: 'text' | 'image_url'
+  type: 'text' | 'image_url' | 'file'
   text?: string
   image_url?: {
     url: string
+  }
+  file?: {
+    filename: string
+    file_data: string
   }
 }
 
@@ -97,10 +128,8 @@ export interface ChatCompletionChunk {
     delta: {
       role?: MessageRole
       content?: string
-      reasoning_content?: string
-      // grok-4 / OpenAI Responses-API-to-chat 等推理模型走 `reasoning`
-      // 字段（与 `reasoning_content` 同义），后端原样透传，前端兜底识别。
-      reasoning?: string
+      reasoning_content?: string | null
+      reasoning?: string | null
     }
     finish_reason: string | null
   }>
@@ -116,9 +145,8 @@ export interface ChatCompletionResponse {
     message: {
       role: MessageRole
       content: string
-      reasoning_content?: string
-      // 同 ChatCompletionChunk.delta：兼容 grok-4 等推理模型的 `reasoning`
-      reasoning?: string
+      reasoning_content?: string | null
+      reasoning?: string | null
     }
     finish_reason: string
   }>
@@ -160,7 +188,8 @@ export interface ModelOption {
 export interface GroupOption {
   label: string
   value: string
-  ratio: number
+  ratio: number | string
   desc?: string
+  // 网页分组地区访问控制：当前地区不可用的分组为 false
   available?: boolean
 }

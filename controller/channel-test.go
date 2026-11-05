@@ -38,6 +38,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// channelTestEndpointClaudeCode selects the Claude Code native test.
+const channelTestEndpointClaudeCode = "claude-code"
+
 type testResult struct {
 	context     *gin.Context
 	localErr    error
@@ -108,6 +111,14 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 				testModel = "gpt-4o-mini"
 			}
 		}
+	}
+
+	// eflow: Claude Code native test runs the real CLI in the cc-probe service.
+	if strings.TrimSpace(endpointType) == channelTestEndpointClaudeCode {
+		if _, err := service.RunClaudeCodeChannelTest(context.Background(), channel, testModel); err != nil {
+			return testResult{localErr: err, newAPIError: types.NewError(err, types.ErrorCodeBadResponse)}
+		}
+		return testResult{}
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)

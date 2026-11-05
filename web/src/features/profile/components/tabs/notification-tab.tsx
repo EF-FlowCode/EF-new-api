@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { Bell, Loader2, Mail, Server, Webhook } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
+import { getCurrencyLabel } from '@/lib/currency'
+import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,6 +15,7 @@ import { PasswordInput } from '@/components/password-input'
 import { updateUserSettings } from '../../api'
 import {
   DEFAULT_QUOTA_WARNING_THRESHOLD,
+  DEFAULT_TOKEN_QUOTA_WARNING_PERCENT,
   NOTIFICATION_METHODS,
 } from '../../constants'
 import { parseUserSettings } from '../../lib'
@@ -50,6 +54,9 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
     accept_unset_model_ratio_model: false,
     record_ip_log: false,
     upstream_model_update_notify_enabled: false,
+    token_quota_warning_disabled: false,
+    token_quota_warning_percent: DEFAULT_TOKEN_QUOTA_WARNING_PERCENT,
+    token_quota_warning_amount: 0,
   })
 
   // Update form field helper
@@ -79,6 +86,12 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
         record_ip_log: parsed.record_ip_log || false,
         upstream_model_update_notify_enabled:
           parsed.upstream_model_update_notify_enabled || false,
+        token_quota_warning_disabled:
+          parsed.token_quota_warning_disabled || false,
+        token_quota_warning_percent:
+          parsed.token_quota_warning_percent ??
+          DEFAULT_TOKEN_QUOTA_WARNING_PERCENT,
+        token_quota_warning_amount: parsed.token_quota_warning_amount ?? 0,
       })
     }
   }, [profile])
@@ -90,6 +103,15 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
 
       if (response.success) {
         toast.success(t('Settings updated successfully'))
+        // The API key list reads the warning settings from the auth store.
+        const { user, setUser } = useAuthStore.getState().auth
+        if (user) {
+          const current =
+            typeof user.setting === 'string'
+              ? parseUserSettings(user.setting)
+              : (user.setting ?? {})
+          setUser({ ...user, setting: { ...current, ...settings } })
+        }
         onUpdate()
       } else {
         toast.error(response.message || t('Failed to update settings'))
@@ -143,20 +165,111 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
 
       {/* Warning Threshold */}
       <div className='space-y-1.5'>
-        <Label htmlFor='threshold'>{t('Quota Warning Threshold')}</Label>
+        <Label htmlFor='threshold'>
+          {t('Balance Warning Threshold ({{currency}})', {
+            currency: getCurrencyLabel(),
+          })}
+        </Label>
         <Input
           id='threshold'
           type='number'
+          min={0}
+          step={0.01}
           className='h-9'
-          value={settings.quota_warning_threshold}
+          value={quotaUnitsToDollars(settings.quota_warning_threshold ?? 0)}
           onChange={(e) =>
-            updateField('quota_warning_threshold', Number(e.target.value))
+            updateField(
+              'quota_warning_threshold',
+              Math.max(
+                0,
+                Math.round(parseQuotaFromDollars(Number(e.target.value) || 0))
+              )
+            )
           }
           placeholder={t('Enter threshold')}
         />
         <p className='text-muted-foreground text-xs'>
-          {t('Get notified when balance falls below this value')}
+          {t('Notify once when your balance falls below this amount')}
         </p>
+      </div>
+
+      {/* eflow: API key quota warning (all limited keys) */}
+      <div className='space-y-3 rounded-lg border p-3 sm:p-4'>
+        <div className='flex items-start justify-between gap-3 sm:items-center'>
+          <div className='space-y-0.5'>
+            <Label htmlFor='tokenQuotaWarning'>
+              {t('API Key Quota Warning')}
+            </Label>
+            <p className='text-muted-foreground text-xs sm:text-sm'>
+              {t(
+                'Notify once when a limited API key falls below either line; topping the key back up re-arms the warning.'
+              )}
+            </p>
+          </div>
+          <Switch
+            id='tokenQuotaWarning'
+            className='shrink-0'
+            checked={!settings.token_quota_warning_disabled}
+            onCheckedChange={(checked) =>
+              updateField('token_quota_warning_disabled', !checked)
+            }
+          />
+        </div>
+        {!settings.token_quota_warning_disabled && (
+          <div className='grid gap-3 sm:grid-cols-2'>
+            <div className='space-y-1.5'>
+              <Label htmlFor='tokenQuotaWarningPercent'>
+                {t('Below percentage of key total (%)')}
+              </Label>
+              <Input
+                id='tokenQuotaWarningPercent'
+                type='number'
+                min={0}
+                max={100}
+                step={0.1}
+                className='h-9'
+                value={settings.token_quota_warning_percent}
+                onChange={(e) =>
+                  updateField(
+                    'token_quota_warning_percent',
+                    Number(e.target.value)
+                  )
+                }
+              />
+            </div>
+            <div className='space-y-1.5'>
+              <Label htmlFor='tokenQuotaWarningAmount'>
+                {t('Below amount ({{currency}})', {
+                  currency: getCurrencyLabel(),
+                })}
+              </Label>
+              <Input
+                id='tokenQuotaWarningAmount'
+                type='number'
+                min={0}
+                step={0.01}
+                className='h-9'
+                value={quotaUnitsToDollars(
+                  settings.token_quota_warning_amount ?? 0
+                )}
+                onChange={(e) =>
+                  updateField(
+                    'token_quota_warning_amount',
+                    Math.max(
+                      0,
+                      Math.round(
+                        parseQuotaFromDollars(Number(e.target.value) || 0)
+                      )
+                    )
+                  )
+                }
+              />
+            </div>
+            <p className='text-muted-foreground text-xs sm:col-span-2'>
+              {t('Set either value to 0 to turn that condition off.')}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Email Settings */}

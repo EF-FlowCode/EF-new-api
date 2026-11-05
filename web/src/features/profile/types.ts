@@ -100,6 +100,12 @@ export interface UserSettings {
   upstream_model_update_notify_enabled?: boolean
   /** Preferred interface/API response language */
   language?: string
+  /** eflow: API key quota warning, applies to every limited key */
+  token_quota_warning_disabled?: boolean
+  /** Warn when remaining falls below this percent of the key's total (0 = off) */
+  token_quota_warning_percent?: number
+  /** Warn when remaining falls below this quota amount (0 = off) */
+  token_quota_warning_amount?: number
 }
 
 /**
@@ -127,6 +133,9 @@ export interface UpdateUserSettingsRequest {
   accept_unset_model_ratio_model?: boolean
   record_ip_log?: boolean
   upstream_model_update_notify_enabled?: boolean
+  token_quota_warning_disabled?: boolean
+  token_quota_warning_percent?: number
+  token_quota_warning_amount?: number
 }
 
 /**

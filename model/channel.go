@@ -1082,29 +1082,43 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 // this fork, so only configurations with actual relay routes are path-filtered;
 // management-only configurations continue to use legacy Custom routing.
 func ChannelSupportsRequestPath(channel *Channel, requestPath string, modelName string) bool {
+	return ChannelRequestPathSupport(channel, requestPath, modelName) != RequestPathUnsupported
+}
+
+// ChannelRequestPathSupport is the three-state form used for native-first
+// ordering.
+func ChannelRequestPathSupport(channel *Channel, requestPath string, modelName string) RequestPathSupport {
 	if channel == nil {
-		return false
+		return RequestPathUnsupported
 	}
 	requestPath = normalizeChannelRequestPath(requestPath)
 	if requestPath == "/v1/batches" {
-		return ChannelSupportsKnowledgeBatch(channel, modelName)
+		if ChannelSupportsKnowledgeBatch(channel, modelName) {
+			return RequestPathNative
+		}
+		return RequestPathUnsupported
 	}
 	// Advanced Custom already has an explicit route matcher; ordinary channels
-	// use the optional allow-list override, else their type's capability.
+	// use the optional allow-list override, then the confirmed protocol set,
+	// else their type's capability.
 	if !constant.SupportsAdvancedCustomRoutes(channel.Type) {
-		if configured, supported := channelSupportsConfiguredEndpoint(channel, requestPath); configured {
-			return supported
+		configured, supported := channelSupportsConfiguredEndpoint(channel, requestPath)
+		if configured && !supported {
+			return RequestPathUnsupported
 		}
-		return channelTypeSupportsRequestPath(channel, requestPath, modelName)
+		protocol := constant.RequestPathUpstreamProtocol(requestPath)
+		if protocol != "" && ProtocolRoutingActive(channel) {
+			return declaredRequestPathSupport(channel, protocol, requestPath, modelName)
+		}
+		if !configured && !channelTypeSupportsRequestPath(channel, requestPath, modelName) {
+			return RequestPathUnsupported
+		}
+		return legacyRequestPathSupport(channel, protocol)
 	}
 	if requestPath == "" {
-		return true
+		return RequestPathNative
 	}
-	config := channel.GetOtherSettings().AdvancedCustom
-	if config == nil || !config.HasRelayRoutes() {
-		return true
-	}
-	return config.SupportsPathForModel(requestPath, strings.TrimSpace(modelName))
+	return advancedCustomRequestPathSupport(channel, requestPath, strings.TrimSpace(modelName))
 }
 
 // channelSupportsConfiguredEndpoint applies the optional per-channel endpoint

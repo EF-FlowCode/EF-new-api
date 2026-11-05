@@ -477,11 +477,18 @@ export const PromptInput = ({
       if (!accept || accept.trim() === '') {
         return true
       }
-      if (accept.includes('image/*')) {
-        return f.type.startsWith('image/')
-      }
-      // NOTE: keep simple; expand as needed
-      return true
+      // Same rules as <input accept>: ".ext", "type/*" or an exact MIME type.
+      const name = f.name.toLowerCase()
+      const type = f.type.toLowerCase()
+      return accept
+        .split(',')
+        .map((token) => token.trim().toLowerCase())
+        .some((token) => {
+          if (!token) return false
+          if (token.startsWith('.')) return name.endsWith(token)
+          if (token.endsWith('/*')) return type.startsWith(token.slice(0, -1))
+          return type === token
+        })
     },
     [accept]
   )
@@ -868,7 +875,10 @@ export const PromptInputTextarea = ({
 
   return (
     <InputGroupTextarea
-      className={cn('field-sizing-content max-h-48 min-h-16 wrap-anywhere', className)}
+      className={cn(
+        'field-sizing-content max-h-48 min-h-16 wrap-anywhere',
+        className
+      )}
       name='message'
       onCompositionEnd={() => setIsComposing(false)}
       onCompositionStart={() => setIsComposing(true)}

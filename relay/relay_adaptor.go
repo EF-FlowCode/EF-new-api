@@ -135,6 +135,10 @@ func GetAdaptorForInfo(info *relaycommon.RelayInfo) channel.Adaptor {
 	if info == nil || info.ChannelMeta == nil {
 		return nil
 	}
+	// eflow: protocol routing synthesizes a single route for this attempt.
+	if info.ProtocolRouteSynthesized() {
+		return &advancedcustom.Adaptor{}
+	}
 	if constant.SupportsAdvancedCustomRoutes(info.ChannelType) {
 		if config := info.ChannelOtherSettings.AdvancedCustom; config != nil && advancedCustomRelayRouteConfigured(config, info) {
 			return &advancedcustom.Adaptor{}

@@ -136,7 +136,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
+	streamingTimeout := time.Duration(operation_setting.StreamingTimeoutSeconds()) * time.Second
 
 	var (
 		stopChan    = make(chan bool, 3) // 增加缓冲区避免阻塞

@@ -1,6 +1,5 @@
 import z from 'zod'
 import { createFileRoute } from '@tanstack/react-router'
-import { AppHeader, Main } from '@/components/layout'
 import { TopupHistory } from '@/features/topup-history'
 
 const topupHistorySearchSchema = z.object({
@@ -15,18 +14,7 @@ const topupHistorySearchSchema = z.object({
   endTime: z.number().int().positive().optional().catch(undefined),
 })
 
-function TopupHistoryPage() {
-  return (
-    <>
-      <AppHeader />
-      <Main className='overflow-y-auto'>
-        <TopupHistory />
-      </Main>
-    </>
-  )
-}
-
 export const Route = createFileRoute('/_authenticated/topup-history/')({
   validateSearch: topupHistorySearchSchema,
-  component: TopupHistoryPage,
+  component: TopupHistory,
 })

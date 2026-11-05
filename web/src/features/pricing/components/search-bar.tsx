@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { getModifierKeyLabel } from '@/lib/dom-utils'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -60,7 +61,7 @@ export function SearchBar(props: SearchBarProps) {
           </Button>
         ) : (
           <kbd className='bg-muted text-muted-foreground pointer-events-none hidden rounded border px-1.5 py-0.5 font-mono text-[10px] sm:inline-block'>
-            ⌘K
+            {getModifierKeyLabel()} K
           </kbd>
         )}
       </div>

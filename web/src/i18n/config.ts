@@ -36,4 +36,13 @@ i18n
     },
   })
 
+// eflow: <html lang> 跟随界面语言，避免中文界面被浏览器当成英文页提示或自动翻译
+function syncDocumentLang() {
+  if (typeof document === 'undefined') return
+  const lng = i18n.resolvedLanguage || i18n.language
+  if (lng) document.documentElement.lang = lng === 'zh' ? 'zh-CN' : lng
+}
+i18n.on('languageChanged', syncDocumentLang)
+syncDocumentLang()
+
 export default i18n

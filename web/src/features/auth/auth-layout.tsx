@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ProjectAttribution } from '@/components/layout/components/footer'
 
 type AuthLayoutProps = {
   children: React.ReactNode
@@ -12,7 +13,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
   const { systemName, logo, loading } = useSystemConfig()
 
   return (
-    <div className='relative grid h-svh max-w-none'>
+    <div className='relative grid min-h-svh max-w-none grid-rows-[1fr_auto]'>
       <Link
         to='/'
         className='absolute top-4 left-4 z-10 flex items-center gap-2 transition-opacity hover:opacity-80 sm:top-8 sm:left-8'
@@ -39,6 +40,9 @@ export function AuthLayout({ children }: AuthLayoutProps) {
           {children}
         </div>
       </div>
+      <footer className='px-4 pb-4 sm:px-8 sm:pb-6'>
+        <ProjectAttribution currentYear={new Date().getFullYear()} />
+      </footer>
     </div>
   )
 }

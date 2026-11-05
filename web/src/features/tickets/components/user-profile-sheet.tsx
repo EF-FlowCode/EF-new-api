@@ -241,7 +241,7 @@ export function TicketUserProfileSheet({ ticketId, username, userId }: Props) {
                       <TableRow>
                         <TableHead className='w-40'>{t('Time')}</TableHead>
                         <TableHead>{t('Model')}</TableHead>
-                        <TableHead>{t('Token')}</TableHead>
+                        <TableHead>{t('API key')}</TableHead>
                         <TableHead className='w-24 text-right'>
                           {t('Cost')}
                         </TableHead>

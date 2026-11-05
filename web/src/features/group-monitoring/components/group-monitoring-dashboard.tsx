@@ -39,6 +39,7 @@ import {
   refreshAdminMonitoring,
   updateGroupMonitoringSettings,
 } from '../api'
+import { applyMonitoringToggles } from '../lib/monitoring-rules'
 import type { GroupListMeta, GroupSummary } from '../types'
 import { GroupDetailPanel } from './group-detail-panel'
 import { GroupStatusCard } from './group-status-card'
@@ -555,9 +556,9 @@ function EmptyState({
 }
 
 // eflow: admin 用的"分组管理"drawer。让站长直接在监控页里勾选哪些分组进监
-// 控、给每个分组打类别标签、调整类别在前端的渲染顺序。保存时一次 PUT
-// /api/option/group_monitoring_setting，覆盖 monitoring_groups / group_categories
-// / category_order 三个字段。
+// 控、给每个分组打类别标签、调整类别在前端的渲染顺序。保存时一次 bulk PUT
+// monitoring_groups / group_categories / category_order 三个字段；勾选结果经
+// applyMonitoringToggles 折回规则，保留 1_* 这类前缀规则，只追加 name / !name 例外。
 function ManageGroupsSheet({
   open,
   onOpenChange,
@@ -608,7 +609,11 @@ function ManageGroupsSheet({
   const onSave = async () => {
     setSaving(true)
     try {
-      const monitoring_groups = allGroups.filter((g) => enabled[g])
+      const monitoring_groups = applyMonitoringToggles(
+        meta.monitoring_rules ?? meta.monitored_groups ?? [],
+        allGroups,
+        new Set(allGroups.filter((g) => enabled[g]))
+      )
       // 删空 category 字符串避免脏数据落库。
       const group_categories: Record<string, string> = {}
       for (const [g, c] of Object.entries(categories)) {
@@ -655,6 +660,14 @@ function ManageGroupsSheet({
                 </span>
               </div>
             </div>
+            {(meta.monitoring_rules?.length ?? 0) > 0 && (
+              <p className='text-muted-foreground mb-2 text-xs'>
+                {t(
+                  'Current rules: {{rules}}. Checkbox changes are saved as name / !name exceptions and keep prefix rules intact.',
+                  { rules: meta.monitoring_rules?.join(', ') }
+                )}
+              </p>
+            )}
             <div className='space-y-1.5 rounded-md border'>
               {allGroups.length === 0 ? (
                 <div className='text-muted-foreground p-6 text-center text-sm'>

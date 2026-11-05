@@ -49,6 +49,9 @@ var accessTokenEflowRouteRules = map[string]accessTokenRouteRule{
 
 	// channel scheduler (admin-api reads it)
 	"GET /api/channel/:id/scheduler/state": accessTokenScopeRule("channel:read"),
+	// protocol routing: probing spends upstream quota like a channel test.
+	"POST /api/channel/:id/protocols/probe": accessTokenScopeRule("channel:operate"),
+	"PUT /api/channel/:id/protocols":        accessTokenScopeRule("channel:write"),
 
 	// invitation codes (admin)
 	"GET /api/invitation_code/":           accessTokenScopeRule("invitation_code:read"),

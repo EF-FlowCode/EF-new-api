@@ -65,10 +65,8 @@ export function ProfileSettingsCard({
             className='h-auto gap-2 rounded-lg px-3 py-2'
           >
             <Settings className='h-4 w-4' />
-            <span className='hidden sm:inline'>
-              {t('Settings & Preferences')}
-            </span>
-            <span className='sm:hidden'>{t('Settings')}</span>
+            {/* 外层页签已叫「设置与偏好」，这里实际是通知设置，别重名 */}
+            <span>{t('Notifications')}</span>
           </TabsTrigger>
         </TabsList>
 

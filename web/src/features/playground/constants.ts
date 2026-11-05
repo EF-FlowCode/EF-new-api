@@ -21,12 +21,9 @@ export const API_ENDPOINTS = {
   USER_GROUPS: '/api/user/self/groups',
 } as const
 
-// Default group
-// 空字符串 = 后端 distributor 的"未指定分组"分支（跳过 group 权限校验，
-// 走用户自己的默认 group）。沿用既有行为。
-// 'auto' 是真实可选项，但只有当用户的可用分组列表里**真的**带 'auto' 时
-// 才会出现在下拉里 —— 不再前端虚构。
-export const DEFAULT_GROUP = '' as const
+// Default group — uses 'default' as the safe fallback; auto-group is
+// only selected when the backend confirms it is available for the user.
+export const DEFAULT_GROUP = 'default' as const
 
 // Default configuration
 export const DEFAULT_CONFIG: PlaygroundConfig = {
@@ -53,6 +50,7 @@ export const DEFAULT_PARAMETER_ENABLED: ParameterEnabled = {
 // Storage keys
 export const STORAGE_KEYS = {
   CONFIG: 'playground_config',
+  // 单会话时代的消息，仅用于迁移进第一个会话
   MESSAGES: 'playground_messages',
   PARAMETER_ENABLED: 'playground_parameter_enabled',
   SESSIONS: 'playground_sessions',
@@ -60,8 +58,14 @@ export const STORAGE_KEYS = {
   SYSTEM_PRESETS: 'playground_system_presets',
 } as const
 
-// 新会话默认标题（首条用户消息到来时会被替换为其摘要）
+// 会话标题未派生前的占位（展示时翻译）
 export const DEFAULT_SESSION_TITLE = 'New Chat'
+
+// 附件：单个文件上限（图片、PDF 以 data URL 随请求发送）
+export const MAX_ATTACHMENT_FILE_SIZE = 20 * 1024 * 1024
+export const MAX_ATTACHMENT_FILES = 10
+// 提取出的文字单个文件上限，超出截断，避免撑爆上下文
+export const MAX_ATTACHMENT_TEXT_CHARS = 100_000
 
 // Error messages
 export const ERROR_MESSAGES = {
@@ -85,6 +89,8 @@ export const MESSAGE_ACTION_LABELS = {
   COPY: 'Copy',
   COPIED: 'Copied!',
   REGENERATE: 'Regenerate',
+  SHOW_PREVIEW: 'Show preview',
+  SHOW_SOURCE: 'Show source',
   EDIT: 'Edit',
   DELETE: 'Delete',
   NO_CONTENT: 'No content to copy',

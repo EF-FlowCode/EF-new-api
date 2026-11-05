@@ -7,6 +7,7 @@ package constant
 const (
 	EmailTemplateKeyPasswordReset       = "password_reset"
 	EmailTemplateKeyQuotaWarning        = "quota_warning"
+	EmailTemplateKeyTokenQuotaWarning   = "token_quota_warning"
 	EmailTemplateKeyTicketCreatedAdmin  = "ticket_created_admin"
 	EmailTemplateKeyTicketReplyUser     = "ticket_reply_user"
 	EmailTemplateKeyTicketReplyAdmin    = "ticket_reply_admin"
@@ -94,6 +95,22 @@ func EmailTemplateSpecs() []EmailTemplateSpec {
 			DefaultBody:           `<p>您好，您的账户当前剩余额度为 {{remaining_quota}}。</p><p>您可以在以下页面查看账户并补充余额：</p><p><a href="{{topup_url}}">{{topup_url}}</a></p>`,
 			PlainTextVariables:    true,
 			RequiredBodyVariables: []string{"remaining_quota", "topup_url"},
+		},
+		{
+			Key:         EmailTemplateKeyTokenQuotaWarning,
+			Name:        "API 密钥额度提醒",
+			Description: "限额 API 密钥的剩余额度低于用户设置的预警线且通知方式为邮件时发送，每次跌破只发一次。正文必须包含 token_name、remaining_quota 和 keys_url。变量作为文本填入，正文中自动进行 HTML 转义。",
+			Variables: []EmailTemplateVariable{
+				varSystemName,
+				{Name: "token_name", Description: "API 密钥名称（正文必填）", Sample: "my-app"},
+				{Name: "remaining_quota", Description: "该密钥剩余额度（含显示单位，正文必填）", Sample: "$0.50"},
+				{Name: "total_quota", Description: "该密钥总额度（已用 + 剩余，含显示单位）", Sample: "$10.00"},
+				{Name: "keys_url", Description: "API 密钥管理页面（正文必填；放入带引号的 href 属性及链接文字）", Sample: "https://example.com/keys"},
+			},
+			DefaultSubject:        "{{system_name}} API 密钥额度提醒",
+			DefaultBody:           `<p>您好，您的 API 密钥「{{token_name}}」剩余额度为 {{remaining_quota}}（总额度 {{total_quota}}），即将用尽。</p><p>额度用完后该密钥的请求会被拒绝，您可以在以下页面调整密钥额度：</p><p><a href="{{keys_url}}">{{keys_url}}</a></p>`,
+			PlainTextVariables:    true,
+			RequiredBodyVariables: []string{"token_name", "remaining_quota", "keys_url"},
 		},
 		{
 			Key:         EmailTemplateKeyTicketCreatedAdmin,

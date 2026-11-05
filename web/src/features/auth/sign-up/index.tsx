@@ -14,9 +14,9 @@ export function SignUp() {
       <div className='w-full space-y-8'>
         <div className='space-y-2'>
           <h2 className='text-center text-2xl font-semibold tracking-tight sm:text-left'>
-            {t('Create an account')}
+            {t('Create account')}
           </h2>
-          <p className='text-muted-foreground text-left text-sm sm:text-base'>
+          <p className='text-muted-foreground text-center text-sm sm:text-left sm:text-base'>
             {t('Already have an account?')}{' '}
             <Link
               to='/sign-in'
@@ -24,7 +24,6 @@ export function SignUp() {
             >
               {t('Sign in')}
             </Link>
-            .
           </p>
         </div>
 

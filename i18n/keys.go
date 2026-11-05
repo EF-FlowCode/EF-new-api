@@ -141,11 +141,13 @@ const (
 
 // Quota related messages
 const (
-	MsgQuotaNegative        = "quota.negative"
-	MsgQuotaExceedMax       = "quota.exceed_max"
-	MsgQuotaInsufficient    = "quota.insufficient"
-	MsgQuotaWarningInvalid  = "quota.warning_invalid"
-	MsgQuotaThresholdGtZero = "quota.threshold_gt_zero"
+	MsgQuotaNegative                   = "quota.negative"
+	MsgQuotaExceedMax                  = "quota.exceed_max"
+	MsgQuotaInsufficient               = "quota.insufficient"
+	MsgQuotaWarningInvalid             = "quota.warning_invalid"
+	MsgQuotaThresholdGtZero            = "quota.threshold_gt_zero"
+	MsgTokenQuotaWarningPercentRange   = "quota.token_warning_percent_range"
+	MsgTokenQuotaWarningAmountNegative = "quota.token_warning_amount_negative"
 )
 
 // Ticket related messages

@@ -55,6 +55,13 @@ export function metricLabel(value: string): string {
   return RISK_METRIC_DEFINITIONS.find((m) => m.value === value)?.label || value
 }
 
+/** 作用域 / 主体类型的 i18n key（token 即用户的 API 密钥） */
+export function riskScopeLabel(scope: string): string {
+  if (scope === 'user') return 'User'
+  if (scope === 'ip') return 'IP'
+  return 'API key'
+}
+
 export function formatRiskTime(unixSec: number | undefined): string {
   if (!unixSec) return '—'
   return new Date(unixSec * 1000).toLocaleString([], {

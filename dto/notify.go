@@ -14,6 +14,7 @@ const (
 	NotifyTypeTicketReply    = "ticket_reply"
 	NotifyTypeTicketStatus   = "ticket_status"
 	NotifyTypePaymentSuccess = "payment_success"
+	NotifyTypeTokenQuotaLow  = "token_quota_low"
 )
 
 func NewNotify(t string, title string, content string, values []any) Notify {

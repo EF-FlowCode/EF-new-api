@@ -20,13 +20,13 @@ func TestHTTPTransportPolicyAndCache(t *testing.T) {
 	http1Client, err := GetHttpClientWithProxySettings("", dto.ChannelSettings{HTTPProtocol: dto.HTTPProtocolHTTP1})
 	require.NoError(t, err)
 	assert.NotSame(t, defaultClient, http1Client)
-	transport := http1Client.Transport.(*http.Transport)
+	transport := http1Client.Transport.(*headerTimeoutRoundTripper).base.(*http.Transport)
 	assert.False(t, transport.ForceAttemptHTTP2)
 	assert.NotNil(t, transport.TLSNextProto)
 
 	shardedClient, err := GetHttpClientWithProxySettings("", dto.ChannelSettings{HTTP2ConnectionShards: 2})
 	require.NoError(t, err)
-	sharded := shardedClient.Transport.(*shardedRoundTripper)
+	sharded := shardedClient.Transport.(*headerTimeoutRoundTripper).base.(*shardedRoundTripper)
 	assert.Equal(t, []uint32{0, 1, 0}, []uint32{sharded.pickShard("a"), sharded.pickShard("a"), sharded.pickShard("a")})
 
 	ResetProxyClientCache()

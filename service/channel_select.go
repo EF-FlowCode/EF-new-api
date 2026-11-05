@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"strconv"
 
 	"eflow.local/new-api/common"
 	"eflow.local/new-api/constant"
@@ -96,6 +97,9 @@ func CacheGetRandomSatisfiedChannelWithPolicy(param *RetryParam, runtimePolicy R
 		routingModel = route.RoutingModel
 		filters = append(filters, func(ch *model.Channel) bool { return AllowsTaskPublicChannel(param.Ctx, ch) })
 	}
+	// eflow: a retry never re-selects a channel this request already tried.
+	exclude := triedChannelIDs(param.Ctx)
+	exhausted := false
 	autoGroupPolicy := runtimePolicy.AutoGroupPolicy
 	channelFailurePolicy := runtimePolicy.ChannelFailurePolicy
 	selectGroup := param.TokenGroup
@@ -132,7 +136,11 @@ func CacheGetRandomSatisfiedChannelWithPolicy(param *RetryParam, runtimePolicy R
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannelForRequest(autoGroup, routingModel, priorityRetry, param.RequestPath, filters...)
+			var groupErr error
+			channel, groupErr = model.GetRandomSatisfiedChannelForRequestExcluding(autoGroup, routingModel, priorityRetry, param.RequestPath, exclude, filters...)
+			if errors.Is(groupErr, model.ErrChannelsExhausted) {
+				exhausted = true
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -170,10 +178,31 @@ func CacheGetRandomSatisfiedChannelWithPolicy(param *RetryParam, runtimePolicy R
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannelForRequest(param.TokenGroup, routingModel, param.GetRetry(), param.RequestPath, filters...)
+		channel, err = model.GetRandomSatisfiedChannelForRequestExcluding(param.TokenGroup, routingModel, param.GetRetry(), param.RequestPath, exclude, filters...)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
+	if channel == nil && exhausted {
+		return nil, selectGroup, model.ErrChannelsExhausted
+	}
 	return channel, selectGroup, nil
+}
+
+// triedChannelIDs returns the channels already attempted by this request.
+func triedChannelIDs(c *gin.Context) map[int]struct{} {
+	if c == nil {
+		return nil
+	}
+	used := c.GetStringSlice("use_channel")
+	if len(used) == 0 {
+		return nil
+	}
+	tried := make(map[int]struct{}, len(used))
+	for _, id := range used {
+		if channelID, err := strconv.Atoi(id); err == nil {
+			tried[channelID] = struct{}{}
+		}
+	}
+	return tried
 }

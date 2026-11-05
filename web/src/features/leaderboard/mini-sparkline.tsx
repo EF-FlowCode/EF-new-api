@@ -20,8 +20,8 @@ export interface MiniSparklineProps {
 }
 
 const TONE_CLASS: Record<Tone, string> = {
-  perf: 'text-sky-500 dark:text-sky-400',
-  rank: 'text-amber-500 dark:text-amber-400',
+  perf: 'text-chart-2',
+  rank: 'text-primary',
 }
 
 export function MiniSparkline({

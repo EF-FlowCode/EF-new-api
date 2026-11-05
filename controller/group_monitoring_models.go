@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	perfmetrics "eflow.local/new-api/pkg/perf_metrics"
+	"eflow.local/new-api/service"
 	"eflow.local/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
@@ -12,7 +13,7 @@ import (
 // request/token counts. Model performance failure does not hide group status.
 func GetMonitoringModels(c *gin.Context) {
 	setting := operation_setting.GetGroupMonitoringSetting()
-	result, err := perfmetrics.QueryMonitoringModels(c.Request.Context(), setting.MonitoringGroups)
+	result, err := perfmetrics.QueryMonitoringModels(c.Request.Context(), service.MonitoredGroups(setting))
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "Failed to load model monitoring data"})
 		return

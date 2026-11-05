@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { cn } from '@/lib/utils'
 
@@ -23,6 +24,12 @@ export function SettingsSectionTabs({
   activeSection,
 }: SettingsSectionTabsProps) {
   const navigate = useNavigate()
+  const activeRef = useRef<HTMLButtonElement>(null)
+
+  // 窄屏横向滚动时把当前页签滚进可见区，不会停在半截
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeSection])
 
   // 单一 section 不需要 tab
   if (items.length <= 1) {
@@ -39,13 +46,11 @@ export function SettingsSectionTabs({
 
   return (
     <nav className='bg-background/95 border-border/70 sticky top-0 z-20 mb-4 flex min-w-0 gap-1 overflow-x-auto border-b py-1 backdrop-blur'>
-      <span className='text-muted-foreground me-2 flex shrink-0 items-center px-1 text-[10px] font-semibold tracking-[0.16em] uppercase'>
-        Settings
-      </span>
       <div className='flex min-w-0 gap-1'>
         {items.map((item) => (
           <button
             key={item.id}
+            ref={activeSection === item.id ? activeRef : undefined}
             type='button'
             onClick={() => handleChange(item.id)}
             className={cn(

@@ -65,8 +65,10 @@ import {
   ServerPagination,
   useLatestRequest,
   useServerPagination,
+  TableEmpty,
 } from '@/components/data-table'
 import { DateTimePicker } from '@/components/datetime-picker'
+import { PageFooterPortal, SectionPageLayout } from '@/components/layout'
 import {
   createInvitationCode,
   deleteInvalidInvitationCodes,
@@ -631,220 +633,227 @@ export function InvitationCodes() {
   }
 
   return (
-    <div className='px-4 py-6 sm:px-8'>
-      <div className='mx-auto w-full max-w-[1440px] space-y-5'>
-        <div className='flex flex-col gap-1'>
-          <h1 className='text-xl font-semibold tracking-tight'>
-            {t('Invitation codes')}
-          </h1>
-          <p className='text-muted-foreground text-sm'>
-            {t('Manage registration invitation codes and review their usage')}
-          </p>
-        </div>
-
-        {/* Action bar */}
-        <div className='bg-card flex flex-wrap items-center gap-2 rounded-xl border p-3'>
+    <>
+      <SectionPageLayout>
+        <SectionPageLayout.Title>
+          {t('Invitation codes')}
+        </SectionPageLayout.Title>
+        <SectionPageLayout.Description>
+          {t('Manage registration invitation codes and review their usage')}
+        </SectionPageLayout.Description>
+        <SectionPageLayout.Actions>
           <Button
+            variant='outline'
+            size='sm'
+            className='text-destructive hover:text-destructive'
+            onClick={() => setPendingClearInvalid(true)}
+          >
+            <Eraser className='h-4 w-4' />
+            {t('Clear invalid codes')}
+          </Button>
+          <Button
+            size='sm'
             onClick={() => {
               setEditingId(null)
               setEditOpen(true)
             }}
           >
-            <Plus className='mr-1.5 h-3.5 w-3.5' />
+            <Plus className='h-4 w-4' />
             {t('Create code')}
           </Button>
-          <Button variant='outline' onClick={refresh}>
-            <RefreshCw
-              className={cn('mr-1.5 h-3.5 w-3.5', loading && 'animate-spin')}
-            />
-            {t('Refresh')}
-          </Button>
-          <Button
-            variant='outline'
-            className='text-destructive hover:text-destructive'
-            onClick={() => setPendingClearInvalid(true)}
-          >
-            <Eraser className='mr-1.5 h-3.5 w-3.5' />
-            {t('Clear invalid codes')}
-          </Button>
-          <div className='ml-auto flex w-full items-center gap-2 sm:w-auto'>
-            <Input
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  applyKeyword()
-                }
-              }}
-              placeholder={t('Search name, code, creator or owner')}
-              className='sm:w-72'
-            />
-            <Button
-              variant='outline'
-              size='sm'
-              className='h-9 shrink-0 sm:h-8'
-              onClick={applyKeyword}
-            >
-              <Search className='size-3.5' />
-              {t('Search')}
-            </Button>
-          </div>
-        </div>
+        </SectionPageLayout.Actions>
+        <SectionPageLayout.Content>
+          <div className='space-y-3 sm:space-y-4'>
+            {/* Search bar */}
+            <div className='flex flex-wrap items-center gap-2'>
+              <div className='flex w-full items-center gap-2 sm:w-auto'>
+                <Input
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applyKeyword()
+                    }
+                  }}
+                  placeholder={t('Search name, code, creator or owner')}
+                  className='h-8 sm:w-72'
+                />
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className='h-8 shrink-0'
+                  onClick={applyKeyword}
+                >
+                  <Search className='size-3.5' />
+                  {t('Search')}
+                </Button>
+              </div>
+              <Button
+                variant='outline'
+                size='sm'
+                className='ml-auto h-8'
+                onClick={refresh}
+              >
+                <RefreshCw
+                  className={cn('size-3.5', loading && 'animate-spin')}
+                />
+                {t('Refresh')}
+              </Button>
+            </div>
 
-        {/* Table */}
-        <div className='bg-card overflow-x-auto rounded-xl border'>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className='w-16'>ID</TableHead>
-                <TableHead>{t('Name')}</TableHead>
-                <TableHead>{t('Code')}</TableHead>
-                <TableHead className='w-24'>{t('Status')}</TableHead>
-                <TableHead className='w-24'>{t('Uses')}</TableHead>
-                <TableHead className='w-20'>{t('Owner')}</TableHead>
-                <TableHead className='w-20'>{t('Creator')}</TableHead>
-                <TableHead className='w-20'>{t('Source')}</TableHead>
-                <TableHead className='w-40'>{t('Created')}</TableHead>
-                <TableHead className='w-40'>{t('Expires')}</TableHead>
-                <TableHead className='w-44'>{t('Actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading && items.length === 0 ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>
-                    {Array.from({ length: 11 }).map((_, j) => (
-                      <TableCell key={j}>
-                        <Skeleton className='h-4 w-full' />
-                      </TableCell>
-                    ))}
+            {/* Table */}
+            <div className='overflow-x-auto rounded-md border'>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className='w-16'>ID</TableHead>
+                    <TableHead>{t('Name')}</TableHead>
+                    <TableHead>{t('Code')}</TableHead>
+                    <TableHead className='w-24'>{t('Status')}</TableHead>
+                    <TableHead className='w-24'>{t('Uses')}</TableHead>
+                    <TableHead className='w-20'>{t('Owner')}</TableHead>
+                    <TableHead className='w-20'>{t('Creator')}</TableHead>
+                    <TableHead className='w-20'>{t('Source')}</TableHead>
+                    <TableHead className='w-40'>{t('Created')}</TableHead>
+                    <TableHead className='w-40'>{t('Expires')}</TableHead>
+                    <TableHead className='w-44'>{t('Actions')}</TableHead>
                   </TableRow>
-                ))
-              ) : items.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={11}
-                    className='text-muted-foreground py-12 text-center text-sm'
-                  >
-                    {t('No invitation codes')}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                items.map((record) => (
-                  <TableRow key={record.id}>
-                    <TableCell className='font-mono'>{record.id}</TableCell>
-                    <TableCell>{record.name || '—'}</TableCell>
-                    <TableCell>
-                      <Badge variant='outline' className='font-mono'>
-                        {record.code}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge record={record} />
-                    </TableCell>
-                    <TableCell className='font-mono text-xs'>
-                      {record.used_count}/
-                      {record.max_uses === 0 ? '∞' : record.max_uses}
-                    </TableCell>
-                    <TableCell className='font-mono'>
-                      {record.owner_user_id === 0 ? '—' : record.owner_user_id}
-                    </TableCell>
-                    <TableCell className='font-mono'>
-                      {record.created_by}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant='outline'
-                        className={cn(
-                          'font-normal',
-                          record.is_admin
-                            ? 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                            : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400'
-                        )}
-                      >
-                        {record.is_admin ? t('Admin') : t('User')}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className='text-muted-foreground text-xs'>
-                      {formatTimestamp(record.created_time)}
-                    </TableCell>
-                    <TableCell className='text-muted-foreground text-xs'>
-                      {record.expired_time === 0
-                        ? t('Never')
-                        : formatTimestamp(record.expired_time)}
-                    </TableCell>
-                    <TableCell>
-                      <div className='flex items-center gap-1'>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          onClick={() => handleCopy(record.code)}
-                        >
-                          <Copy className='mr-1.5 h-3 w-3' />
-                          {t('Copy')}
-                        </Button>
-                        <Button
-                          size='sm'
-                          variant='ghost'
-                          onClick={() => {
-                            setUsagesRecord(record)
-                            setUsagesOpen(true)
-                          }}
-                        >
-                          <History className='mr-1.5 h-3 w-3' />
-                          {t('Usages')}
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
+                </TableHeader>
+                <TableBody>
+                  {loading && items.length === 0 ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <TableRow key={i}>
+                        {Array.from({ length: 11 }).map((_, j) => (
+                          <TableCell key={j}>
+                            <Skeleton className='h-4 w-full' />
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))
+                  ) : items.length === 0 ? (
+                    <TableEmpty colSpan={11} title={t('No invitation codes')} />
+                  ) : (
+                    items.map((record) => (
+                      <TableRow key={record.id}>
+                        <TableCell className='font-mono'>{record.id}</TableCell>
+                        <TableCell>{record.name || '—'}</TableCell>
+                        <TableCell>
+                          <Badge variant='outline' className='font-mono'>
+                            {record.code}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge record={record} />
+                        </TableCell>
+                        <TableCell className='font-mono text-xs'>
+                          {record.used_count}/
+                          {record.max_uses === 0 ? '∞' : record.max_uses}
+                        </TableCell>
+                        <TableCell className='font-mono'>
+                          {record.owner_user_id === 0
+                            ? '—'
+                            : record.owner_user_id}
+                        </TableCell>
+                        <TableCell className='font-mono'>
+                          {record.created_by}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant='outline'
+                            className={cn(
+                              'font-normal',
+                              record.is_admin
+                                ? 'border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                                : 'border-cyan-500/40 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400'
+                            )}
+                          >
+                            {record.is_admin ? t('Admin') : t('User')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className='text-muted-foreground text-xs'>
+                          {formatTimestamp(record.created_time)}
+                        </TableCell>
+                        <TableCell className='text-muted-foreground text-xs'>
+                          {record.expired_time === 0
+                            ? t('Never')
+                            : formatTimestamp(record.expired_time)}
+                        </TableCell>
+                        <TableCell>
+                          <div className='flex items-center gap-1'>
                             <Button
-                              size='icon'
-                              variant='ghost'
-                              className='h-8 w-8'
+                              size='sm'
+                              variant='outline'
+                              onClick={() => handleCopy(record.code)}
                             >
-                              <MoreHorizontal className='h-3.5 w-3.5' />
+                              <Copy className='mr-1.5 h-3 w-3' />
+                              {t('Copy')}
                             </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align='end'>
-                            <DropdownMenuItem
+                            <Button
+                              size='sm'
+                              variant='ghost'
                               onClick={() => {
-                                setEditingId(record.id)
-                                setEditOpen(true)
+                                setUsagesRecord(record)
+                                setUsagesOpen(true)
                               }}
                             >
-                              {t('Edit')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleToggleStatus(record)}
-                            >
-                              {record.status === INVITATION_CODE_STATUS.ENABLED
-                                ? t('Disable')
-                                : t('Enable')}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => setPendingDelete(record)}
-                              className='text-destructive focus:text-destructive'
-                            >
-                              <Trash2 className='mr-1.5 h-3 w-3' />
-                              {t('Delete')}
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        <ServerPagination
-          table={pagination.table}
-          total={total}
-          loading={loading}
-        />
-      </div>
+                              <History className='mr-1.5 h-3 w-3' />
+                              {t('Usages')}
+                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  size='icon'
+                                  variant='ghost'
+                                  className='h-8 w-8'
+                                >
+                                  <MoreHorizontal className='h-3.5 w-3.5' />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align='end'>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setEditingId(record.id)
+                                    setEditOpen(true)
+                                  }}
+                                >
+                                  {t('Edit')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleToggleStatus(record)}
+                                >
+                                  {record.status ===
+                                  INVITATION_CODE_STATUS.ENABLED
+                                    ? t('Disable')
+                                    : t('Enable')}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => setPendingDelete(record)}
+                                  className='text-destructive focus:text-destructive'
+                                >
+                                  <Trash2 className='mr-1.5 h-3 w-3' />
+                                  {t('Delete')}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+          <PageFooterPortal>
+            <ServerPagination
+              table={pagination.table}
+              total={total}
+              loading={loading}
+            />
+          </PageFooterPortal>
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
 
       <EditInvitationCodeDrawer
         open={editOpen}
@@ -914,6 +923,6 @@ export function InvitationCodes() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   )
 }

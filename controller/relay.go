@@ -27,6 +27,7 @@ import (
 	"eflow.local/new-api/service/multi_key_scheduler"
 	management "eflow.local/new-api/service/taskplugin"
 	"eflow.local/new-api/setting"
+	"eflow.local/new-api/setting/model_setting"
 	"eflow.local/new-api/setting/operation_setting"
 	"eflow.local/new-api/types"
 
@@ -263,6 +264,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		channel, channelErr := getChannelWithPolicy(c, relayInfo, retryParam, relayRuntimePolicy)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
+			if errors.Is(channelErr, model.ErrChannelsExhausted) && newAPIError != nil {
+				break
+			}
 			newAPIError = channelErr
 			break
 		}
@@ -346,15 +350,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
-		switch relayFormat {
-		case types.RelayFormatOpenAIRealtime:
-			newAPIError = relay.WssHelper(c, relayInfo)
-		case types.RelayFormatClaude:
-			newAPIError = relay.ClaudeHelper(c, relayInfo)
-		case types.RelayFormatGemini:
-			newAPIError = geminiRelayHandler(c, relayInfo)
-		default:
-			newAPIError = relayHandler(c, relayInfo)
+		common.SetContextKey(c, constant.ContextKeyProtocolFallback, false)
+		newAPIError = dispatchRelay(c, relayFormat, relayInfo)
+		// eflow: a failed native attempt may retry once on the same channel
+		// through Chat. Both attempts
+		// count as one channel retry; only the final one feeds auto-disable.
+		if newAPIError != nil && relayInfo.ProtocolAttemptMode == relaycommon.ProtocolAttemptNative {
+			if fallbackErr, tried := tryProtocolChatFallback(c, relayFormat, relayInfo, channel, newAPIError); tried {
+				newAPIError = fallbackErr
+			}
+		} else if relayInfo.ProtocolAttemptMode != "" {
+			recordProtocolAttempt(c, channel.Id, relayInfo.ProtocolAttemptMode, newAPIError, "")
 		}
 
 		if newAPIError == nil {
@@ -407,6 +413,87 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+func dispatchRelay(c *gin.Context, relayFormat types.RelayFormat, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	switch relayFormat {
+	case types.RelayFormatOpenAIRealtime:
+		return relay.WssHelper(c, relayInfo)
+	case types.RelayFormatClaude:
+		return relay.ClaudeHelper(c, relayInfo)
+	case types.RelayFormatGemini:
+		return geminiRelayHandler(c, relayInfo)
+	default:
+		return relayHandler(c, relayInfo)
+	}
+}
+
+// tryProtocolChatFallback classifies a failed native attempt and, when the
+// error allows it and the channel can fall back, repeats the request on the
+// same channel through Chat. tried is false when no fallback ran; the native
+// error then follows the normal retry rules.
+func tryProtocolChatFallback(c *gin.Context, relayFormat types.RelayFormat, relayInfo *relaycommon.RelayInfo, channel *model.Channel, nativeErr *types.NewAPIError) (*types.NewAPIError, bool) {
+	routing := model_setting.GetGlobalSettings().ProtocolRouting
+	action, reason := service.ClassifyProtocolFailure(nativeErr, routing)
+	recordProtocolAttempt(c, channel.Id, relaycommon.ProtocolAttemptNative, nativeErr, reason)
+	if action == service.ProtocolFailureReturn {
+		return types.NewErrorWithStatusCode(nativeErr.Err, nativeErr.GetErrorCode(), nativeErr.StatusCode, types.ErrOptionWithSkipRetry()), true
+	}
+	if action != service.ProtocolFailureChatFallback || relaycommon.ResponseOutputWritten(c) {
+		return nativeErr, false
+	}
+	settings := channel.GetOtherSettings()
+	if !settings.AllowsUpstreamProtocol(constant.UpstreamProtocolChat) || model.ChannelPassThroughBody(channel) {
+		return nativeErr, false
+	}
+	logger.LogInfo(c, fmt.Sprintf("protocol routing: channel #%d native %s failed (%s, status %d), retrying through Chat", channel.Id, relayInfo.RequestURLPath, reason, nativeErr.StatusCode))
+	if operation_setting.ErrorLogEnabled() && types.IsRecordErrorLog(nativeErr) {
+		recordProtocolNativeErrorLog(c, channel, nativeErr)
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nativeErr, false
+	}
+	c.Request.Body = io.NopCloser(storage)
+	common.SetContextKey(c, constant.ContextKeyProtocolFallback, true)
+	defer common.SetContextKey(c, constant.ContextKeyProtocolFallback, false)
+	fallbackErr := dispatchRelay(c, relayFormat, relayInfo)
+	recordProtocolAttempt(c, channel.Id, relaycommon.ProtocolAttemptChatFallback, fallbackErr, "")
+	return fallbackErr, true
+}
+
+// recordProtocolAttempt appends one attempt to the admin-only protocol log.
+func recordProtocolAttempt(c *gin.Context, channelID int, mode string, apiErr *types.NewAPIError, reason string) {
+	attempt := map[string]any{"channel_id": channelID, "mode": mode, "status": http.StatusOK}
+	if apiErr != nil {
+		attempt["status"] = apiErr.StatusCode
+	}
+	if reason != "" {
+		attempt["fallback_reason"] = reason
+	}
+	attempts, _ := common.GetContextKeyType[[]map[string]any](c, constant.ContextKeyProtocolAttempts)
+	common.SetContextKey(c, constant.ContextKeyProtocolAttempts, append(attempts, attempt))
+}
+
+// recordProtocolNativeErrorLog keeps the failed native attempt in the error
+// log without feeding channel auto-disable.
+func recordProtocolNativeErrorLog(c *gin.Context, channel *model.Channel, nativeErr *types.NewAPIError) {
+	other := map[string]any{
+		"error_type":  nativeErr.GetErrorType(),
+		"error_code":  nativeErr.GetErrorCode(),
+		"status_code": nativeErr.StatusCode,
+		"admin_info":  map[string]any{"use_channel": c.GetStringSlice("use_channel"), "protocol_attempt": relaycommon.ProtocolAttemptNative},
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		other["request_path"] = c.Request.URL.Path
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	model.RecordErrorLog(c, c.GetInt("id"), channel.Id, c.GetString("original_model"), c.GetString("token_name"),
+		nativeErr.MaskSensitiveErrorWithStatusCode(), c.GetInt("token_id"), int(time.Since(startTime).Seconds()),
+		common.GetContextKeyBool(c, constant.ContextKeyIsStream), c.GetString("group"), other)
+}
+
 func addUsedChannel(c *gin.Context, channelId int) {
 	useChannel := c.GetStringSlice("use_channel")
 	useChannel = append(useChannel, fmt.Sprintf("%d", channelId))
@@ -455,6 +542,10 @@ func getChannelWithPolicy(c *gin.Context, info *relaycommon.RelayInfo, retryPara
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannelWithPolicy(retryParam, runtimePolicy)
 
+	if errors.Is(err, model.ErrChannelsExhausted) {
+		// eflow: every candidate was tried; the caller keeps the last upstream error.
+		return nil, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
 	if err != nil {
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 	}
@@ -671,7 +762,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		})
 	}
 
-	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
+	if operation_setting.ErrorLogEnabled() && types.IsRecordErrorLog(err) {
 		// 保存错误日志到mysql中
 		userId := c.GetInt("id")
 		tokenName := c.GetString("token_name")
@@ -691,6 +782,9 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other["channel_type"] = c.GetInt("channel_type")
 		adminInfo := make(map[string]any)
 		adminInfo["use_channel"] = c.GetStringSlice("use_channel")
+		if attempts, ok := common.GetContextKeyType[[]map[string]any](c, constant.ContextKeyProtocolAttempts); ok && len(attempts) > 0 {
+			adminInfo["protocol_attempts"] = attempts
+		}
 		isMultiKey := common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey)
 		if isMultiKey {
 			adminInfo["is_multi_key"] = true
@@ -842,6 +936,9 @@ func RelayTask(c *gin.Context) {
 			channel, channelErr = getChannelWithPolicy(c, relayInfo, retryParam, relayRuntimePolicy)
 			if channelErr != nil {
 				logger.LogError(c, channelErr.Error())
+				if errors.Is(channelErr, model.ErrChannelsExhausted) && taskErr != nil {
+					break
+				}
 				taskErr = service.TaskErrorWrapperLocal(channelErr.Err, "get_channel_failed", http.StatusInternalServerError)
 				break
 			}

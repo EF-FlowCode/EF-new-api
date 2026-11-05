@@ -6,6 +6,8 @@ import {
   type ReactNode,
 } from 'react'
 import { useLocation } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
+import { isInWorkspace, WORKSPACE_IDS } from '../lib/workspace-registry'
 import { AppHeader } from './app-header'
 import { Main } from './main'
 import { PageFooterProvider } from './page-footer'
@@ -42,15 +44,14 @@ export type SectionPageLayoutProps = {
 }
 
 export function SectionPageLayout(props: SectionPageLayoutProps) {
+  const { t } = useTranslation()
   const [footerContainer, setFooterContainer] = useState<HTMLDivElement | null>(
     null
   )
   const { pathname } = useLocation()
-  const isAdminSurface =
-    pathname.startsWith('/system-settings') ||
-    /^\/(channels|users|models|redemption-codes|invitation-codes|admin-tickets|risk-center|usage-logs|keys)/.test(
-      pathname
-    )
+  // 管理样式跟侧栏 workspace 走：侧栏切到「管理员」的页面才是管理面，
+  // 普通用户的 API 密钥 / 使用日志不再套管理后台的眉标和底色带
+  const isAdminSurface = isInWorkspace(pathname, WORKSPACE_IDS.SYSTEM_SETTINGS)
 
   let title: ReactNode = null
   let description: ReactNode = null
@@ -81,15 +82,15 @@ export function SectionPageLayout(props: SectionPageLayoutProps) {
           className={
             isAdminSurface
               ? 'bg-muted/20 shrink-0 border-b px-3 py-3 sm:px-5 sm:py-4'
-              : 'shrink-0 px-3 pt-3 pb-2.5 sm:px-4 sm:pt-6 sm:pb-4'
+              : 'shrink-0 px-3 pt-3 pb-2.5 sm:px-5 sm:pt-6 sm:pb-4'
           }
         >
           <div className='mx-auto w-full max-w-[1600px]'>
             {breadcrumb != null && <div className='mb-2'>{breadcrumb}</div>}
             <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:gap-x-4'>
               <div className='min-w-0'>
-                <div className='text-muted-foreground mb-1 text-[10px] font-semibold tracking-[0.18em] uppercase'>
-                  {isAdminSurface ? 'Operations' : 'Workspace'}
+                <div className='text-muted-foreground mb-1 text-[10px] font-semibold tracking-[0.18em] uppercase max-sm:hidden'>
+                  {isAdminSurface ? t('Admin console') : t('Console')}
                 </div>
                 <h2 className='truncate text-base font-bold tracking-tight sm:text-lg'>
                   {title}

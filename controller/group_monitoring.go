@@ -16,7 +16,7 @@ import (
 
 func GetAdminMonitoringGroups(c *gin.Context) {
 	setting := operation_setting.GetGroupMonitoringSetting()
-	monitoringGroups := setting.MonitoringGroups
+	monitoringGroups := service.MonitoredGroups(setting)
 
 	// eflow: 自动列出系统里所有分组（来自 group_ratio 配置）+ union 当前
 	// MonitoringGroups。让管理员能在 UI 里直接勾选/取消勾选哪些分组进监控列表，
@@ -64,6 +64,7 @@ func GetAdminMonitoringGroups(c *gin.Context) {
 		"data":             orderedStats,
 		"all_groups":       allGroups,
 		"monitored_groups": monitoringGroups,
+		"monitoring_rules": setting.MonitoringGroups,
 		"categories":       categories,
 		"category_order":   categoryOrder,
 	})
@@ -225,7 +226,7 @@ func DeleteMonitoringGroupRecords(c *gin.Context) {
 func GetPublicMonitoringGroups(c *gin.Context) {
 	setting := operation_setting.GetGroupMonitoringSetting()
 
-	monitoringGroups := setting.MonitoringGroups
+	monitoringGroups := service.MonitoredGroups(setting)
 	if len(monitoringGroups) == 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
@@ -284,7 +285,7 @@ func GetPublicMonitoringGroupHistory(c *gin.Context) {
 		return
 	}
 
-	monitoringGroups := setting.MonitoringGroups
+	monitoringGroups := service.MonitoredGroups(setting)
 	found := slices.Contains(monitoringGroups, groupName)
 	if !found {
 		c.JSON(http.StatusForbidden, gin.H{

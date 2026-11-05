@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- eflow: 浏览器翻译会改写 React 管理的 DOM，触发 insertBefore NotFoundError 白屏（同上游） -->
+    <meta name="google" content="notranslate" />
 
     <!-- PWA: installable web app. The manifest, icons and home-screen title are
          injected at runtime from the deployment's configured System Name + Logo
@@ -33,6 +35,6 @@
       >请启用 JavaScript 以使用本应用。Please enable JavaScript to use this
       app.</noscript
     >
-    <div id="root"></div>
+    <div id="root" translate="no" class="notranslate"></div>
   </body>
 </html>

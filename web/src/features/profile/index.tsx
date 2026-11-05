@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { useStatus } from '@/hooks/use-status'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { AppHeader, Main } from '@/components/layout'
+import { SectionPageLayout } from '@/components/layout'
 import {
   CardStaggerContainer,
   CardStaggerItem,
@@ -27,61 +27,62 @@ export function Profile() {
   const canConfigureSidebar = permissions?.sidebar_settings !== false
 
   return (
-    <>
-      <AppHeader />
-      <Main>
-        <div className='min-h-0 flex-1 overflow-auto px-3 py-3 sm:px-4 sm:py-6'>
-          <CardStaggerContainer className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-6'>
-            <CardStaggerItem>
-              <ProfileHeader profile={profile} loading={loading} />
-            </CardStaggerItem>
+    <SectionPageLayout>
+      <SectionPageLayout.Title>{t('Profile')}</SectionPageLayout.Title>
+      <SectionPageLayout.Description>
+        {t('Manage your account, preferences and security')}
+      </SectionPageLayout.Description>
+      <SectionPageLayout.Content>
+        <CardStaggerContainer className='flex w-full flex-col gap-4 sm:gap-6'>
+          <CardStaggerItem>
+            <ProfileHeader profile={profile} loading={loading} />
+          </CardStaggerItem>
 
-            <CardStaggerItem>
-              <Tabs defaultValue='preferences' className='w-full'>
-                <TabsList className='grid h-auto w-full max-w-md grid-cols-2'>
-                  <TabsTrigger value='preferences'>
-                    {t('Settings & Preferences')}
-                  </TabsTrigger>
-                  <TabsTrigger value='security'>{t('Security')}</TabsTrigger>
-                </TabsList>
+          <CardStaggerItem>
+            <Tabs defaultValue='preferences' className='w-full'>
+              <TabsList className='grid h-auto w-full max-w-md grid-cols-2'>
+                <TabsTrigger value='preferences'>
+                  {t('Settings & Preferences')}
+                </TabsTrigger>
+                <TabsTrigger value='security'>{t('Security')}</TabsTrigger>
+              </TabsList>
 
-                <TabsContent value='preferences' className='mt-4 sm:mt-5'>
-                  <div className='grid gap-4 sm:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.46fr)] xl:items-start'>
-                    <div className='space-y-4 sm:space-y-6'>
-                      <ProfileSettingsCard
-                        profile={profile}
-                        loading={loading}
-                        onProfileUpdate={refreshProfile}
-                      />
-                      <LanguagePreferencesCard
-                        profile={profile}
-                        onProfileUpdate={refreshProfile}
-                      />
-                    </div>
-
-                    <div className='space-y-4 sm:space-y-6 xl:sticky xl:top-6'>
-                      {checkinEnabled && (
-                        <CheckinCalendarCard checkinEnabled={checkinEnabled} />
-                      )}
-                      {canConfigureSidebar && <SidebarModulesCard />}
-                    </div>
+              <TabsContent value='preferences' className='mt-4 sm:mt-5'>
+                <div className='grid gap-4 sm:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.46fr)] xl:items-start'>
+                  <div className='space-y-4 sm:space-y-6'>
+                    <ProfileSettingsCard
+                      profile={profile}
+                      loading={loading}
+                      onProfileUpdate={refreshProfile}
+                    />
+                    <LanguagePreferencesCard
+                      profile={profile}
+                      onProfileUpdate={refreshProfile}
+                    />
                   </div>
-                </TabsContent>
 
-                <TabsContent value='security' className='mt-4 sm:mt-5'>
-                  <div className='grid gap-4 sm:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.46fr)] xl:items-start'>
-                    <ProfileSecurityCard profile={profile} loading={loading} />
-                    <div className='space-y-4 sm:space-y-6 xl:sticky xl:top-6'>
-                      <PasskeyCard loading={loading} />
-                      <TwoFACard loading={loading} />
-                    </div>
+                  <div className='space-y-4 sm:space-y-6 xl:sticky xl:top-6'>
+                    {checkinEnabled && (
+                      <CheckinCalendarCard checkinEnabled={checkinEnabled} />
+                    )}
+                    {canConfigureSidebar && <SidebarModulesCard />}
                   </div>
-                </TabsContent>
-              </Tabs>
-            </CardStaggerItem>
-          </CardStaggerContainer>
-        </div>
-      </Main>
-    </>
+                </div>
+              </TabsContent>
+
+              <TabsContent value='security' className='mt-4 sm:mt-5'>
+                <div className='grid gap-4 sm:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.46fr)] xl:items-start'>
+                  <ProfileSecurityCard profile={profile} loading={loading} />
+                  <div className='space-y-4 sm:space-y-6 xl:sticky xl:top-6'>
+                    <PasskeyCard loading={loading} />
+                    <TwoFACard loading={loading} />
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </CardStaggerItem>
+        </CardStaggerContainer>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
   )
 }

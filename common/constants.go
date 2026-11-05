@@ -66,9 +66,10 @@ var BatchUpdateInterval int
 var RelayTimeout int // unit is second
 
 // RelayResponseHeaderTimeout 限制 relay http client 从发完请求到收到上游响应头的等待时长（秒）。
-// 0 = 不限制（Go 默认）。仅覆盖"首字节/响应头之前"的等待，不影响收到响应头之后的流式生成，
-// 因此即便全局开启也不会误杀合法的慢生成（健康上游响应头通常秒级返回）。
+// 0 = 不限制（Go 默认）。仅覆盖"首字节/响应头之前"的等待，不影响收到响应头之后的流式生成。
 // 用于根治百炼/DashScope 偶发"接了连接但永不吐响应头"导致请求挂死数十分钟、占满 key 并发槽的问题。
+// eflow: 现在只作为后台 runtime_limit_setting 两个响应头超时的初始值；非流式请求的响应头要等
+// 结果全部生成完才返回，单独设上限，见 service/http_header_timeout.go。
 var RelayResponseHeaderTimeout int // unit is second
 
 var RelayIdleConnTimeout int // unit is second

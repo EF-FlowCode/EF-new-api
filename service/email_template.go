@@ -80,6 +80,16 @@ func RenderQuotaWarningEmail(systemName, remainingQuota, topupURL string) (strin
 	})
 }
 
+func RenderTokenQuotaWarningEmail(systemName, tokenName, remainingQuota, totalQuota, keysURL string) (string, string) {
+	return RenderEmailByKey(constant.EmailTemplateKeyTokenQuotaWarning, map[string]string{
+		"system_name":     systemName,
+		"token_name":      tokenName,
+		"remaining_quota": remainingQuota,
+		"total_quota":     totalQuota,
+		"keys_url":        keysURL,
+	})
+}
+
 // PreviewEmailTemplate 用 spec.Variables 中的 Sample 作为占位变量，渲染一份预览。
 //
 // 新模板空字段与保存一致，回落默认；旧模板保留空字段预览已保存值的行为。

@@ -72,8 +72,41 @@ export interface ChannelSettings {
   system_prompt_override?: boolean
 }
 
+// eflow: protocol routing
+export type UpstreamProtocol = 'messages' | 'chat' | 'responses'
+
+export type UpstreamProtocolVerdict = 'supported' | 'unsupported' | 'unknown'
+
+export interface UpstreamProtocolProbeAttempt {
+  stream: boolean
+  status_code: number
+  duration_ms: number
+  ok: boolean
+  client_restricted?: boolean
+  answer_ok: boolean
+  error?: string
+}
+
+export interface UpstreamProtocolProbeItem {
+  protocol: UpstreamProtocol
+  verdict: UpstreamProtocolVerdict
+  reason?: string
+  attempts?: UpstreamProtocolProbeAttempt[]
+  traffic_count: number
+}
+
+export interface UpstreamProtocolProbeResult {
+  probed_at: number
+  model: string
+  items: UpstreamProtocolProbeItem[]
+}
+
 export interface ChannelOtherSettings {
   supported_endpoint_types?: string[]
+  upstream_protocols?: UpstreamProtocol[]
+  upstream_protocols_confirmed_at?: number
+  upstream_protocols_confirmed_by?: number
+  upstream_protocol_probe?: UpstreamProtocolProbeResult
   azure_responses_version?: string
   vertex_key_type?: 'json' | 'api_key'
   vertex_project_id?: string

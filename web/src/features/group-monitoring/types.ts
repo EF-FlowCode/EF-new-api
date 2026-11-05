@@ -52,6 +52,8 @@ export type GroupListMeta = {
   all_groups?: string[]
   /** 当前 monitoring_groups 列表，仅 admin 视图返回，用于"显示开关"的初始勾选状态。 */
   monitored_groups?: string[]
+  /** 原始监控规则（name / prefix* / !name），仅 admin 视图返回。monitored_groups 是它展开后的结果。 */
+  monitoring_rules?: string[]
   /** groupName → categoryName。未出现的视为"未分类"。 */
   categories: Record<string, string>
   /** 分类块在 UI 上的渲染顺序。不在列表里的分类按字母回退、"未分类"始终最后。 */

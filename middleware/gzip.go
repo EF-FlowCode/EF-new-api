@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"eflow.local/new-api/constant"
+	"eflow.local/new-api/common"
 	"github.com/andybalholm/brotli"
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
@@ -29,7 +29,7 @@ func DecompressRequestMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		maxMB := constant.MaxRequestBodyMB
+		maxMB := common.RequestBodyLimitMB()
 		if maxMB <= 0 {
 			maxMB = 32
 		}

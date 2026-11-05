@@ -15,7 +15,15 @@ type UserSetting struct {
 	RecordIpLog                      bool    `json:"record_ip_log,omitempty"`                        // 是否记录请求和错误日志IP
 	SidebarModules                   string  `json:"sidebar_modules,omitempty"`                      // SidebarModules 左侧边栏模块配置
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
+	// eflow: API 密钥额度预警，作用于该用户全部限额令牌。剩余低于令牌总额度的百分比
+	// 或低于固定额度（quota 单位）任一条件即提醒；百分比未设置时取默认值，0 表示不按该条件提醒。
+	TokenQuotaWarningDisabled bool     `json:"token_quota_warning_disabled,omitempty"`
+	TokenQuotaWarningPercent  *float64 `json:"token_quota_warning_percent,omitempty"`
+	TokenQuotaWarningAmount   int      `json:"token_quota_warning_amount,omitempty"`
 }
+
+// DefaultTokenQuotaWarningPercent applies when the user has not set a percentage.
+const DefaultTokenQuotaWarningPercent = 5.0
 
 var (
 	NotifyTypeEmail   = "email"   // Email 邮件

@@ -20,7 +20,7 @@ export function SettingsWorkbench({
   children,
 }: SettingsWorkbenchProps) {
   return (
-    <div className='faded-bottom h-full w-full overflow-y-auto scroll-smooth pb-12'>
+    <div className='h-full w-full overflow-y-auto scroll-smooth pb-12'>
       <div className='mx-auto w-full max-w-[1600px] min-w-0'>
         <SettingsSectionTabs items={items} activeSection={activeSection} />
         <div className='min-w-0 space-y-4'>{children}</div>

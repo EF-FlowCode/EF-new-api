@@ -32,12 +32,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { CompactDateTimeRangePicker } from '@/components/compact-date-time-range-picker'
 import {
   ServerPagination,
   useLatestRequest,
   useServerPagination,
+  TableEmpty,
 } from '@/components/data-table'
-import { DateTimePicker } from '@/components/datetime-picker'
+import { PageFooterPortal, SectionPageLayout } from '@/components/layout'
 import {
   fetchAuditLogs,
   type AuditListParams,
@@ -191,12 +193,12 @@ function UsernameFilter({
           }
         }}
         placeholder={t('Exact username')}
-        className='min-w-0 flex-1 pl-8'
+        className='h-8 min-w-0 flex-1 pl-8'
       />
       <Button
         variant='outline'
         size='sm'
-        className='h-9 shrink-0 sm:h-8'
+        className='h-8 shrink-0'
         onClick={() => onApply(value.trim())}
       >
         {t('Search')}
@@ -289,20 +291,16 @@ export function AuditLogs() {
   const columnCount = showUser ? 7 : 6
 
   return (
-    <div className='px-4 py-6 sm:px-8'>
-      <div className='mx-auto w-full max-w-[1440px] space-y-5'>
-        <div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
-          <div className='flex flex-col gap-1'>
-            <h1 className='text-xl font-semibold tracking-tight'>
-              {t('Audit Logs')}
-            </h1>
-            <p className='text-muted-foreground text-sm'>
-              {t(
-                'Sign-ins, security changes, administrative writes and access token calls. Records are kept permanently.'
-              )}
-            </p>
-          </div>
-          {isAdmin && (
+    <>
+      <SectionPageLayout>
+        <SectionPageLayout.Title>{t('Audit Logs')}</SectionPageLayout.Title>
+        <SectionPageLayout.Description>
+          {t(
+            'Sign-ins, security changes, administrative writes and access token calls. Records are kept permanently.'
+          )}
+        </SectionPageLayout.Description>
+        {isAdmin && (
+          <SectionPageLayout.Actions>
             <Tabs
               value={scope}
               onValueChange={(value) =>
@@ -317,158 +315,151 @@ export function AuditLogs() {
                 <TabsTrigger value='self'>{t('Only Mine')}</TabsTrigger>
               </TabsList>
             </Tabs>
-          )}
-        </div>
-
-        <div className='bg-card grid grid-cols-2 gap-2 rounded-xl border p-3 sm:flex sm:flex-wrap sm:items-center'>
-          <Select
-            value={search.category ?? 'all'}
-            onValueChange={(value) =>
-              pagination.resetPage({
-                category: value === 'all' ? undefined : value,
-              })
-            }
-          >
-            <SelectTrigger className='w-full sm:w-[160px]'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>{t('All categories')}</SelectItem>
-              {AUDIT_CATEGORIES.map((category) => (
-                <SelectItem key={category} value={category}>
-                  {auditCategoryLabel(category, t)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={search.result ?? 'all'}
-            onValueChange={(value) =>
-              pagination.resetPage({
-                result: value === 'all' ? undefined : value,
-              })
-            }
-          >
-            <SelectTrigger className='w-full sm:w-[140px]'>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>{t('All results')}</SelectItem>
-              <SelectItem value='success'>{t('Success')}</SelectItem>
-              <SelectItem value='failed'>{t('Failed')}</SelectItem>
-            </SelectContent>
-          </Select>
-          <DateTimePicker
-            value={startDate}
-            onChange={(value) =>
-              pagination.resetPage({
-                startTime: value
-                  ? Math.floor(value.getTime() / 1000)
-                  : undefined,
-              })
-            }
-            placeholder={t('Start time')}
-            className='col-span-2 w-full sm:w-[200px]'
-          />
-          <DateTimePicker
-            value={endDate}
-            onChange={(value) =>
-              pagination.resetPage({
-                endTime: value ? Math.floor(value.getTime() / 1000) : undefined,
-              })
-            }
-            placeholder={t('End time')}
-            className='col-span-2 w-full sm:w-[200px]'
-          />
-          {showUser && (
-            <UsernameFilter
-              key={search.username ?? ''}
-              initialValue={search.username ?? ''}
-              onApply={(value) =>
-                pagination.resetPage({ username: value || undefined })
-              }
-            />
-          )}
-        </div>
-
-        <div className='bg-card overflow-x-auto rounded-xl border'>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className='w-44'>{t('Time')}</TableHead>
-                {showUser && (
-                  <TableHead className='w-32'>{t('User')}</TableHead>
-                )}
-                <TableHead className='w-32'>{t('Category')}</TableHead>
-                <TableHead>{t('Event')}</TableHead>
-                <TableHead className='w-24'>{t('Result')}</TableHead>
-                <TableHead className='w-32'>{t('Authentication')}</TableHead>
-                <TableHead className='w-36'>IP</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading && items.length === 0 ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i}>
-                    {Array.from({ length: columnCount }).map((_, j) => (
-                      <TableCell key={j}>
-                        <Skeleton className='h-4 w-full' />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : items.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={columnCount}
-                    className='text-muted-foreground py-12 text-center text-sm'
-                  >
-                    {t('No audit records')}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                items.map((log) => (
-                  <TableRow
-                    key={log.event_id}
-                    className='cursor-pointer'
-                    onClick={() => setSelected(log)}
-                  >
-                    <TableCell className='text-muted-foreground text-xs'>
-                      {formatTimestamp(log.created_at)}
-                    </TableCell>
-                    {showUser && (
-                      <TableCell className='font-mono text-xs'>
-                        {log.username || `#${log.user_id}`}
-                      </TableCell>
-                    )}
-                    <TableCell className='text-sm'>
-                      {auditCategoryLabel(log.category, t)}
-                    </TableCell>
-                    <TableCell className='text-sm'>
-                      {auditActionLabel(log, t)}
-                    </TableCell>
-                    <TableCell>
-                      <ResultBadge success={log.success} />
-                    </TableCell>
-                    <TableCell className='text-muted-foreground text-xs'>
-                      {auditAuthMethodLabel(log.auth_method, t)}
-                    </TableCell>
-                    <TableCell className='font-mono text-xs'>
-                      {log.ip || '—'}
-                    </TableCell>
-                  </TableRow>
-                ))
+          </SectionPageLayout.Actions>
+        )}
+        <SectionPageLayout.Content>
+          <div className='space-y-3 sm:space-y-4'>
+            <div className='grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center'>
+              <Select
+                value={search.category ?? 'all'}
+                onValueChange={(value) =>
+                  pagination.resetPage({
+                    category: value === 'all' ? undefined : value,
+                  })
+                }
+              >
+                <SelectTrigger size='sm' className='w-full sm:w-[160px]'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='all'>{t('All categories')}</SelectItem>
+                  {AUDIT_CATEGORIES.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {auditCategoryLabel(category, t)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={search.result ?? 'all'}
+                onValueChange={(value) =>
+                  pagination.resetPage({
+                    result: value === 'all' ? undefined : value,
+                  })
+                }
+              >
+                <SelectTrigger size='sm' className='w-full sm:w-[140px]'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='all'>{t('All results')}</SelectItem>
+                  <SelectItem value='success'>{t('Success')}</SelectItem>
+                  <SelectItem value='failed'>{t('Failed')}</SelectItem>
+                </SelectContent>
+              </Select>
+              <CompactDateTimeRangePicker
+                start={startDate}
+                end={endDate}
+                onChange={({ start, end }) =>
+                  pagination.resetPage({
+                    startTime: start
+                      ? Math.floor(start.getTime() / 1000)
+                      : undefined,
+                    endTime: end ? Math.floor(end.getTime() / 1000) : undefined,
+                  })
+                }
+                className='col-span-2 h-8 w-full sm:w-auto'
+              />
+              {showUser && (
+                <UsernameFilter
+                  key={search.username ?? ''}
+                  initialValue={search.username ?? ''}
+                  onApply={(value) =>
+                    pagination.resetPage({ username: value || undefined })
+                  }
+                />
               )}
-            </TableBody>
-          </Table>
-        </div>
+            </div>
 
-        <ServerPagination
-          table={pagination.table}
-          total={total}
-          loading={loading}
-        />
-      </div>
+            <div className='overflow-x-auto rounded-md border'>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className='w-44'>{t('Time')}</TableHead>
+                    {showUser && (
+                      <TableHead className='w-32'>{t('User')}</TableHead>
+                    )}
+                    <TableHead className='w-32'>{t('Category')}</TableHead>
+                    <TableHead>{t('Event')}</TableHead>
+                    <TableHead className='w-24'>{t('Result')}</TableHead>
+                    <TableHead className='w-32'>
+                      {t('Authentication')}
+                    </TableHead>
+                    <TableHead className='w-36'>IP</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {loading && items.length === 0 ? (
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <TableRow key={i}>
+                        {Array.from({ length: columnCount }).map((_, j) => (
+                          <TableCell key={j}>
+                            <Skeleton className='h-4 w-full' />
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))
+                  ) : items.length === 0 ? (
+                    <TableEmpty
+                      colSpan={columnCount}
+                      title={t('No audit records')}
+                    />
+                  ) : (
+                    items.map((log) => (
+                      <TableRow
+                        key={log.event_id}
+                        className='cursor-pointer'
+                        onClick={() => setSelected(log)}
+                      >
+                        <TableCell className='text-muted-foreground text-xs'>
+                          {formatTimestamp(log.created_at)}
+                        </TableCell>
+                        {showUser && (
+                          <TableCell className='font-mono text-xs'>
+                            {log.username || `#${log.user_id}`}
+                          </TableCell>
+                        )}
+                        <TableCell className='text-sm'>
+                          {auditCategoryLabel(log.category, t)}
+                        </TableCell>
+                        <TableCell className='text-sm'>
+                          {auditActionLabel(log, t)}
+                        </TableCell>
+                        <TableCell>
+                          <ResultBadge success={log.success} />
+                        </TableCell>
+                        <TableCell className='text-muted-foreground text-xs'>
+                          {auditAuthMethodLabel(log.auth_method, t)}
+                        </TableCell>
+                        <TableCell className='font-mono text-xs'>
+                          {log.ip || '—'}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+          <PageFooterPortal>
+            <ServerPagination
+              table={pagination.table}
+              total={total}
+              loading={loading}
+            />
+          </PageFooterPortal>
+        </SectionPageLayout.Content>
+      </SectionPageLayout>
 
       <AuditLogDetailsDialog
         log={selected}
@@ -476,6 +467,6 @@ export function AuditLogs() {
           if (!open) setSelected(null)
         }}
       />
-    </div>
+    </>
   )
 }

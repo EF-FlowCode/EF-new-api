@@ -6,6 +6,9 @@ import (
 	"math"
 )
 
+// https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
+const ClaudeCacheCreation1hMultiplier = 6 / 3.75
+
 type GroupRatioInfo struct {
 	GroupRatio        float64
 	GroupSpecialRatio float64

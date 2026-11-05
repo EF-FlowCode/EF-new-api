@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 
+	"eflow.local/new-api/model"
 	"eflow.local/new-api/setting"
 	"eflow.local/new-api/setting/ratio_setting"
 )
@@ -69,6 +70,21 @@ func getUserAutoGroupFromConfiguredGroups(userGroup string, additionalTiers, con
 		}
 	}
 	return autoGroups
+}
+
+// GetGroupsEnabledModels 按分组顺序合并各分组已启用的模型并去重。
+func GetGroupsEnabledModels(groups []string) []string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, group := range groups {
+		for _, modelName := range model.GetGroupEnabledModels(group) {
+			if _, ok := seen[modelName]; !ok {
+				seen[modelName] = struct{}{}
+				models = append(models, modelName)
+			}
+		}
+	}
+	return models
 }
 
 // GetUserGroupRatio returns the lowest configured override across the user's

@@ -5,7 +5,8 @@ import { CALLER_HANDLED_REQUEST_CONFIG } from '@/lib/api'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { PageShell } from '@/components/layout'
+import { ListEmpty } from '@/components/data-table'
+import { SectionPageLayout } from '@/components/layout'
 import { getPerfMetricsSummary } from '@/features/performance-metrics/api'
 import { getPricing } from '@/features/pricing/api'
 import {
@@ -309,16 +310,35 @@ export function Leaderboard() {
       : t('No usage in the previous period — newly listed')
 
   return (
-    <PageShell contained={false}>
-      <div className='mx-auto w-full max-w-[1400px] px-3 pt-6 pb-10 sm:px-6 sm:pt-8 xl:px-8'>
+    <SectionPageLayout>
+      <SectionPageLayout.Title>{t('Leaderboard')}</SectionPageLayout.Title>
+      <SectionPageLayout.Description>
+        {t('Model rankings by usage, with measured latency and throughput')}
+      </SectionPageLayout.Description>
+      <SectionPageLayout.Actions>
+        {/* eflow: 手动刷新按钮,对齐监控页样式(ghost + RefreshCw 旋转) */}
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={handleRefresh}
+          disabled={refreshing}
+        >
+          <RefreshCw
+            className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')}
+          />
+          {t('Refresh')}
+        </Button>
+      </SectionPageLayout.Actions>
+      <SectionPageLayout.Content>
         {/* Range tabs */}
-        <div className='mb-3 flex flex-wrap items-center gap-1 border-b'>
+        <div className='mb-3 flex items-center gap-1 overflow-x-auto border-b'>
           {RANGES.map((r) => (
             <button
               key={r.value}
               type='button'
               onClick={() => setRange(r.value)}
-              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
                 range === r.value
                   ? 'border-foreground text-foreground'
                   : 'text-muted-foreground hover:text-foreground border-transparent'
@@ -327,20 +347,6 @@ export function Leaderboard() {
               {t(r.labelKey)}
             </button>
           ))}
-          {/* eflow: 手动刷新按钮,对齐监控页样式(ghost + RefreshCw 旋转) */}
-          <Button
-            type='button'
-            variant='ghost'
-            size='sm'
-            className='-mb-px ml-auto'
-            onClick={handleRefresh}
-            disabled={refreshing}
-            title={t('Refresh')}
-          >
-            <RefreshCw
-              className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')}
-            />
-          </Button>
         </div>
 
         {/* eflow: 区间上下文条——明示当前标签对应的真实统计起止 + 涨跌对比基准，
@@ -349,13 +355,13 @@ export function Leaderboard() {
           <CtxSeg k={t('Window')}>
             <span className='tabular-nums'>{ctx.windowText}</span>
           </CtxSeg>
-          <span className='bg-muted-foreground/30 size-1 rounded-full' />
+          <span className='bg-muted-foreground/30 size-1 rounded-full max-sm:hidden' />
           <CtxSeg k={t('Trend vs')}>
             <span className='tabular-nums'>{ctx.prevText}</span>
           </CtxSeg>
-          <span className='bg-muted-foreground/30 size-1 rounded-full' />
+          <span className='bg-muted-foreground/30 size-1 rounded-full max-sm:hidden' />
           <CtxSeg k={t('Measured perf')}>{t('always last 24h')}</CtxSeg>
-          <span className='bg-muted-foreground/30 size-1 rounded-full' />
+          <span className='bg-muted-foreground/30 size-1 rounded-full max-sm:hidden' />
           <CtxSeg k={t('Timezone')}>UTC+8</CtxSeg>
         </div>
 
@@ -365,7 +371,7 @@ export function Leaderboard() {
         {/* LLM leaderboard */}
         <div className='mt-4 rounded-xl border p-4 sm:p-6'>
           <div className='mb-3 flex items-center gap-2'>
-            <Trophy className='size-5 text-amber-500' />
+            <Trophy className='text-primary size-5' />
             <div>
               <div className='text-base font-semibold'>
                 {t('LLM Leaderboard')}
@@ -378,16 +384,16 @@ export function Leaderboard() {
 
           {/* eflow: 口径图例——把右侧列归到两套时间尺度：实测列恒为 24h、名次/涨跌随区间。
               小样本对齐风险高的「列头网格」不做，改用稳健的图例 + 上方上下文条表达。 */}
-          <div className='text-muted-foreground/70 mb-1 hidden flex-wrap items-center gap-x-3 gap-y-1 text-[11px] min-[1024px]:flex'>
+          <div className='text-muted-foreground mb-1 hidden flex-wrap items-center gap-x-3 gap-y-1 text-[11px] min-[1024px]:flex'>
             <span>
-              <span className='font-medium text-sky-600 dark:text-sky-400'>
+              <span className='text-chart-2 font-medium'>
                 {t('Last 24h measured')}
               </span>
               {t(': latency · throughput · status · perf')}
             </span>
             <span className='opacity-40'>│</span>
             <span>
-              <span className='font-medium text-amber-600 dark:text-amber-400'>
+              <span className='text-primary font-medium'>
                 {t('Selected range')}
               </span>
               {t(': rank · change')}
@@ -395,13 +401,11 @@ export function Leaderboard() {
           </div>
 
           {loading ? (
-            <div className='text-muted-foreground/60 py-12 text-center text-sm'>
+            <div className='text-muted-foreground py-12 text-center text-sm'>
               {t('Loading...')}
             </div>
           ) : (data?.ranking.length ?? 0) === 0 ? (
-            <div className='text-muted-foreground/60 py-12 text-center text-sm'>
-              {t('No data yet')}
-            </div>
+            <ListEmpty title={t('No data yet')} />
           ) : (
             <div className='grid grid-cols-1 gap-x-10 md:grid-cols-2'>
               {half.map((col, i) => (
@@ -425,7 +429,7 @@ export function Leaderboard() {
           )}
 
           {/* eflow: 数据口径说明——让用户看懂 延迟/吞吐/状态 与涨跌% 的含义和波动性 */}
-          <p className='text-muted-foreground/60 mt-4 border-t pt-3 text-[11px] leading-relaxed'>
+          <p className='text-muted-foreground mt-4 border-t pt-3 text-xs leading-relaxed'>
             {t(
               'Latency / throughput / status are measured over the last 24h (limited samples may fluctuate). The percentage is the usage change vs the previous period — desensitized, no absolute volume shown; short periods or small baselines can swing sharply.'
             )}{' '}
@@ -434,7 +438,7 @@ export function Leaderboard() {
             )}
           </p>
         </div>
-      </div>
-    </PageShell>
+      </SectionPageLayout.Content>
+    </SectionPageLayout>
   )
 }

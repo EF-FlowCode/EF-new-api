@@ -86,7 +86,7 @@ export function CheckinSettingsSection({
 
   return (
     <SettingsSection
-      title={t('Check-in Settings')}
+      title={t('Check-in Rewards')}
       description={t('Configure daily check-in rewards for users')}
     >
       <Form {...form}>

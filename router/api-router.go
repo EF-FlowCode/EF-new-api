@@ -397,6 +397,9 @@ func SetApiRouter(router *gin.Engine) {
 			// eflow: multi-key scheduler 状态快照（admin-api 状态面板用）。
 			// per-channel 返回 (key_fp, model) 上的实时 RPM/TPM/in_flight/cool_until。
 			channelRoute.GET("/:id/scheduler/state", controller.GetSchedulerState)
+			// eflow: 协议路由。探测只记录结果，确认后才写入渠道允许的上游协议。
+			channelRoute.POST("/:id/protocols/probe", controller.ProbeChannelProtocols)
+			channelRoute.PUT("/:id/protocols", controller.ConfirmChannelProtocols)
 		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())

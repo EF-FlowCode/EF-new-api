@@ -16,6 +16,7 @@ import {
   Trash2,
   RefreshCw,
   Loader2,
+  Route,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -42,6 +43,7 @@ import {
   handleToggleChannelStatus,
   isChannelEnabled,
   isMultiKeyChannel,
+  supportsProtocolRouting,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
@@ -213,6 +215,20 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               <TestTube size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
+
+          {supportsProtocolRouting(channel.type) && (
+            <DropdownMenuItem
+              onClick={() => {
+                setCurrentRow(channel)
+                setOpen('channel-protocols')
+              }}
+            >
+              {t('Upstream Protocols')}
+              <DropdownMenuShortcut>
+                <Route size={16} />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
 
           {/* Query Balance */}
           <DropdownMenuItem onClick={handleQueryBalance}>

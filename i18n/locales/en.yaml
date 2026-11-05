@@ -130,6 +130,8 @@ quota.exceed_max: "Quota value exceeds valid range"
 quota.insufficient: "Insufficient quota"
 quota.warning_invalid: "Invalid warning type"
 quota.threshold_gt_zero: "Warning threshold must be greater than 0"
+quota.token_warning_percent_range: "API key warning percentage must be between 0 and 100"
+quota.token_warning_amount_negative: "API key warning amount cannot be negative"
 
 
 # Ticket messages

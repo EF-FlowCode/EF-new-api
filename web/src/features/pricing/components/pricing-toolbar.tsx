@@ -316,76 +316,61 @@ export function PricingToolbar(props: PricingToolbarProps) {
             {t('Groups')}
           </span>
           <div className='flex min-w-0 flex-col gap-1.5'>
-            <div className='grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-1.5'>
-              <span className='text-muted-foreground font-mono text-[10px] font-semibold'>
-                AUTO
-              </span>
-              <div className='min-w-0 overflow-x-auto pb-0.5'>
-                <div className='flex w-max min-w-full items-center gap-1 sm:w-full sm:flex-wrap'>
-                  <Button
-                    type='button'
-                    variant={
-                      props.groupFilter === FILTER_ALL ? 'secondary' : 'ghost'
-                    }
-                    size='sm'
-                    onClick={() => props.onGroupChange(FILTER_ALL)}
-                    className='h-7 px-2.5 text-xs'
-                  >
-                    {t('Auto')}
-                    <span className='text-muted-foreground'>
-                      {t('Lowest price')}
-                    </span>
-                  </Button>
-                </div>
-              </div>
+            {/* 分组按名称前缀分行，每行一条，窄屏自动折行，不再显示 AUTO / 0_ 这类原始前缀 */}
+            <div className='flex min-w-0 flex-wrap items-center gap-1'>
+              <Button
+                type='button'
+                variant={
+                  props.groupFilter === FILTER_ALL ? 'secondary' : 'ghost'
+                }
+                size='sm'
+                onClick={() => props.onGroupChange(FILTER_ALL)}
+                className='h-7 px-2.5 text-xs'
+              >
+                {t('Auto')}
+                <span className='text-muted-foreground'>
+                  {t('Lowest price')}
+                </span>
+              </Button>
             </div>
 
             {groupRows.map((groupRow) => (
               <div
                 key={groupRow.row ?? 'other'}
-                className='grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-1.5'
+                className='flex min-w-0 flex-wrap items-center gap-1'
               >
-                <span className='text-muted-foreground pt-1.5 font-mono text-[10px] font-semibold'>
-                  {groupRow.row == null ? t('Other') : `${groupRow.row}_`}
-                </span>
-                <div className='min-w-0 overflow-x-auto pb-0.5'>
-                  <div className='flex w-max min-w-full items-center gap-1 sm:w-full sm:flex-wrap'>
-                    {groupRow.items.map((group) => (
-                      <Button
-                        key={group.value}
-                        type='button'
-                        variant={
-                          props.groupFilter === group.value
-                            ? 'secondary'
-                            : 'ghost'
-                        }
-                        size='sm'
-                        onClick={() =>
-                          props.onGroupChange(
-                            props.groupFilter === group.value
-                              ? FILTER_ALL
-                              : group.value
-                          )
-                        }
-                        className='h-7 px-2.5 text-xs'
-                        title={group.value}
+                {groupRow.items.map((group) => (
+                  <Button
+                    key={group.value}
+                    type='button'
+                    variant={
+                      props.groupFilter === group.value ? 'secondary' : 'ghost'
+                    }
+                    size='sm'
+                    onClick={() =>
+                      props.onGroupChange(
+                        props.groupFilter === group.value
+                          ? FILTER_ALL
+                          : group.value
+                      )
+                    }
+                    className='h-7 px-2.5 text-xs'
+                    title={group.value}
+                  >
+                    <span>{group.label}</span>
+                    <span className='text-muted-foreground tabular-nums'>
+                      {group.count}
+                    </span>
+                    {group.ratio && (
+                      <Badge
+                        variant='outline'
+                        className='px-1.5 py-0 font-mono text-[10px]'
                       >
-                        <span>{group.label}</span>
-                        <span className='text-muted-foreground tabular-nums'>
-                          {group.count}
-                        </span>
-                        {group.ratio && (
-                          <Badge
-                            variant='outline'
-                            className='px-1.5 py-0 font-mono text-[10px]'
-                          >
-                            {group.ratio}
-                          </Badge>
-                        )}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
+                        {group.ratio}
+                      </Badge>
+                    )}
+                  </Button>
+                ))}
               </div>
             ))}
           </div>

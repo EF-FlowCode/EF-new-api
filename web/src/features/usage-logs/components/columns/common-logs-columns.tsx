@@ -33,6 +33,11 @@ import {
   isViolationFeeLog,
 } from '../../lib/format'
 import {
+  inboundProtocol,
+  protocolRoute,
+  protocolRouteLabel,
+} from '../../lib/protocol'
+import {
   isDisplayableLogType,
   isTimingLogType,
   getLogTypeConfig,
@@ -531,7 +536,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
   columns.push({
     accessorKey: 'token_name',
     header: ({ column }) => (
-      <DataTableColumnHeader column={column} title={t('Token')} />
+      <DataTableColumnHeader column={column} title={t('API key')} />
     ),
     cell: function TokenNameCell({ row }) {
       const { sensitiveVisible } = useUsageLogsContext()
@@ -571,7 +576,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         </div>
       )
     },
-    meta: { label: t('Token') },
+    meta: { label: t('API key') },
     size: 130,
     enableSorting: false,
   })
@@ -601,6 +606,52 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       meta: { label: t('Model'), mobileTitle: true },
       enableSorting: false,
     },
+
+    // eflow: inbound protocol and how it reached the upstream (admin only)
+    ...(isAdmin
+      ? [
+          {
+            id: 'protocol',
+            header: ({ column }) => (
+              <DataTableColumnHeader column={column} title={t('Protocol')} />
+            ),
+            cell: ({ row }) => {
+              const log = row.original
+              if (!isDisplayableLogType(log.type)) return null
+              const other = parseLogOther(log.other)
+              const inbound = inboundProtocol(other?.request_path)
+              if (!inbound) {
+                return <span className='text-muted-foreground'>—</span>
+              }
+              const route = protocolRoute(other)
+              return (
+                <div className='flex flex-col gap-0.5'>
+                  <StatusBadge
+                    label={inbound}
+                    autoColor={inbound}
+                    size='sm'
+                    copyable={false}
+                  />
+                  {route && (
+                    <span
+                      className={cn(
+                        'text-[11px]',
+                        route.kind === 'native'
+                          ? 'text-muted-foreground/70'
+                          : 'text-amber-600 dark:text-amber-400'
+                      )}
+                    >
+                      {protocolRouteLabel(route, t)}
+                    </span>
+                  )}
+                </div>
+              )
+            },
+            meta: { label: t('Protocol'), mobileHidden: true },
+            enableSorting: false,
+          } satisfies ColumnDef<UsageLog>,
+        ]
+      : []),
 
     {
       id: 'reasoning_effort',
@@ -750,7 +801,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     {
       accessorKey: 'prompt_tokens',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title='Tokens' />
+        <DataTableColumnHeader column={column} title={t('Tokens')} />
       ),
       cell: ({ row }) => {
         const log = row.original

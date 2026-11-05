@@ -546,6 +546,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	// request body to the new host.
 	relayClient := *client
 	relayClient.CheckRedirect = keepUpstreamRedirectResponse
+	// eflow: 非流式上游要等结果全部生成完才回响应头，等待上限与流式分开设置。
+	req = req.WithContext(service.WithResponseHeaderTimeout(req.Context(), service.RelayResponseHeaderTimeout(info.IsStream)))
 
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)

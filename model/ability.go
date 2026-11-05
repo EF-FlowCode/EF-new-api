@@ -122,10 +122,16 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 // selection. The optional path prevents Advanced Custom channels from being
 // selected for an endpoint they do not expose.
 func GetChannelForRequest(group string, model string, retry int, requestPath string, filters ...func(*Channel) bool) (*Channel, error) {
+	return GetChannelForRequestExcluding(group, model, retry, requestPath, nil, filters...)
+}
+
+// GetChannelForRequestExcluding is the database form of
+// GetRandomSatisfiedChannelForRequestExcluding.
+func GetChannelForRequestExcluding(group string, model string, retry int, requestPath string, exclude map[int]struct{}, filters ...func(*Channel) bool) (*Channel, error) {
 	var abilities []Ability
 
 	var err error
-	if strings.TrimSpace(requestPath) == "" && len(filters) == 0 {
+	if strings.TrimSpace(requestPath) == "" && len(filters) == 0 && len(exclude) == 0 {
 		// Keep the existing query for the legacy path. Besides avoiding an
 		// unnecessary full-model scan, this preserves the historical weighting
 		// and retry behavior for every channel type.
@@ -134,44 +140,76 @@ func GetChannelForRequest(group string, model string, retry int, requestPath str
 			return nil, queryErr
 		}
 		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	} else {
-		// A path-aware lookup must filter before choosing the retry priority.
-		// Looking up only the globally highest priority first would make an
-		// incompatible Advanced Custom channel hide a compatible lower-priority
-		// channel. Fetch all priorities in descending order, filter candidates,
-		// then apply the retry index to the remaining priorities.
-		query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
-			Order("priority DESC").Order("weight DESC")
-		err = query.Find(&abilities).Error
-		if err == nil {
-			abilities = filterAbilitiesByRequestPath(abilities, requestPath, model, filters...)
-			abilities = selectAbilitiesAtRetryPriority(abilities, retry)
+		if err != nil {
+			return nil, err
 		}
+		return pickWeightedAbilityChannel(abilities)
 	}
-	if err != nil {
+
+	// A path-aware lookup must filter before choosing the retry tier.
+	// Looking up only the globally highest priority first would make an
+	// incompatible Advanced Custom channel hide a compatible lower-priority
+	// channel. Fetch all candidates, filter them, order native-first, then
+	// apply the retry index to the remaining tiers.
+	query := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+		Order("priority DESC").Order("weight DESC")
+	if err = query.Find(&abilities).Error; err != nil {
 		return nil, err
 	}
-	channel := Channel{}
-	if len(abilities) > 0 {
-		// Randomly choose one
-		weightSum := uint(0)
-		for _, ability_ := range abilities {
-			weightSum += ability_.Weight + 10
-		}
-		// Randomly choose one
-		weight := common.GetRandomInt(int(weightSum))
-		for _, ability_ := range abilities {
-			weight -= int(ability_.Weight) + 10
-			//log.Printf("weight: %d, ability weight: %d", weight, *ability_.Weight)
-			if weight <= 0 {
-				channel.Id = ability_.ChannelId
-				break
-			}
-		}
-	} else {
+	abilities = filterAbilitiesByRequestPath(abilities, requestPath, model, filters...)
+	if len(abilities) == 0 {
 		return nil, nil
 	}
-	err = DB.First(&channel, "id = ?", channel.Id).Error
+	channelIDs := lo.Uniq(lo.Map(abilities, func(ability Ability, _ int) int { return ability.ChannelId }))
+	var channels []*Channel
+	if err = DB.Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	if len(channels) == 0 {
+		// Stale ability rows: keep surfacing the database-consistency error.
+		return pickWeightedAbilityChannel(abilities)
+	}
+	candidates := make([]supportedChannel, 0, len(channels))
+	for _, channel := range channels {
+		candidates = append(candidates, supportedChannel{channel: channel, support: orderingSupport(channel, requestPath, model)})
+	}
+	targetChannels, ok := selectRetryTier(orderChannelTiers(candidates), retry, exclude)
+	if !ok {
+		return nil, ErrChannelsExhausted
+	}
+	weightSum := 0
+	for _, channel := range targetChannels {
+		weightSum += channel.GetWeight() + 10
+	}
+	weight := common.GetRandomInt(weightSum)
+	for _, channel := range targetChannels {
+		weight -= channel.GetWeight() + 10
+		if weight <= 0 {
+			return channel, nil
+		}
+	}
+	return targetChannels[len(targetChannels)-1], nil
+}
+
+func pickWeightedAbilityChannel(abilities []Ability) (*Channel, error) {
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+	channel := Channel{}
+	weightSum := uint(0)
+	for _, ability_ := range abilities {
+		weightSum += ability_.Weight + 10
+	}
+	// Randomly choose one
+	weight := common.GetRandomInt(int(weightSum))
+	for _, ability_ := range abilities {
+		weight -= int(ability_.Weight) + 10
+		if weight <= 0 {
+			channel.Id = ability_.ChannelId
+			break
+		}
+	}
+	err := DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
 }
 

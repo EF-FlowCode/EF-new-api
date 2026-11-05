@@ -1254,6 +1254,34 @@ func validateConfigOption(key, value string) error {
 		default:
 			return fmt.Errorf("invalid channel test mode %q", value)
 		}
+	case "runtime_limit_setting.streaming_timeout_seconds":
+		if err := validateIntegerRange(key, value, operation_setting.MinStreamingTimeoutSeconds, operation_setting.MaxStreamingTimeoutSeconds); err != nil {
+			return err
+		}
+	case "runtime_limit_setting.error_log_enabled":
+		if value != "true" && value != "false" {
+			return fmt.Errorf("%s must be true or false", key)
+		}
+	case "runtime_limit_setting.task_timeout_minutes":
+		if err := validateIntegerRange(key, value, 0, operation_setting.MaxTaskTimeoutMinutes); err != nil {
+			return err
+		}
+	case "runtime_limit_setting.max_request_body_mb":
+		if err := validateIntegerRange(key, value, operation_setting.MinMaxRequestBodyMB, operation_setting.MaxMaxRequestBodyMB); err != nil {
+			return err
+		}
+	case "runtime_limit_setting.notify_limit_count":
+		if err := validateIntegerRange(key, value, 0, operation_setting.MaxNotifyLimitCount); err != nil {
+			return err
+		}
+	case "runtime_limit_setting.notify_limit_duration_minutes":
+		if err := validateIntegerRange(key, value, operation_setting.MinNotifyLimitDurationMinutes, operation_setting.MaxNotifyLimitDurationMinutes); err != nil {
+			return err
+		}
+	case "runtime_limit_setting.response_header_timeout_seconds", "runtime_limit_setting.non_stream_response_header_timeout_seconds":
+		if err := validateIntegerRange(key, value, 0, operation_setting.MaxResponseHeaderTimeoutSeconds); err != nil {
+			return err
+		}
 	case "performance_setting.disk_cache_threshold_mb":
 		if err := validateIntegerRange(key, value, 1, 0); err != nil {
 			return err

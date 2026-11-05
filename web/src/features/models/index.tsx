@@ -107,7 +107,7 @@ function ModelsContent() {
   return (
     <>
       <SectionPageLayout>
-        <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>{t('Model Metadata')}</SectionPageLayout.Title>
         <SectionPageLayout.Description>
           {t(meta.descriptionKey)}
         </SectionPageLayout.Description>

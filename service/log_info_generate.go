@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"net/http"
 	"strings"
 
 	"eflow.local/new-api/common"
@@ -60,6 +61,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	adminInfo := make(map[string]any)
 	adminInfo["use_channel"] = ctx.GetStringSlice("use_channel")
+	if attempts := protocolAttemptsForLog(ctx, relayInfo); len(attempts) > 0 {
+		adminInfo["protocol_attempts"] = attempts
+	}
 	isMultiKey := common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey)
 	if isMultiKey {
 		adminInfo["is_multi_key"] = true
@@ -91,6 +95,18 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		}
 	}
 	return other
+}
+
+// protocolAttemptsForLog returns the earlier attempts plus the one that is
+// producing this consume log. The relay records an attempt only after it
+// returns, which is after its consume log was written.
+func protocolAttemptsForLog(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) []map[string]any {
+	attempts, _ := common.GetContextKeyType[[]map[string]any](ctx, constant.ContextKeyProtocolAttempts)
+	if relayInfo == nil || relayInfo.ChannelMeta == nil || relayInfo.ProtocolAttemptMode == "" {
+		return attempts
+	}
+	current := map[string]any{"channel_id": relayInfo.ChannelId, "mode": relayInfo.ProtocolAttemptMode, "status": http.StatusOK}
+	return append(append(make([]map[string]any, 0, len(attempts)+1), attempts...), current)
 }
 
 // AppendResponseModelLogInfo 把上游声明的响应模型写进日志 other.response_model（诊断用）。

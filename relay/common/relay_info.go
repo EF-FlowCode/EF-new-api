@@ -126,8 +126,11 @@ type RelayInfo struct {
 	// 初始免费组可为 nil；auto 重试切换到付费组时会在发送前创建。
 	Billing BillingSettler
 	// RequestId identifies this relay request.
-	RequestId                 string
-	IsClaudeBetaQuery         bool // /v1/messages?beta=true
+	RequestId         string
+	IsClaudeBetaQuery bool // /v1/messages?beta=true
+	// ProtocolAttemptMode is "native", "chat_fallback" or "adaptor_fallback"
+	// when the channel's confirmed protocol set governs this attempt, else "".
+	ProtocolAttemptMode       string
 	IsChannelTest             bool // channel test request
 	RetryIndex                int
 	LastError                 *types.NewAPIError
@@ -245,6 +248,13 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	if streamSupportedChannels[channelMeta.ChannelType] {
 		channelMeta.SupportStreamOptions = true
 	}
+
+	// eflow: each attempt records only its own conversions, so a retry or a
+	// same-channel Chat fallback does not inherit the previous attempt's chain.
+	info.RequestConversionChain = nil
+	info.FinalRequestRelayFormat = ""
+	info.InitRequestConversionChain()
+	info.applyProtocolRoute(c, channelMeta)
 
 	info.ChannelMeta = channelMeta
 	// Advanced Custom reuses the legacy Custom channel type (8), so it cannot

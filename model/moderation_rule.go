@@ -172,8 +172,13 @@ func CountModerationRules() (int64, error) {
 // side, mirrored here so each engine surfaces its own misconfiguration.
 func CountEnabledModerationRulesWithoutGroups() (int64, error) {
 	var n int64
+	// groups 是 MySQL 8 保留字，用 map 条件让 GORM 按方言加引号，不手写列名。
+	emptyGroups := DB.Where(map[string]any{"groups": nil}).
+		Or(map[string]any{"groups": ""}).
+		Or(map[string]any{"groups": "[]"})
 	err := DB.Model(&ModerationRule{}).
-		Where("enabled = ? AND (groups IS NULL OR groups = '' OR groups = '[]')", true).
+		Where(map[string]any{"enabled": true}).
+		Where(emptyGroups).
 		Count(&n).Error
 	return n, err
 }

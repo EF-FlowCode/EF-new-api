@@ -9,7 +9,7 @@
 | 配置模型价格、时间规则和展示单位 | [模型定价](guides/model-pricing.md) |
 | 配置向量、Rerank 和 Batch 价格 | [知识库定价](guides/knowledge-base-pricing.md) |
 | 使用 Embedding 批处理文件和任务 | [Embedding Batch File](guides/knowledge-batch.md) |
-| 管理客户等级、令牌分组和充值优惠 | [客户等级](guides/customer-tiers.md) |
+| 管理客户等级、API 密钥分组和充值优惠 | [客户等级](guides/customer-tiers.md) |
 | 设置额度、推荐奖励 | [额度设置](guides/quota-settings.md) |
 | 配置用户请求次数与成功次数限制 | [请求次数限流](guides/model-request-rate-limit.md) |
 | 限制网页分组的地区访问 | [分组地区访问控制](guides/group-region-access.md) |

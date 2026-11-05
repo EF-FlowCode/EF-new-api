@@ -1,4 +1,8 @@
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CaretSortIcon,
+} from '@radix-ui/react-icons'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ListEmpty, TableEmpty } from '@/components/data-table'
 import type { TicketSortField } from '../api'
 import {
   formatTicketTimestamp,
@@ -55,7 +60,12 @@ function SortHead({
   onSort,
 }: SortHeadProps) {
   const active = sortField === field
-  const Icon = !active ? ArrowUpDown : sortDir === 'asc' ? ArrowUp : ArrowDown
+  // 与 DataTableColumnHeader 同一套排序图标
+  const Icon = !active
+    ? CaretSortIcon
+    : sortDir === 'asc'
+      ? ArrowUpIcon
+      : ArrowDownIcon
   return (
     <TableHead className={className}>
       <button
@@ -110,9 +120,7 @@ export function TicketsTable({
               </div>
             ))
           ) : tickets.length === 0 ? (
-            <div className='text-muted-foreground p-12 text-center text-sm'>
-              {t('No tickets')}
-            </div>
+            <ListEmpty title={t('No tickets')} />
           ) : (
             tickets.map((ticket) => {
               const statusMeta =
@@ -166,7 +174,7 @@ export function TicketsTable({
 
       <div
         className={cn(
-          'bg-card overflow-x-auto rounded-xl border',
+          'overflow-x-auto rounded-md border',
           !selectable && 'hidden sm:block'
         )}
       >
@@ -232,14 +240,7 @@ export function TicketsTable({
                 </TableRow>
               ))
             ) : tickets.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={colCount}
-                  className='text-muted-foreground py-12 text-center text-sm'
-                >
-                  {t('No tickets')}
-                </TableCell>
-              </TableRow>
+              <TableEmpty colSpan={colCount} title={t('No tickets')} />
             ) : (
               tickets.map((ticket) => {
                 const statusMeta =

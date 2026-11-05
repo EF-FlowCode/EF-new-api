@@ -16,6 +16,10 @@ import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import { API_KEY_STATUSES } from '../constants'
+import {
+  isTokenBelowWarningLine,
+  parseTokenQuotaWarningSettings,
+} from '../lib/quota-warning'
 import { type ApiKey } from '../types'
 import {
   ApiKeyCell,
@@ -81,6 +85,9 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
     loaded: groupAuthorizationLoaded,
   } = useAuthorizedGroupRatios()
   const primaryGroup = useAuthStore((state) => state.auth.user?.group)
+  const quotaWarning = parseTokenQuotaWarningSettings(
+    useAuthStore((state) => state.auth.user?.setting)
+  )
   const authorizedGroupSet = new Set(authorizedGroups)
   const unavailableGroupSet = new Set(unavailableGroups)
   return [
@@ -166,13 +173,23 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         const remaining = apiKey.remain_quota
         const total = used + remaining
         const percentage = total > 0 ? (remaining / total) * 100 : 0
+        const belowWarning = isTokenBelowWarningLine(
+          quotaWarning,
+          remaining,
+          used
+        )
 
         return (
           <Tooltip>
             <TooltipTrigger asChild>
               <div className='w-[150px] space-y-1'>
                 <div className='flex justify-between text-xs'>
-                  <span className='font-medium tabular-nums'>
+                  <span
+                    className={cn(
+                      'font-medium tabular-nums',
+                      belowWarning && 'text-rose-600 dark:text-rose-400'
+                    )}
+                  >
                     {formatQuota(remaining)}
                   </span>
                   <span className='text-muted-foreground tabular-nums'>
@@ -197,6 +214,11 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                 <div>
                   {t('Total:')} {formatQuota(total)}
                 </div>
+                {belowWarning && (
+                  <div className='text-rose-400'>
+                    {t('Below your API key warning line')}
+                  </div>
+                )}
               </div>
             </TooltipContent>
           </Tooltip>

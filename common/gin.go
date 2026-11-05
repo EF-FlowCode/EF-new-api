@@ -23,6 +23,10 @@ const keyBodyReadError = "key_body_read_error"
 
 var ErrRequestBodyTooLarge = errors.New("request body too large")
 
+// eflow: RequestBodyLimitMB 返回当前请求体上限（MB）。operation_setting 会替换为后台配置的读取，
+// 未替换时（如本包测试）读环境变量 MAX_REQUEST_BODY_MB。
+var RequestBodyLimitMB = func() int { return constant.MaxRequestBodyMB }
+
 func IsRequestBodyTooLargeError(err error) bool {
 	if err == nil {
 		return false
@@ -64,7 +68,7 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 		return nil, readErr.(error)
 	}
 
-	maxMB := constant.MaxRequestBodyMB
+	maxMB := RequestBodyLimitMB()
 	if maxMB <= 0 {
 		maxMB = 128 // 默认 128MB
 	}

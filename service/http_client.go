@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -146,12 +145,8 @@ func newRelayHTTPTransport() *http.Transport {
 	transport.MaxIdleConns = common.RelayMaxIdleConns
 	transport.MaxIdleConnsPerHost = common.RelayMaxIdleConnsPerHost
 	transport.IdleConnTimeout = time.Duration(common.RelayIdleConnTimeout) * time.Second
+	// eflow: 响应头超时由 headerTimeoutRoundTripper 按请求计时，见 http_header_timeout.go。
 	transport.ResponseHeaderTimeout = 0
-	if seconds := common.RelayResponseHeaderTimeout; seconds > 0 {
-		// Clamp before conversion so large values cannot wrap into a short timeout.
-		seconds = min(seconds, int(math.MaxInt64/int64(time.Second)))
-		transport.ResponseHeaderTimeout = time.Duration(seconds) * time.Second
-	}
 	transport.ForceAttemptHTTP2 = true
 	if common.TLSInsecureSkipVerify {
 		transport.TLSClientConfig = common.InsecureTLSConfig.Clone()
@@ -160,7 +155,7 @@ func newRelayHTTPTransport() *http.Transport {
 }
 
 func newRelayHTTPClient(transport http.RoundTripper) *http.Client {
-	client := &http.Client{Transport: transport, CheckRedirect: checkRedirect}
+	client := &http.Client{Transport: &headerTimeoutRoundTripper{base: transport}, CheckRedirect: checkRedirect}
 	if common.RelayTimeout != 0 {
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
 	}

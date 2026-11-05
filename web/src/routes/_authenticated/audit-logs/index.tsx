@@ -1,6 +1,5 @@
 import z from 'zod'
 import { createFileRoute } from '@tanstack/react-router'
-import { AppHeader, Main } from '@/components/layout'
 import { AuditLogs } from '@/features/audit-logs'
 
 const auditLogsSearchSchema = z.object({
@@ -17,18 +16,7 @@ const auditLogsSearchSchema = z.object({
   endTime: z.number().int().positive().optional().catch(undefined),
 })
 
-function AuditLogsPage() {
-  return (
-    <>
-      <AppHeader />
-      <Main className='overflow-y-auto'>
-        <AuditLogs />
-      </Main>
-    </>
-  )
-}
-
 export const Route = createFileRoute('/_authenticated/audit-logs/')({
   validateSearch: auditLogsSearchSchema,
-  component: AuditLogsPage,
+  component: AuditLogs,
 })

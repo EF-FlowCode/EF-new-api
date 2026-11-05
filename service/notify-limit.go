@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"eflow.local/new-api/common"
-	"eflow.local/new-api/constant"
 	gopool "eflow.local/new-api/internal/drainpool"
+	"eflow.local/new-api/setting/operation_setting"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -25,7 +25,7 @@ type limitCount struct {
 }
 
 func getDuration() time.Duration {
-	minute := constant.NotificationLimitDurationMinute
+	minute := operation_setting.NotifyLimitDurationMinutes()
 	return time.Duration(minute) * time.Minute
 }
 
@@ -79,7 +79,7 @@ func checkRedisLimit(userId int, notifyType string) (bool, error) {
 		expiry = time.Hour
 	}
 	allowed, err := notifyLimitScript.Run(context.Background(), common.RDB, []string{key},
-		constant.NotifyLimitCount, expiry.Milliseconds()).Int()
+		operation_setting.NotifyLimitCount(), expiry.Milliseconds()).Int()
 	if err != nil {
 		return false, fmt.Errorf("failed to check notification limit: %w", err)
 	}
@@ -109,7 +109,7 @@ func checkMemoryLimit(userId int, notifyType string) (bool, error) {
 	currentLimit.Count++
 
 	// Check against limits
-	limit := constant.NotifyLimitCount
+	limit := operation_setting.NotifyLimitCount()
 
 	// Store updated count
 	notifyLimitStore.Store(key, currentLimit)

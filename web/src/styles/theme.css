@@ -264,40 +264,50 @@ body {
   background-image:
     radial-gradient(
       640px circle at 4% -6%,
-      color-mix(in oklch, var(--primary) 20%, transparent),
+      color-mix(in srgb, var(--primary) 20%, transparent),
       transparent 60%
     ),
     radial-gradient(
       560px circle at 100% 6%,
-      color-mix(in oklch, var(--chart-2) 16%, transparent),
+      color-mix(in srgb, var(--chart-2) 16%, transparent),
       transparent 58%
     ),
     radial-gradient(
       760px circle at 64% 108%,
-      color-mix(in oklch, var(--primary) 12%, transparent),
+      color-mix(in srgb, var(--primary) 12%, transparent),
       transparent 62%
     );
   background-attachment: fixed;
   background-repeat: no-repeat;
 }
 
+/* 半透明一律在 srgb 里和 transparent 混：oklch 是极坐标，低彩度的底色/卡片色
+ * 混出来色相会变成 none（按 0° 渲染），夜阑下整片泛暗红、丹霞下泛粉 */
+
 /* 内容区半透明——透出背景柔光 */
 [data-slot='sidebar-inset'] {
-  background: color-mix(in oklch, var(--background) 70%, transparent);
+  background: color-mix(in srgb, var(--background) 70%, transparent);
 }
 
 /* 侧栏毛玻璃 */
 [data-slot='sidebar-inner'] {
-  background: color-mix(in oklch, var(--sidebar) 72%, transparent);
+  background: color-mix(in srgb, var(--sidebar) 72%, transparent);
   -webkit-backdrop-filter: blur(20px) saturate(1.4);
   backdrop-filter: blur(20px) saturate(1.4);
 }
 
 /* 卡片毛玻璃——半透明 + 轻模糊，正文仍清晰 */
 [data-slot='card'] {
-  background: color-mix(in oklch, var(--card) 88%, transparent);
+  background: color-mix(in srgb, var(--card) 88%, transparent);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
+}
+
+/* 手写的 bg-card 面板与 <Card> 同色：否则一个透出主题柔光、一个是实底，
+ * 夜阑下同屏一暖一冷。只改底色不加 backdrop-filter——它会让面板成为
+ * position:fixed 子元素的包含块。 */
+.bg-card {
+  background-color: color-mix(in srgb, var(--card) 88%, transparent);
 }
 
 /* 不支持 backdrop-filter 时回退为实底色，保证可读性 */
@@ -307,7 +317,8 @@ body {
   [data-slot='sidebar-inner'] {
     background: var(--sidebar);
   }
-  [data-slot='card'] {
+  [data-slot='card'],
+  .bg-card {
     background: var(--card);
   }
 }

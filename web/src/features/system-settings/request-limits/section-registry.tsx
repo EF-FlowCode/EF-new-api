@@ -1,6 +1,7 @@
 import type { RequestLimitsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { RateLimitSection } from './rate-limit-section'
+import { RuntimeLimitsSection } from './runtime-limits-section'
 import { SensitiveWordsSection } from './sensitive-words-section'
 import { SSRFSection } from './ssrf-section'
 
@@ -62,6 +63,35 @@ const REQUEST_LIMITS_SECTIONS = [
             settings['fetch_setting.allowed_ports'],
           'fetch_setting.apply_ip_filter_for_domain':
             settings['fetch_setting.apply_ip_filter_for_domain'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'runtime-limits',
+    titleKey: 'Runtime Limits',
+    descriptionKey:
+      'Configure streaming timeout, request size and related limits',
+    build: (settings: RequestLimitsSettings) => (
+      <RuntimeLimitsSection
+        defaultValues={{
+          streamingTimeoutSeconds:
+            settings['runtime_limit_setting.streaming_timeout_seconds'],
+          errorLogEnabled: settings['runtime_limit_setting.error_log_enabled'],
+          taskTimeoutMinutes:
+            settings['runtime_limit_setting.task_timeout_minutes'],
+          maxRequestBodyMB:
+            settings['runtime_limit_setting.max_request_body_mb'],
+          notifyLimitCount:
+            settings['runtime_limit_setting.notify_limit_count'],
+          notifyLimitDurationMinutes:
+            settings['runtime_limit_setting.notify_limit_duration_minutes'],
+          responseHeaderTimeoutSeconds:
+            settings['runtime_limit_setting.response_header_timeout_seconds'],
+          nonStreamResponseHeaderTimeoutSeconds:
+            settings[
+              'runtime_limit_setting.non_stream_response_header_timeout_seconds'
+            ],
         }}
       />
     ),

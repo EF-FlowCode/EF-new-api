@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { CompactDateTimeRangePicker } from '@/components/compact-date-time-range-picker'
 import { exportUserLogs, requestOfflineExport } from '../api'
 import { LOG_TYPES } from '../constants'
 import { buildSearchParams } from '../lib/filter'
@@ -35,7 +36,6 @@ import {
   getDefaultTimeRange,
 } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
-import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
 import { ExportLogsDialog } from './dialogs/export-logs-dialog'
 import { LogGroupFilter } from './log-group-filter'
 import { useUsageLogsContext } from './usage-logs-provider'

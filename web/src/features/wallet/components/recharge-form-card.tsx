@@ -165,7 +165,7 @@ export function RechargeFormCard({
 
   return (
     <TitledCard
-      title={t('Add Funds')}
+      title={t('Recharge')}
       description={t('Choose an amount and payment method')}
       icon={<WalletCards className='h-4 w-4' />}
       action={
@@ -177,7 +177,7 @@ export function RechargeFormCard({
         >
           <Link to='/topup-history'>
             <Receipt className='h-4 w-4' />
-            {t('Order History')}
+            {t('Topup History')}
           </Link>
         </Button>
       }

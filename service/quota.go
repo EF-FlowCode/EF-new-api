@@ -15,6 +15,7 @@ import (
 	perfmetrics "eflow.local/new-api/pkg/perf_metrics"
 	relaycommon "eflow.local/new-api/relay/common"
 	"eflow.local/new-api/setting/ratio_setting"
+	"eflow.local/new-api/setting/system_setting"
 	"eflow.local/new-api/types"
 
 	gopool "eflow.local/new-api/internal/drainpool"
@@ -476,13 +477,13 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 			threshold = int(userSetting.QuotaWarningThreshold)
 		}
 
-		//noMoreQuota := userCache.Quota-(quota+preConsumedQuota) <= 0
-		quotaTooLow := false
+		checkAndSendTokenQuotaNotify(relayInfo)
+
+		// eflow: notify once per crossing instead of on every request below
+		// the threshold (service/quota_warning_once.go).
 		consumeQuota := quota + preConsumedQuota
-		if relayInfo.UserQuota-consumeQuota < threshold {
-			quotaTooLow = true
-		}
-		if quotaTooLow {
+		quotaTooLow := relayInfo.UserQuota-consumeQuota < threshold
+		if claimQuotaWarning(walletQuotaWarnedKey(relayInfo.UserId), quotaTooLow) {
 			prompt := "您的额度即将用尽"
 			topUpLink := PaymentReturnURL("/console/topup")
 
@@ -512,8 +513,73 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 
 			err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values))
 			if err != nil {
+				// Not sent (rate limit or delivery failure): a later request retries.
+				releaseQuotaWarning(walletQuotaWarnedKey(relayInfo.UserId))
 				common.SysError(fmt.Sprintf("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
 			}
 		}
 	})
+}
+
+// tokenQuotaWarningLine returns the remaining quota below which a limited token
+// warns, from the user's percentage and fixed-amount settings; either one
+// triggers. ok is false when the warning is off.
+func tokenQuotaWarningLine(setting dto.UserSetting, total int) (line int, ok bool) {
+	if setting.TokenQuotaWarningDisabled {
+		return 0, false
+	}
+	percent := dto.DefaultTokenQuotaWarningPercent
+	if setting.TokenQuotaWarningPercent != nil {
+		percent = *setting.TokenQuotaWarningPercent
+	}
+	if percent > 0 && total > 0 {
+		line = int(float64(total) * percent / 100)
+	}
+	if setting.TokenQuotaWarningAmount > line {
+		line = setting.TokenQuotaWarningAmount
+	}
+	return line, line > 0
+}
+
+// checkAndSendTokenQuotaNotify warns once when a limited API key's remaining
+// quota falls below the user's warning line. Runs on the notify goroutine.
+func checkAndSendTokenQuotaNotify(relayInfo *relaycommon.RelayInfo) {
+	if relayInfo.TokenUnlimited || relayInfo.IsPlayground || relayInfo.TokenId <= 0 || relayInfo.TokenKey == "" {
+		return
+	}
+	token, err := model.GetTokenByKey(relayInfo.TokenKey, false)
+	if err != nil || token == nil || token.UnlimitedQuota {
+		return
+	}
+	total := token.RemainQuota + token.UsedQuota
+	line, ok := tokenQuotaWarningLine(relayInfo.UserSetting, total)
+	key := tokenQuotaWarnedKey(token.Id)
+	if !claimQuotaWarning(key, ok && token.RemainQuota < line) {
+		return
+	}
+
+	userSetting := relayInfo.UserSetting
+	notifyType := userSetting.NotifyType
+	if notifyType == "" {
+		notifyType = dto.NotifyTypeEmail
+	}
+	keysURL := strings.TrimRight(system_setting.GetServerAddress(), "/") + "/keys"
+	remaining, totalText := logger.FormatQuota(token.RemainQuota), logger.FormatQuota(total)
+	prompt := "API 密钥额度即将用尽"
+	var content string
+	var values []any
+	switch notifyType {
+	case dto.NotifyTypeEmail:
+		prompt, content = RenderTokenQuotaWarningEmail(common.SystemNameOrDefault(), token.Name, remaining, totalText, keysURL)
+	case dto.NotifyTypeBark, dto.NotifyTypeGotify:
+		content = "API 密钥「{{value}}」剩余额度 {{value}}（总额度 {{value}}），即将用尽"
+		values = []any{token.Name, remaining, totalText}
+	default:
+		content = "API 密钥「{{value}}」剩余额度为 {{value}}（总额度 {{value}}），即将用尽。<br/>管理密钥：<a href='{{value}}'>{{value}}</a>"
+		values = []any{token.Name, remaining, totalText, keysURL, keysURL}
+	}
+	if err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, userSetting, dto.NewNotify(dto.NotifyTypeTokenQuotaLow, prompt, content, values)); err != nil {
+		releaseQuotaWarning(key)
+		common.SysError(fmt.Sprintf("failed to send token quota notify to user %d token %d: %s", relayInfo.UserId, token.Id, err.Error()))
+	}
 }

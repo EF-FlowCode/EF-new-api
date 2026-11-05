@@ -6,7 +6,7 @@ new-api 通过 `pkg/ionet` 客户端和管理员接口管理 io.net 部署。本
 
 ## 配置
 
-在“系统设置 → 集成 → io.net 模型部署”维护：
+在管理员工作区 侧栏「通知 · 集成」→「集成设置」→ 页签「io.net 部署」（`/system-settings/integrations/ionet`）维护，可先点「测试连接」再「保存 io.net 设置」：
 
 | option key | 说明 |
 | --- | --- |

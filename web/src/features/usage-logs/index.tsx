@@ -26,7 +26,7 @@ const SECTION_META: Record<
   { titleKey: string; descriptionKey: string }
 > = {
   common: {
-    titleKey: 'Common Logs',
+    titleKey: 'Usage Logs',
     descriptionKey: 'View and manage your API usage logs',
   },
   drawing: {

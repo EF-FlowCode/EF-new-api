@@ -26,6 +26,14 @@ const defaultRequestLimitsSettings: RequestLimitsSettings = {
   'fetch_setting.ip_list': [],
   'fetch_setting.allowed_ports': [],
   'fetch_setting.apply_ip_filter_for_domain': false,
+  'runtime_limit_setting.streaming_timeout_seconds': 300,
+  'runtime_limit_setting.error_log_enabled': false,
+  'runtime_limit_setting.task_timeout_minutes': 1440,
+  'runtime_limit_setting.max_request_body_mb': 128,
+  'runtime_limit_setting.notify_limit_count': 2,
+  'runtime_limit_setting.notify_limit_duration_minutes': 10,
+  'runtime_limit_setting.response_header_timeout_seconds': 1800,
+  'runtime_limit_setting.non_stream_response_header_timeout_seconds': 1800,
 }
 
 export function RequestLimitsSettings() {

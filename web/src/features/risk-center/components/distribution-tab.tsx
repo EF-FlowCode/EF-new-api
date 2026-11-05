@@ -39,6 +39,7 @@ import {
   ServerPagination,
   useLatestRequest,
   useServerPagination,
+  TableEmpty,
 } from '@/components/data-table'
 import {
   deleteRule,
@@ -51,7 +52,11 @@ import {
   updateRule,
 } from '../api'
 import { DecisionBadge, OverviewCard, StatusBadge } from '../lib/shared'
-import { formatRiskTime, metricLabel } from '../lib/shared-utils'
+import {
+  formatRiskTime,
+  metricLabel,
+  riskScopeLabel,
+} from '../lib/shared-utils'
 import type {
   Paginated,
   RiskGroups,
@@ -379,27 +384,23 @@ export function DistributionTab() {
               </TableHeader>
               <TableBody>
                 {rules.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={7}
-                      className='text-muted-foreground py-8 text-center text-sm'
-                    >
-                      {t('No rules')}
-                    </TableCell>
-                  </TableRow>
+                  <TableEmpty colSpan={7} title={t('No rules')} />
                 ) : (
                   rules.map((rule) => (
                     <TableRow key={rule.id}>
-                      <TableCell>
-                        <div className='font-medium'>{rule.name}</div>
+                      <TableCell className='max-w-[26rem]'>
+                        <div className='truncate font-medium'>{rule.name}</div>
                         {rule.description && (
-                          <div className='text-muted-foreground line-clamp-1 text-xs'>
+                          <div
+                            className='text-muted-foreground truncate text-xs'
+                            title={rule.description}
+                          >
                             {rule.description}
                           </div>
                         )}
                       </TableCell>
-                      <TableCell className='font-mono text-xs uppercase'>
-                        {rule.scope}
+                      <TableCell className='text-xs whitespace-nowrap'>
+                        {t(riskScopeLabel(rule.scope))}
                       </TableCell>
                       <TableCell>
                         <DecisionBadge decision={rule.action} />
@@ -410,7 +411,8 @@ export function DistributionTab() {
                       <TableCell className='text-muted-foreground text-xs'>
                         {rule.conditions
                           .map(
-                            (c) => `${metricLabel(c.metric)} ${c.op} ${c.value}`
+                            (c) =>
+                              `${t(metricLabel(c.metric))} ${c.op} ${c.value}`
                           )
                           .join(' / ')}
                       </TableCell>
@@ -468,7 +470,7 @@ export function DistributionTab() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value='all'>{t('All scopes')}</SelectItem>
-                  <SelectItem value='token'>{t('Token')}</SelectItem>
+                  <SelectItem value='token'>{t('API key')}</SelectItem>
                   <SelectItem value='user'>{t('User')}</SelectItem>
                 </SelectContent>
               </Select>
@@ -541,7 +543,7 @@ export function DistributionTab() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value='all'>{t('All scopes')}</SelectItem>
-                  <SelectItem value='token'>{t('Token')}</SelectItem>
+                  <SelectItem value='token'>{t('API key')}</SelectItem>
                   <SelectItem value='user'>{t('User')}</SelectItem>
                 </SelectContent>
               </Select>
@@ -690,19 +692,12 @@ function SubjectsTable({
               </TableRow>
             ))
           ) : data.items.length === 0 ? (
-            <TableRow>
-              <TableCell
-                colSpan={7}
-                className='text-muted-foreground py-8 text-center text-sm'
-              >
-                {t('No subjects')}
-              </TableCell>
-            </TableRow>
+            <TableEmpty colSpan={7} title={t('No subjects')} />
           ) : (
             data.items.map((s) => (
               <TableRow key={s.id}>
-                <TableCell className='font-mono text-xs uppercase'>
-                  {s.subject_type}
+                <TableCell className='text-xs whitespace-nowrap'>
+                  {t(riskScopeLabel(s.subject_type))}
                 </TableCell>
                 <TableCell className='font-mono text-xs break-all'>
                   {s.subject_id}
@@ -762,22 +757,15 @@ function IncidentsTable({
               </TableRow>
             ))
           ) : data.items.length === 0 ? (
-            <TableRow>
-              <TableCell
-                colSpan={6}
-                className='text-muted-foreground py-8 text-center text-sm'
-              >
-                {t('No incidents')}
-              </TableCell>
-            </TableRow>
+            <TableEmpty colSpan={6} title={t('No incidents')} />
           ) : (
             data.items.map((it) => (
               <TableRow key={it.id}>
                 <TableCell className='text-muted-foreground text-xs'>
                   {formatRiskTime(it.created_at)}
                 </TableCell>
-                <TableCell className='font-mono text-xs uppercase'>
-                  {it.subject_type}
+                <TableCell className='text-xs whitespace-nowrap'>
+                  {t(riskScopeLabel(it.subject_type))}
                 </TableCell>
                 <TableCell className='font-mono text-xs break-all'>
                   {it.subject_id}

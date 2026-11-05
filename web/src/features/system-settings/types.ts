@@ -320,6 +320,14 @@ export type RequestLimitsSettings = {
   'fetch_setting.ip_list': string[]
   'fetch_setting.allowed_ports': string[]
   'fetch_setting.apply_ip_filter_for_domain': boolean
+  'runtime_limit_setting.streaming_timeout_seconds': number
+  'runtime_limit_setting.error_log_enabled': boolean
+  'runtime_limit_setting.task_timeout_minutes': number
+  'runtime_limit_setting.max_request_body_mb': number
+  'runtime_limit_setting.notify_limit_count': number
+  'runtime_limit_setting.notify_limit_duration_minutes': number
+  'runtime_limit_setting.response_header_timeout_seconds': number
+  'runtime_limit_setting.non_stream_response_header_timeout_seconds': number
 }
 
 export type UpstreamChannel = {

@@ -81,11 +81,24 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		if usedVars["ao"] {
 			c -= ao
 		}
-	} else if !usedVars["cr"] {
-		// Anthropic input excludes cache reads. When cr has no separate
-		// price, merge those tokens into the input category instead (upstream
-		// f064bffa2). Cache writes are not merged, matching upstream.
-		p += cr
+	} else {
+		// Anthropic input excludes cache reads and writes. When they have no
+		// separate price, merge those tokens into the input category instead
+		// (upstream f064bffa2 / e9d4d6353): an unpriced 1h write joins cc at
+		// 1.6x, an unpriced cc bills as input. Otherwise an expression without
+		// cc, e.g. a GPT model reached natively over /v1/messages, bills cache
+		// writes at zero.
+		if !usedVars["cr"] {
+			p += cr
+		}
+		if !usedVars["cc1h"] {
+			cc5m += cc1h * types.ClaudeCacheCreation1hMultiplier
+			cc1h = 0
+		}
+		if !usedVars["cc"] {
+			p += cc5m
+			cc5m = 0
+		}
 	}
 
 	// OpenAI cache-write usage reports unadjusted prefix counts, so cr + cc can

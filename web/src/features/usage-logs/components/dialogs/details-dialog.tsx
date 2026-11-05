@@ -629,10 +629,13 @@ export function DetailsDialog(props: DetailsDialogProps) {
     conversionChain.length <= 1
       ? t('Native format')
       : conversionChain.join(' -> ')
+  const protocolAttempts = other?.admin_info?.protocol_attempts ?? []
   const showConversion =
     props.isAdmin &&
     props.log.type !== 6 &&
-    (other?.request_path || conversionChain.length > 0)
+    (other?.request_path ||
+      conversionChain.length > 0 ||
+      protocolAttempts.length > 0)
 
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
@@ -711,7 +714,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
               {props.log.token_name && (
                 <DetailRow
-                  label={t('Token')}
+                  label={t('API key')}
                   value={props.log.token_name}
                   mono
                 />
@@ -813,6 +816,25 @@ export function DetailsDialog(props: DetailsDialogProps) {
                         {conversionLabel}
                       </span>
                     </div>
+                    {protocolAttempts.length > 0 && (
+                      <DetailRow
+                        label={t('Protocol Attempts')}
+                        value={
+                          <span className='flex flex-col gap-0.5'>
+                            {protocolAttempts.map((attempt, index) => (
+                              <span key={index}>
+                                #{attempt.channel_id} {attempt.mode} ·{' '}
+                                {attempt.status}
+                                {attempt.fallback_reason
+                                  ? ` · ${attempt.fallback_reason}`
+                                  : ''}
+                              </span>
+                            ))}
+                          </span>
+                        }
+                        mono
+                      />
+                    )}
                   </div>
                 </div>
               </DetailSection>

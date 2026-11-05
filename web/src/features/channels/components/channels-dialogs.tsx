@@ -1,5 +1,6 @@
 import { useChannels } from './channels-provider'
 import { BalanceQueryDialog } from './dialogs/balance-query-dialog'
+import { ChannelProtocolDialog } from './dialogs/channel-protocol-dialog'
 import { ChannelTestDialog } from './dialogs/channel-test-dialog'
 import { CopyChannelDialog } from './dialogs/copy-channel-dialog'
 import { EditTagDialog } from './dialogs/edit-tag-dialog'
@@ -25,6 +26,12 @@ export function ChannelsDialogs() {
       {/* Test Channel Dialog */}
       <ChannelTestDialog
         open={open === 'test-channel'}
+        onOpenChange={(v) => !v && setOpen(null)}
+      />
+
+      {/* Protocol Probe & Confirm Dialog */}
+      <ChannelProtocolDialog
+        open={open === 'channel-protocols'}
         onOpenChange={(v) => !v && setOpen(null)}
       />
 
